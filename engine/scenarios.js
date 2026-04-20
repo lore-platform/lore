@@ -8,7 +8,7 @@
 // is reading the result screen, so there is no wait on the next encounter.
 // =============================================================================
 
-import { db } from '../firebase.js';
+import { db } from './firebase.js';
 import {
     collection,
     doc,

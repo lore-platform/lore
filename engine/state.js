@@ -9,7 +9,7 @@
 // Rank is per-skill-area — a Director can be an Intern in a new domain.
 // =============================================================================
 
-import { db } from '../firebase.js';
+import { db } from './firebase.js';
 import {
     doc,
     getDoc,

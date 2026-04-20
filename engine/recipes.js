@@ -7,7 +7,7 @@
 // in dashboard.js. This file handles reads used in the Training view.
 // =============================================================================
 
-import { db } from '../firebase.js';
+import { db } from './firebase.js';
 import {
     doc,
     getDoc,

@@ -8,7 +8,7 @@
 // invite redemption path.
 // =============================================================================
 
-import { auth, db } from '../firebase.js';
+import { auth, db } from './firebase.js';
 import {
     signInWithEmailAndPassword,
     createUserWithEmailAndPassword,

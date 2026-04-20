@@ -13,8 +13,8 @@
 
 import { onAuthChange, getClaims, signIn, readInvite, redeemInvite, signOut } from './engine/auth.js';
 import { loadState, clearState, getState, getRankForXP, getXPProgress } from './engine/state.js';
-import { initTraining } from './views/training.js';
-import { initTasks }    from './views/tasks.js';
+import { initTraining }  from './views/training.js';
+import { initTasks }     from './views/tasks.js';
 import { initDashboard } from './views/dashboard.js';
 
 // ---------------------------------------------------------------------------
