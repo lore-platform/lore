@@ -1,0 +1,23 @@
+# Firebase local emulator
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# Wrangler / Cloudflare
+worker/.wrangler/
+worker/node_modules/
+
+# Environment and secrets — NEVER commit these
+.env
+.env.local
+secrets.js
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# docs
+_docs/
