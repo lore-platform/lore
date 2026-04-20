@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+        // GitHub Pages SPA routing — redirect all 404s back to index.html
+        // preserving the path so the app router can handle it.
+        // This is the standard GitHub Pages SPA pattern.
+        const path = window.location.pathname;
+        const search = window.location.search;
+        const hash = window.location.hash;
+        const redirectUrl = '/?redirect=' + encodeURIComponent(path + search + hash);
+        window.location.replace(redirectUrl);
+    </script>
+</head>
+<body></body>
+</html>

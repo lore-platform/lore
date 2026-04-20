@@ -1,0 +1,431 @@
+/* =============================================================================
+   LORE — Shared Styles and Brand Variables
+   All brand colours, typography, and shared component styles live here.
+   Views import nothing separately — this file is the single style source.
+   ============================================================================= */
+
+/* --- Brand colour tokens --- */
+:root {
+    --ember:       #C4622D;   /* Primary action, buttons, accents */
+    --parchment:   #F5F0EB;   /* Page background */
+    --surface:     #FDF8F4;   /* Cards, inputs */
+    --ink:         #2C2416;   /* Primary text */
+    --deep-ink:    #1C1812;   /* Nav bar background */
+    --warm-grey:   #8C7B6A;   /* Secondary text, placeholders */
+    --sage:        #3D8B6E;   /* Positive states, correct verdicts */
+    --amber-text:  #8C5A0A;   /* Pending state text */
+    --amber-fill:  #FDF0DC;   /* Pending state background */
+    --error:       #B83232;   /* Error states */
+
+    /* [TUNING TARGET] Typography scale — adjust if text feels too large or small on mobile */
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+
+    /* Spacing scale */
+    --space-1:  0.25rem;
+    --space-2:  0.5rem;
+    --space-3:  0.75rem;
+    --space-4:  1rem;
+    --space-5:  1.25rem;
+    --space-6:  1.5rem;
+    --space-8:  2rem;
+    --space-10: 2.5rem;
+    --space-12: 3rem;
+    --space-16: 4rem;
+
+    /* Border radius */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+
+    /* Transitions */
+    --transition: 150ms ease;
+}
+
+/* --- Reset and base --- */
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background-color: var(--parchment);
+    color: var(--ink);
+    line-height: 1.6;
+    min-height: 100vh;
+    /* Mobile-first — no horizontal scroll */
+    overflow-x: hidden;
+}
+
+/* --- Typography --- */
+h1, h2, h3, h4 {
+    line-height: 1.25;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+h1 { font-size: var(--text-2xl); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-lg); }
+h4 { font-size: var(--text-base); }
+
+p {
+    color: var(--ink);
+    line-height: 1.7;
+}
+
+/* --- LORE wordmark --- */
+.lore-wordmark {
+    font-size: var(--text-xl);
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--parchment);
+    text-decoration: none;
+}
+
+/* --- Navigation --- */
+.nav {
+    background-color: var(--deep-ink);
+    padding: var(--space-4) var(--space-6);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.nav-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+.nav-stat {
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
+.nav-stat strong {
+    color: var(--parchment);
+    font-weight: 500;
+}
+
+/* --- Main layout --- */
+.main {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-6);
+}
+
+/* --- Cards --- */
+.card {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    border: 1px solid rgba(44, 36, 22, 0.08);
+}
+
+.card + .card {
+    margin-top: var(--space-4);
+}
+
+/* --- Buttons --- */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-6);
+    border-radius: var(--radius-md);
+    font-size: var(--text-base);
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: opacity var(--transition), transform var(--transition);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:active { transform: none; }
+
+.btn-primary {
+    background-color: var(--ember);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) { opacity: 0.9; }
+
+.btn-secondary {
+    background-color: transparent;
+    color: var(--ink);
+    border: 1px solid rgba(44, 36, 22, 0.2);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: rgba(44, 36, 22, 0.05);
+}
+
+.btn-full { width: 100%; }
+
+/* --- Inputs --- */
+.input {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid rgba(44, 36, 22, 0.2);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: var(--text-base);
+    font-family: inherit;
+    transition: border-color var(--transition);
+    resize: none;
+}
+
+.input:focus {
+    outline: none;
+    border-color: var(--ember);
+}
+
+.input::placeholder { color: var(--warm-grey); }
+
+/* --- Form labels --- */
+.label {
+    display: block;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    color: var(--warm-grey);
+    margin-bottom: var(--space-2);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* --- Status chips --- */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--space-1) var(--space-3);
+    border-radius: 100px;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+.chip-pending {
+    background-color: var(--amber-fill);
+    color: var(--amber-text);
+}
+
+.chip-correct {
+    background-color: rgba(61, 139, 110, 0.12);
+    color: var(--sage);
+}
+
+.chip-missed {
+    background-color: rgba(184, 50, 50, 0.1);
+    color: var(--error);
+}
+
+/* --- XP bar --- */
+.xp-bar-track {
+    height: 4px;
+    background: rgba(44, 36, 22, 0.1);
+    border-radius: 100px;
+    overflow: hidden;
+}
+
+.xp-bar-fill {
+    height: 100%;
+    background: var(--ember);
+    border-radius: 100px;
+    transition: width 600ms ease;
+}
+
+/* --- Loading spinner --- */
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(196, 98, 45, 0.2);
+    border-top-color: var(--ember);
+    border-radius: 50%;
+    animation: spin 700ms linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* --- Dividers --- */
+.divider {
+    height: 1px;
+    background: rgba(44, 36, 22, 0.08);
+    margin: var(--space-6) 0;
+}
+
+/* --- Empty state --- */
+.empty-state {
+    text-align: center;
+    padding: var(--space-12) var(--space-6);
+    color: var(--warm-grey);
+}
+
+.empty-state h3 {
+    color: var(--warm-grey);
+    margin-bottom: var(--space-2);
+}
+
+/* --- Auth screen --- */
+.auth-screen {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6);
+    background: var(--deep-ink);
+}
+
+.auth-card {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-8);
+    width: 100%;
+    max-width: 400px;
+}
+
+.auth-wordmark {
+    font-size: var(--text-3xl);
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--parchment);
+    margin-bottom: var(--space-2);
+    text-align: center;
+}
+
+.auth-tagline {
+    color: var(--warm-grey);
+    font-size: var(--text-sm);
+    text-align: center;
+    margin-bottom: var(--space-8);
+}
+
+.auth-field {
+    margin-bottom: var(--space-4);
+}
+
+.auth-error {
+    background: rgba(184, 50, 50, 0.08);
+    color: var(--error);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-4);
+    display: none;
+}
+
+.auth-error.visible { display: block; }
+
+/* --- Timer --- */
+.timer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+    font-variant-numeric: tabular-nums;
+}
+
+/* [TUNING TARGET] Timer warning threshold — turns amber at 60s remaining */
+.timer.warning { color: var(--amber-text); }
+/* Timer urgent — turns red at 30s remaining */
+.timer.urgent { color: var(--error); }
+
+/* --- Scenario type label --- */
+.scenario-type {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--warm-grey);
+}
+
+/* --- Rank badge --- */
+.rank-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    background: rgba(196, 98, 45, 0.1);
+    color: var(--ember);
+    border-radius: 100px;
+    font-size: var(--text-xs);
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+/* --- View containers — hidden by default, shown by router --- */
+#view-training,
+#view-tasks,
+#view-dashboard,
+#view-profile,
+#view-auth {
+    display: none;
+}
+
+#view-training.active,
+#view-tasks.active,
+#view-dashboard.active,
+#view-profile.active,
+#view-auth.active {
+    display: block;
+}
+
+/* --- Utility --- */
+.text-secondary { color: var(--warm-grey); }
+.text-sm { font-size: var(--text-sm); }
+.text-xs { font-size: var(--text-xs); }
+.mt-2 { margin-top: var(--space-2); }
+.mt-4 { margin-top: var(--space-4); }
+.mt-6 { margin-top: var(--space-6); }
+.mt-8 { margin-top: var(--space-8); }
+.mb-2 { margin-bottom: var(--space-2); }
+.mb-4 { margin-bottom: var(--space-4); }
+.mb-6 { margin-bottom: var(--space-6); }
+.flex { display: flex; }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+.gap-2 { gap: var(--space-2); }
+.gap-4 { gap: var(--space-4); }
+
+/* --- Desktop scale-up --- */
+@media (min-width: 768px) {
+    h1 { font-size: var(--text-3xl); }
+    h2 { font-size: var(--text-2xl); }
+
+    .main {
+        padding: var(--space-12) var(--space-8);
+    }
+
+    .card {
+        padding: var(--space-8);
+    }
+}

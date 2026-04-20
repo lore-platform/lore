@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="LORE — Organisational knowledge transfer platform">
+    <title>LORE</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Auth screen — shown when no user is signed in -->
+    <div id="view-auth" class="active">
+        <div class="auth-screen">
+            <p class="auth-wordmark">LORE</p>
+            <p class="auth-tagline">What your best people know</p>
+
+            <div class="auth-card">
+                <h2 style="margin-bottom: var(--space-6);">Sign in</h2>
+
+                <div id="auth-error" class="auth-error"></div>
+
+                <div class="auth-field">
+                    <label class="label" for="auth-email">Email</label>
+                    <input
+                        class="input"
+                        id="auth-email"
+                        type="email"
+                        placeholder="your@email.com"
+                        autocomplete="email"
+                    >
+                </div>
+
+                <div class="auth-field">
+                    <label class="label" for="auth-password">Password</label>
+                    <input
+                        class="input"
+                        id="auth-password"
+                        type="password"
+                        placeholder="••••••••"
+                        autocomplete="current-password"
+                    >
+                </div>
+
+                <button class="btn btn-primary btn-full" id="auth-submit">
+                    Sign in
+                </button>
+
+                <!-- Invite flow — shown when user arrives via invite link -->
+                <div id="invite-section" style="display: none; margin-top: var(--space-6);">
+                    <div class="divider"></div>
+                    <p id="invite-context" class="text-secondary text-sm mt-4"></p>
+                    <div class="auth-field mt-4">
+                        <label class="label" for="invite-name">Your name</label>
+                        <input
+                            class="input"
+                            id="invite-name"
+                            type="text"
+                            placeholder="First and last name"
+                            autocomplete="name"
+                        >
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="invite-password">Choose a password</label>
+                        <input
+                            class="input"
+                            id="invite-password"
+                            type="password"
+                            placeholder="At least 8 characters"
+                            autocomplete="new-password"
+                        >
+                    </div>
+                    <button class="btn btn-primary btn-full" id="invite-submit">
+                        Join the team
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shared navigation — shown for all authenticated views -->
+    <nav class="nav" id="app-nav" style="display: none;">
+        <a class="lore-wordmark" href="/">LORE</a>
+        <div class="nav-right">
+            <!-- XP and streak shown for Employees -->
+            <span class="nav-stat" id="nav-xp" style="display: none;">
+                <strong id="nav-xp-value">0</strong> XP
+            </span>
+            <span class="nav-stat" id="nav-streak" style="display: none;">
+                <strong id="nav-streak-value">0</strong> day streak
+            </span>
+            <!-- Rank shown for Employees -->
+            <span id="nav-rank" class="rank-badge" style="display: none;"></span>
+        </div>
+    </nav>
+
+    <!-- Training view — Employees -->
+    <div id="view-training">
+        <div class="main" id="training-content">
+            <!-- Rendered by training.js -->
+        </div>
+    </div>
+
+    <!-- Tasks view — Reviewers -->
+    <div id="view-tasks">
+        <div class="main" id="tasks-content">
+            <!-- Rendered by tasks.js -->
+        </div>
+    </div>
+
+    <!-- Dashboard view — Managers -->
+    <div id="view-dashboard">
+        <div class="main" id="dashboard-content">
+            <!-- Rendered by dashboard.js -->
+        </div>
+    </div>
+
+    <!-- Profile view — Manager per-Employee view -->
+    <div id="view-profile">
+        <div class="main" id="profile-content">
+            <!-- Rendered by profile.js -->
+        </div>
+    </div>
+
+    <!-- Firebase and app entry point -->
+    <script type="module" src="firebase.js"></script>
+    <script type="module" src="app.js"></script>
+
+</body>
+</html>

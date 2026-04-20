@@ -1,0 +1,233 @@
+// =============================================================================
+// LORE — Application Shell
+// Listens for auth state changes and routes the user to the correct view
+// based on their role claim. Manages navigation state and shared UI elements
+// (nav bar, XP display, rank badge).
+//
+// Routing logic:
+//   No user        → auth screen
+//   role=employee  → training view
+//   role=reviewer  → tasks view
+//   role=manager   → dashboard view
+// =============================================================================
+
+import { onAuthChange, getClaims, signIn, readInvite, redeemInvite, signOut } from './engine/auth.js';
+import { loadState, clearState, getState, getRankForXP, getXPProgress } from './engine/state.js';
+import { initTraining } from './views/training.js';
+import { initTasks }    from './views/tasks.js';
+import { initDashboard } from './views/dashboard.js';
+
+// ---------------------------------------------------------------------------
+// Read invite ID from URL if present.
+// Invite links look like: /app/?invite=INVITE_ID
+// ---------------------------------------------------------------------------
+function getInviteId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('invite') ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Show a view by ID, hide all others.
+// ---------------------------------------------------------------------------
+function showView(viewId) {
+    const views = [
+        'view-auth',
+        'view-training',
+        'view-tasks',
+        'view-dashboard',
+        'view-profile',
+    ];
+    views.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('active', id === viewId);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Update the shared nav bar for authenticated users.
+// ---------------------------------------------------------------------------
+function updateNav(role, state) {
+    const nav = document.getElementById('app-nav');
+    if (nav) nav.style.display = 'flex';
+
+    const isEmployee = role === 'employee';
+
+    const navXP     = document.getElementById('nav-xp');
+    const navStreak = document.getElementById('nav-streak');
+    const navRank   = document.getElementById('nav-rank');
+
+    if (navXP)     navXP.style.display     = isEmployee ? 'flex' : 'none';
+    if (navStreak) navStreak.style.display  = isEmployee ? 'flex' : 'none';
+    if (navRank)   navRank.style.display    = isEmployee ? 'inline-flex' : 'none';
+
+    if (isEmployee && state) {
+        const xpVal  = document.getElementById('nav-xp-value');
+        const strVal = document.getElementById('nav-streak-value');
+        if (xpVal)  xpVal.textContent  = state.xp.toLocaleString();
+        if (strVal) strVal.textContent = state.streak;
+
+        const rank = getRankForXP(state.xp);
+        if (navRank) navRank.textContent = rank.name;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Hide the nav bar (used on auth screen).
+// ---------------------------------------------------------------------------
+function hideNav() {
+    const nav = document.getElementById('app-nav');
+    if (nav) nav.style.display = 'none';
+}
+
+// refreshNav() was removed — training.js updates the nav directly to avoid
+// a circular import. app.js → training.js → app.js is not valid in ES modules.
+
+// ---------------------------------------------------------------------------
+// Auth screen — sign-in and invite flow.
+// ---------------------------------------------------------------------------
+async function initAuth() {
+    showView('view-auth');
+    hideNav();
+
+    const inviteId = getInviteId();
+
+    // If there is an invite ID, load and show the invite section
+    if (inviteId) {
+        const invite = await readInvite(inviteId);
+        if (invite) {
+            document.getElementById('invite-section').style.display = 'block';
+            document.getElementById('auth-submit').style.display = 'none';
+
+            const context = document.getElementById('invite-context');
+            if (context) {
+                // Copy framed as joining the team — no mention of knowledge capture
+                context.textContent = `You've been invited to join ${invite.orgName ?? 'your team'} on LORE.`;
+            }
+        }
+    }
+
+    // Sign-in form
+    document.getElementById('auth-submit')?.addEventListener('click', async () => {
+        const email    = document.getElementById('auth-email')?.value?.trim();
+        const password = document.getElementById('auth-password')?.value;
+        const errorEl  = document.getElementById('auth-error');
+
+        if (!email || !password) {
+            showAuthError('Please enter your email and password.');
+            return;
+        }
+
+        const btn = document.getElementById('auth-submit');
+        btn.disabled = true;
+        btn.textContent = 'Signing in…';
+
+        const result = await signIn(email, password);
+        if (!result.ok) {
+            btn.disabled = false;
+            btn.textContent = 'Sign in';
+            showAuthError(result.error);
+        }
+        // On success, onAuthStateChanged fires and routes the user
+    });
+
+    // Invite redemption form
+    document.getElementById('invite-submit')?.addEventListener('click', async () => {
+        const name     = document.getElementById('invite-name')?.value?.trim();
+        const password = document.getElementById('invite-password')?.value;
+
+        if (!name || !password) {
+            showAuthError('Please enter your name and choose a password.');
+            return;
+        }
+        if (password.length < 8) {
+            showAuthError('Your password needs to be at least 8 characters.');
+            return;
+        }
+
+        const btn = document.getElementById('invite-submit');
+        btn.disabled = true;
+        btn.textContent = 'Setting up your account…';
+
+        const result = await redeemInvite(inviteId, name, password);
+        if (!result.ok) {
+            btn.disabled = false;
+            btn.textContent = 'Join the team';
+            showAuthError(result.error);
+        }
+        // On success, onAuthStateChanged fires and routes the user
+    });
+}
+
+function showAuthError(message) {
+    const el = document.getElementById('auth-error');
+    if (el) {
+        el.textContent = message;
+        el.classList.add('visible');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main auth state listener — routes user on every auth state change.
+// ---------------------------------------------------------------------------
+onAuthChange(async (user) => {
+    if (!user) {
+        clearState();
+        initAuth();
+        return;
+    }
+
+    // User is signed in — get their role and org from token claims
+    const claims = await getClaims();
+
+    if (!claims) {
+        // Claims not yet set (can happen immediately after invite redemption
+        // before the Cloud Function has run). Show a brief loading state
+        // and retry after a delay.
+        showView('view-auth');
+        hideNav();
+        document.getElementById('view-auth').innerHTML = `
+            <div class="auth-screen">
+                <p class="auth-wordmark">LORE</p>
+                <p style="color: var(--warm-grey); margin-top: 1rem;">Setting up your account…</p>
+                <div class="spinner" style="margin-top: 1rem;"></div>
+            </div>
+        `;
+        setTimeout(async () => {
+            // Force token refresh and try again
+            await user.getIdToken(true);
+            window.location.reload();
+        }, 3000);
+        return;
+    }
+
+    const { role, orgId, uid } = claims;
+
+    // Load state for Employees (XP, streak, rank)
+    let state = null;
+    if (role === 'employee') {
+        state = await loadState(uid, orgId);
+    }
+
+    // Update shared nav
+    updateNav(role, state);
+
+    // Route to the correct view
+    switch (role) {
+        case 'employee':
+            showView('view-training');
+            await initTraining(orgId, uid, state);
+            break;
+        case 'reviewer':
+            showView('view-tasks');
+            await initTasks(orgId, uid, claims);
+            break;
+        case 'manager':
+            showView('view-dashboard');
+            await initDashboard(orgId, uid);
+            break;
+        default:
+            // Unknown role — sign out and show auth
+            await signOut();
+            initAuth();
+    }
+});
