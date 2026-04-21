@@ -186,7 +186,7 @@ p {
 
 .btn-full { width: 100%; }
 
-/* --- Inputs --- */
+/* --- Inputs and selects --- */
 .input {
     width: 100%;
     padding: var(--space-3) var(--space-4);
@@ -206,6 +206,18 @@ p {
 }
 
 .input::placeholder { color: var(--warm-grey); }
+
+/* Select elements use the .input class — strip the native appearance
+   and add a custom dropdown arrow via SVG background */
+select.input {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238C7B6A' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--space-4) center;
+    padding-right: var(--space-10);
+    cursor: pointer;
+}
 
 /* --- Form labels --- */
 .label {
@@ -242,6 +254,32 @@ p {
 .chip-missed {
     background-color: rgba(184, 50, 50, 0.1);
     color: var(--error);
+}
+
+/* --- Queue badge — notification count shown inside dashboard nav tabs.
+   Used when pending extractions or cluster proposals are waiting. --- */
+.queue-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--ember);
+    color: white;
+    border-radius: 100px;
+    font-size: 10px;
+    font-weight: 600;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 var(--space-1);
+    margin-left: var(--space-1);
+    vertical-align: middle;
+    line-height: 1;
+}
+
+/* --- Dashboard section navigation tabs.
+   Active state is applied inline by dashboard.js so it can be toggled
+   without a full re-render. This class just ensures consistent sizing. --- */
+.dashboard-tab {
+    flex-shrink: 0;
 }
 
 /* --- XP bar --- */

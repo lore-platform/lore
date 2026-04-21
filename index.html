@@ -82,15 +82,21 @@
     <nav class="nav" id="app-nav" style="display: none;">
         <a class="lore-wordmark" href="/">LORE</a>
         <div class="nav-right">
-            <!-- XP and streak shown for Employees -->
+            <!-- XP and streak shown for Employees only -->
             <span class="nav-stat" id="nav-xp" style="display: none;">
                 <strong id="nav-xp-value">0</strong> XP
             </span>
             <span class="nav-stat" id="nav-streak" style="display: none;">
                 <strong id="nav-streak-value">0</strong> day streak
             </span>
-            <!-- Rank shown for Employees -->
+            <!-- Rank badge shown for Employees only -->
             <span id="nav-rank" class="rank-badge" style="display: none;"></span>
+            <!-- Sign-out shown for all authenticated roles -->
+            <button
+                id="nav-signout"
+                class="btn btn-secondary"
+                style="display: none; font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);"
+            >Sign out</button>
         </div>
     </nav>
 

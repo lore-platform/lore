@@ -1,11 +1,14 @@
 // =============================================================================
 // LORE — Auth Engine
 // Handles: Firebase Auth sign-in, invite redemption (account creation),
-// sign-out, and reading custom claims (orgId, role).
+// sign-out, reading custom claims (orgId, role), and invite generation.
 //
 // No user self-registers. Every account is created via a Manager-generated
 // invite link. This file handles both the normal sign-in path and the
 // invite redemption path.
+//
+// Phase 2 addition: generateInvite() — Managers create invite links for
+// Employees and Reviewers from the Dashboard.
 // =============================================================================
 
 import { auth, db } from './firebase.js';
@@ -18,6 +21,8 @@ import {
 import {
     doc,
     getDoc,
+    addDoc,
+    collection,
     updateDoc,
     serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
@@ -65,14 +70,11 @@ export async function redeemInvite(inviteId, name, password) {
         return { ok: false, error: 'This invite has expired. Ask your manager to send a new one.' };
     }
 
-    // 4. Create the Firebase Auth account
+    // 4. Create the Firebase Auth account.
     // Note: custom claims (orgId, role) are set by a Cloud Function triggered
-    // on user creation. For now we store the invite data and the Cloud Function
-    // picks it up. This will be wired in Phase 2.
+    // on user creation. The invite document is the access control mechanism.
     let userCredential;
     try {
-        // We use the invite's orgId as the email domain isn't constrained —
-        // the invite document is the access control.
         userCredential = await createUserWithEmailAndPassword(auth, invite.email, password);
     } catch (err) {
         return { ok: false, error: friendlyAuthError(err.code) };
@@ -81,9 +83,9 @@ export async function redeemInvite(inviteId, name, password) {
     // 5. Mark the invite as redeemed
     try {
         await updateDoc(inviteRef, {
-            redeemed: true,
-            redeemedAt: serverTimestamp(),
-            redeemedBy: userCredential.user.uid
+            redeemed:    true,
+            redeemedAt:  serverTimestamp(),
+            redeemedBy:  userCredential.user.uid
         });
     } catch {
         // Non-fatal — invite may be marked redeemed on next sign-in check
@@ -91,6 +93,51 @@ export async function redeemInvite(inviteId, name, password) {
     }
 
     return { ok: true, role: invite.role, orgId: invite.orgId };
+}
+
+// ---------------------------------------------------------------------------
+// Generate an invite link for a new team member.
+// Called by the Manager from the Dashboard.
+//
+// options: {
+//   email:     string  — the email address to invite
+//   role:      'employee' | 'reviewer'
+//   roleTitle: string  — their job title (e.g. "Senior Account Manager")
+//   seniority: 'junior' | 'mid' | 'senior' — used to calibrate scenario difficulty
+//   orgName:   string  — shown on the invite screen
+// }
+//
+// Returns { ok: true, inviteId, inviteUrl } or { ok: false, error }.
+// ---------------------------------------------------------------------------
+export async function generateInvite(orgId, creatorUid, options) {
+    // Invites expire after 7 days — [TUNING TARGET] adjust if needed
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    try {
+        const ref = collection(db, 'invites');
+        const added = await addDoc(ref, {
+            orgId:     orgId,
+            email:     options.email,
+            role:      options.role,
+            roleTitle: options.roleTitle ?? '',
+            seniority: options.seniority ?? 'mid',
+            orgName:   options.orgName   ?? '',
+            createdBy: creatorUid,
+            createdAt: serverTimestamp(),
+            expiresAt,
+            redeemed:  false,
+        });
+
+        // Build the invite URL — uses the live app URL with the invite ID as a query param
+        const base = 'https://lore-platform.github.io/lore/';
+        const inviteUrl = `${base}?invite=${added.id}`;
+
+        return { ok: true, inviteId: added.id, inviteUrl };
+    } catch (err) {
+        console.warn('LORE Auth: Could not generate invite.', err);
+        return { ok: false, error: 'Could not create the invite. Please try again.' };
+    }
 }
 
 // ---------------------------------------------------------------------------

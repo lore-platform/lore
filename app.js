@@ -8,22 +8,36 @@
 //   No user        → auth screen
 //   role=employee  → training view
 //   role=reviewer  → tasks view
-//   role=manager   → dashboard view
+//   role=manager   → dashboard view (or profile view if ?employee=UID in URL)
+//
+// Phase 2 additions:
+//   Sign-out button in nav bar for all authenticated roles
+//   ?employee=UID  → profile view (Manager only — deep-link to per-Employee view)
 // =============================================================================
 
 import { onAuthChange, getClaims, signIn, readInvite, redeemInvite, signOut } from './engine/auth.js';
-import { loadState, clearState, getState, getRankForXP, getXPProgress } from './engine/state.js';
+import { loadState, clearState, getRankForXP } from './engine/state.js';
 import { initTraining }  from './views/training.js';
 import { initTasks }     from './views/tasks.js';
 import { initDashboard } from './views/dashboard.js';
+import { initProfile }   from './views/profile.js';
 
 // ---------------------------------------------------------------------------
 // Read invite ID from URL if present.
-// Invite links look like: /app/?invite=INVITE_ID
+// Invite links look like: /?invite=INVITE_ID
 // ---------------------------------------------------------------------------
 function getInviteId() {
     const params = new URLSearchParams(window.location.search);
     return params.get('invite') ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Read employee UID from URL if present.
+// Manager profile deep-links look like: /?employee=UID
+// ---------------------------------------------------------------------------
+function getEmployeeId() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('employee') ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,13 +66,16 @@ function updateNav(role, state) {
 
     const isEmployee = role === 'employee';
 
-    const navXP     = document.getElementById('nav-xp');
-    const navStreak = document.getElementById('nav-streak');
-    const navRank   = document.getElementById('nav-rank');
+    const navXP      = document.getElementById('nav-xp');
+    const navStreak  = document.getElementById('nav-streak');
+    const navRank    = document.getElementById('nav-rank');
+    const navSignOut = document.getElementById('nav-signout');
 
-    if (navXP)     navXP.style.display     = isEmployee ? 'flex' : 'none';
-    if (navStreak) navStreak.style.display  = isEmployee ? 'flex' : 'none';
-    if (navRank)   navRank.style.display    = isEmployee ? 'inline-flex' : 'none';
+    if (navXP)      navXP.style.display      = isEmployee ? 'flex' : 'none';
+    if (navStreak)  navStreak.style.display   = isEmployee ? 'flex' : 'none';
+    if (navRank)    navRank.style.display     = isEmployee ? 'inline-flex' : 'none';
+    // Sign-out is shown for all authenticated roles
+    if (navSignOut) navSignOut.style.display  = 'inline-flex';
 
     if (isEmployee && state) {
         const xpVal  = document.getElementById('nav-xp-value');
@@ -110,7 +127,6 @@ async function initAuth() {
     document.getElementById('auth-submit')?.addEventListener('click', async () => {
         const email    = document.getElementById('auth-email')?.value?.trim();
         const password = document.getElementById('auth-password')?.value;
-        const errorEl  = document.getElementById('auth-error');
 
         if (!email || !password) {
             showAuthError('Please enter your email and password.');
@@ -211,20 +227,37 @@ onAuthChange(async (user) => {
     // Update shared nav
     updateNav(role, state);
 
+    // Attach sign-out handler — wired once, available to all roles
+    document.getElementById('nav-signout')?.addEventListener('click', async () => {
+        await signOut();
+        // onAuthStateChanged fires and routes to auth screen
+    });
+
     // Route to the correct view
     switch (role) {
         case 'employee':
             showView('view-training');
             await initTraining(orgId, uid, state);
             break;
+
         case 'reviewer':
             showView('view-tasks');
             await initTasks(orgId, uid, claims);
             break;
-        case 'manager':
-            showView('view-dashboard');
-            await initDashboard(orgId, uid);
+
+        case 'manager': {
+            // Check if the URL contains a specific employee to profile
+            const employeeId = getEmployeeId();
+            if (employeeId) {
+                showView('view-profile');
+                await initProfile(orgId, employeeId);
+            } else {
+                showView('view-dashboard');
+                await initDashboard(orgId, uid);
+            }
             break;
+        }
+
         default:
             // Unknown role — sign out and show auth
             await signOut();
