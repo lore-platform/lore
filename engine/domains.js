@@ -47,9 +47,10 @@ export async function getDomains(orgId) {
     try {
         const ref = collection(db, 'organisations', orgId, 'domains');
         const snap = await getDocs(ref);
+        console.log('LORE domains.js: Fetched', snap.docs.length, 'domains for org:', orgId);
         return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     } catch (err) {
-        console.warn('LORE Domains: Could not fetch domains.', err);
+        console.warn('LORE domains.js: Could not fetch domains.', err);
         return [];
     }
 }
@@ -78,17 +79,25 @@ export async function getDomain(orgId, domainId) {
 // Returns the new domain ID or null on failure.
 // ---------------------------------------------------------------------------
 export async function confirmDomain(orgId, domain) {
+    console.log('LORE domains.js: Confirming domain:', domain.name);
     try {
         const ref = collection(db, 'organisations', orgId, 'domains');
         const added = await addDoc(ref, {
             name:        domain.name,
             description: domain.description ?? '',
             recipeIds:   domain.recipeIds   ?? [],
+            // reviewerIds: array of user uids assigned to review scenarios
+            // in this domain and receive mentorship prompts when Employees miss.
+            // Set by the Manager in the Skill Areas tab. Defaults to empty —
+            // a domain with no Reviewer assigned still works for training;
+            // it just does not generate mentorship tasks on missed verdicts.
+            reviewerIds: domain.reviewerIds ?? [],
             confirmedAt: serverTimestamp(),
         });
+        console.log('LORE domains.js: Domain confirmed, id:', added.id);
         return added.id;
     } catch (err) {
-        console.warn('LORE Domains: Could not confirm domain.', err);
+        console.warn('LORE domains.js: Could not confirm domain.', err);
         return null;
     }
 }
@@ -99,14 +108,16 @@ export async function confirmDomain(orgId, domain) {
 // Returns true on success, false on failure.
 // ---------------------------------------------------------------------------
 export async function updateDomain(orgId, domainId, updates) {
+    console.log('LORE domains.js: Updating domain:', domainId, 'fields:', Object.keys(updates));
     try {
         await updateDoc(
             doc(db, 'organisations', orgId, 'domains', domainId),
             { ...updates, updatedAt: serverTimestamp() }
         );
+        console.log('LORE domains.js: Domain updated successfully.');
         return true;
     } catch (err) {
-        console.warn('LORE Domains: Could not update domain.', err);
+        console.warn('LORE domains.js: Could not update domain.', err);
         return false;
     }
 }
@@ -194,15 +205,19 @@ ${recipes.map(r =>
 
 Return a JSON array of cluster objects.`;
 
+    console.log('LORE domains.js: Triggering clustering for', recipes.length, 'recipes.');
     const result = await generate(prompt, systemPrompt);
     if (!result.ok) {
+        console.warn('LORE domains.js: Clustering AI call failed.');
         return { ok: false, reason: 'AI_UNAVAILABLE' };
     }
 
     const clusters = extractJSON(result.text);
     if (!clusters || !Array.isArray(clusters) || clusters.length === 0) {
+        console.warn('LORE domains.js: Clustering JSON extraction failed.');
         return { ok: false, reason: 'PARSE_FAILED' };
     }
+    console.log('LORE domains.js: Clustering produced', clusters.length, 'proposed clusters.');
 
     // Store the proposed clusters in the org profile for Manager review
     try {

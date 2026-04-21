@@ -35,6 +35,7 @@ import {
     triggerClustering,
 } from '../engine/domains.js';
 import { generateInvite } from '../engine/auth.js';
+import { queueScenarioReview } from '../engine/scenarios.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state for this view.
@@ -60,6 +61,7 @@ export async function initDashboard(orgId, uid) {
     const container = document.getElementById('dashboard-content');
     if (!container) return;
 
+    console.log('LORE dashboard.js: initDashboard called — orgId:', orgId, 'uid:', uid);
     renderLoading(container, 'Loading your knowledge base…');
 
     // Load org profile for the org name
@@ -340,7 +342,7 @@ function renderKnowledgeBase(el) {
         </div>
     `;
 
-    // Attach expand/collapse handlers for each recipe
+    // Attach expand/collapse and send-for-review handlers for each recipe
     _recipes.forEach(r => {
         document.getElementById(`recipe-toggle-${r.id}`)?.addEventListener('click', () => {
             const detail = document.getElementById(`recipe-detail-${r.id}`);
@@ -351,19 +353,100 @@ function renderKnowledgeBase(el) {
                 btn.textContent = isVisible ? 'Show' : 'Hide';
             }
         });
+
+        document.getElementById(`recipe-review-${r.id}`)?.addEventListener('click', async () => {
+            const panel = document.getElementById(`recipe-review-panel-${r.id}`);
+            if (!panel) return;
+
+            // Toggle the panel
+            const isOpen = panel.style.display !== 'none';
+            panel.style.display = isOpen ? 'none' : 'block';
+            if (isOpen) return;
+
+            // Populate Reviewer dropdown from team members with role='reviewer'
+            const reviewerSelect   = document.getElementById(`review-reviewer-${r.id}`);
+            const scenarioSelect   = document.getElementById(`review-scenario-${r.id}`);
+            const statusEl         = document.getElementById(`review-status-${r.id}`);
+
+            // Load Reviewers
+            const { db: firestoreDb } = await import('../engine/../firebase.js');
+            const { collection: col, query: q, where: wh, getDocs: gd } =
+                await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+            try {
+                const usersSnap = await gd(
+                    q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))
+                );
+                usersSnap.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.id;
+                    opt.textContent = d.data().displayName ?? d.data().email ?? d.id;
+                    reviewerSelect?.appendChild(opt);
+                });
+
+                // Load scenarios for this recipe
+                const scenariosSnap = await gd(
+                    q(col(firestoreDb, 'organisations', _orgId, 'scenarios'), wh('recipeId', '==', r.id))
+                );
+                if (scenariosSnap.empty) {
+                    if (statusEl) statusEl.textContent = 'No scenarios generated for this recipe yet.';
+                } else {
+                    scenariosSnap.forEach((d, i) => {
+                        const opt = document.createElement('option');
+                        opt.value = d.id;
+                        opt.textContent = `Scenario ${i + 1} — ${d.data().scenarioType ?? 'general'}`;
+                        scenarioSelect?.appendChild(opt);
+                    });
+                }
+            } catch (err) {
+                console.warn('LORE dashboard.js: Could not load Reviewers or scenarios.', err);
+                if (statusEl) statusEl.textContent = 'Could not load Reviewers. Try again.';
+            }
+
+            // Send button
+            document.getElementById(`review-send-${r.id}`)?.addEventListener('click', async () => {
+                const reviewerId = reviewerSelect?.value;
+                const scenarioId = scenarioSelect?.value;
+                if (!reviewerId || !scenarioId) {
+                    if (statusEl) statusEl.textContent = 'Please choose a Reviewer and a scenario.';
+                    return;
+                }
+                const btn = document.getElementById(`review-send-${r.id}`);
+                btn.disabled = true;
+                btn.textContent = 'Sending…';
+
+                const result = await queueScenarioReview(_orgId, scenarioId, reviewerId);
+                btn.disabled = false;
+                btn.textContent = 'Send';
+                if (statusEl) statusEl.textContent = result.ok
+                    ? "Sent. They'll see it in their next session."
+                    : result.error ?? 'Could not send. Try again.';
+            });
+        });
     });
 }
 
 function renderRecipeCard(r) {
+    // Find scenarios in Firestore linked to this recipe so the Manager
+    // can send one for Reviewer quality check. The scenario list is
+    // fetched lazily when the Manager clicks "Send for review."
     return `
         <div class="card" style="margin-bottom: var(--space-3);">
             <div class="flex-between">
                 <p style="font-weight: 500;">${r.skillName}</p>
-                <button
-                    class="btn btn-secondary"
-                    id="recipe-toggle-${r.id}"
-                    style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);"
-                >Show</button>
+                <div style="display: flex; gap: var(--space-2);">
+                    <button
+                        class="btn btn-secondary"
+                        id="recipe-review-${r.id}"
+                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);"
+                        title="Send a scenario from this recipe for Reviewer quality check"
+                    >Send for review</button>
+                    <button
+                        class="btn btn-secondary"
+                        id="recipe-toggle-${r.id}"
+                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);"
+                    >Show</button>
+                </div>
             </div>
             <div id="recipe-detail-${r.id}" style="display: none; margin-top: var(--space-4);">
                 <div class="divider" style="margin: var(--space-3) 0;"></div>
@@ -377,6 +460,22 @@ function renderRecipeCard(r) {
                     <p class="label mt-4 mb-1">Common mistake</p>
                     <p class="text-sm text-secondary">${r.flawPattern}</p>
                 ` : ''}
+            </div>
+            <!-- Send for review panel — shown when Manager clicks the button -->
+            <div id="recipe-review-panel-${r.id}" style="display: none; margin-top: var(--space-4);">
+                <div class="divider" style="margin: var(--space-3) 0;"></div>
+                <p class="label mb-2">Send a scenario for review</p>
+                <p class="text-sm text-secondary mb-3">Choose a Reviewer and a scenario generated from this recipe. They'll see it as a quality check — nothing else.</p>
+                <select class="input mb-3" id="review-reviewer-${r.id}" style="margin-bottom: var(--space-3);">
+                    <option value="">Choose a Reviewer…</option>
+                </select>
+                <select class="input mb-3" id="review-scenario-${r.id}" style="margin-bottom: var(--space-3);">
+                    <option value="">Choose a scenario…</option>
+                </select>
+                <p id="review-status-${r.id}" class="text-xs text-secondary mb-2"></p>
+                <button class="btn btn-primary" id="review-send-${r.id}" style="font-size: var(--text-sm);">
+                    Send
+                </button>
             </div>
         </div>
     `;
@@ -696,18 +795,31 @@ function renderSkillAreas(el) {
         </div>
     `;
 
-    // Attach confirm handlers for each proposed cluster
+    // Populate Reviewer dropdowns and attach confirm handlers for each proposed cluster
+    _loadReviewersForSelects(_clusters.map((_, i) => `cluster-reviewer-${i}`));
+
     _clusters.forEach((cluster, i) => {
         document.getElementById(`confirm-cluster-${i}`)?.addEventListener('click', async () => {
-            const name = document.getElementById(`cluster-name-${i}`)?.value?.trim();
-            const desc = document.getElementById(`cluster-desc-${i}`)?.value?.trim();
+            const name       = document.getElementById(`cluster-name-${i}`)?.value?.trim();
+            const desc       = document.getElementById(`cluster-desc-${i}`)?.value?.trim();
+            const reviewerId = document.getElementById(`cluster-reviewer-${i}`)?.value;
             if (!name) return;
 
             const btn = document.getElementById(`confirm-cluster-${i}`);
             btn.disabled = true;
             btn.textContent = 'Confirming…';
 
-            await confirmDomain(_orgId, { ...cluster, name, description: desc });
+            // reviewerIds is an array — supports multiple Reviewers per domain
+            // in the future. For now, one Reviewer maximum via this UI.
+            const reviewerIds = reviewerId ? [reviewerId] : [];
+            await confirmDomain(_orgId, { ...cluster, name, description: desc, reviewerIds });
+            console.log('LORE dashboard.js: Domain confirmed:', name, 'reviewerIds:', reviewerIds);
+
+            // Refresh domains list and re-render after confirmation
+            _domains  = await getDomains(_orgId);
+            _clusters.splice(i, 1);
+            if (_clusters.length === 0) clearPendingClusters(_orgId);
+            renderSkillAreas(el);
         });
 
         document.getElementById(`dismiss-cluster-${i}`)?.addEventListener('click', () => {
@@ -737,10 +849,13 @@ function renderSkillAreas(el) {
 }
 
 function renderProposedClusters() {
+    // Build a Reviewer option list from known team members —
+    // rendered as a datalist so the Manager can type or pick.
+    // The actual Reviewer uid is stored in a hidden input alongside the name.
     return `
         <div class="card mb-6" style="border-left: 3px solid var(--ember);">
             <p style="font-weight: 500; margin-bottom: var(--space-2);">Proposed skill areas</p>
-            <p class="text-secondary text-sm mb-6">Based on your recipes, LORE suggests these groupings. Edit the names if you'd like — then confirm to add them to your training library.</p>
+            <p class="text-secondary text-sm mb-6">Based on your recipes, LORE suggests these groupings. Edit the names, assign a Reviewer, then confirm.</p>
 
             ${_clusters.map((cluster, i) => `
                 <div style="border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4);">
@@ -752,7 +867,15 @@ function renderProposedClusters() {
                         <label class="label" for="cluster-desc-${i}">Description</label>
                         <input class="input" id="cluster-desc-${i}" value="${_esc(cluster.description ?? '')}" placeholder="One sentence description…">
                     </div>
-                    <p class="text-xs text-secondary mt-2 mb-4">${(cluster.recipeIds ?? []).length} recipe${(cluster.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
+                    <div class="auth-field mt-3">
+                        <label class="label" for="cluster-reviewer-${i}">Assign a Reviewer (optional)</label>
+                        <select class="input" id="cluster-reviewer-${i}">
+                            <option value="">No Reviewer assigned</option>
+                            <!-- Populated by _loadReviewersIntoSelect() after render -->
+                        </select>
+                        <p class="text-xs text-secondary mt-1">The assigned Reviewer receives mentorship prompts when an Employee misses a scenario in this area.</p>
+                    </div>
+                    <p class="text-xs text-secondary mt-3 mb-4">${(cluster.recipeIds ?? []).length} recipe${(cluster.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
                     <div style="display: flex; gap: var(--space-3);">
                         <button class="btn btn-primary" id="confirm-cluster-${i}" style="font-size: var(--text-sm);">Confirm skill area</button>
                         <button class="btn btn-secondary" id="dismiss-cluster-${i}" style="font-size: var(--text-sm);">Dismiss</button>
@@ -993,6 +1116,41 @@ function renderLoading(container, message) {
             <p class="text-secondary mt-4">${message}</p>
         </div>
     `;
+}
+
+// ---------------------------------------------------------------------------
+// Populate one or more <select> elements with the org's Reviewer list.
+// Called after rendering any UI that contains a Reviewer assignment dropdown.
+// selectIds: array of element IDs to populate.
+// ---------------------------------------------------------------------------
+async function _loadReviewersForSelects(selectIds) {
+    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { collection: col, query: q, where: wh, getDocs: gd } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    try {
+        const snap = await gd(
+            q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))
+        );
+        const reviewers = snap.docs.map(d => ({
+            id:   d.id,
+            name: d.data().displayName ?? d.data().email ?? d.id,
+        }));
+
+        selectIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            reviewers.forEach(r => {
+                const opt = document.createElement('option');
+                opt.value       = r.id;
+                opt.textContent = r.name;
+                el.appendChild(opt);
+            });
+        });
+        console.log('LORE dashboard.js: Loaded', reviewers.length, 'Reviewers into selects:', selectIds);
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not load Reviewers for selects.', err);
+    }
 }
 
 // ---------------------------------------------------------------------------

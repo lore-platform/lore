@@ -58,6 +58,7 @@ let _state = null;
 // ---------------------------------------------------------------------------
 export async function loadState(uid, orgId) {
     const ref = doc(db, 'organisations', orgId, 'users', uid);
+    console.log('LORE state.js: Loading state for uid:', uid, 'orgId:', orgId);
 
     try {
         const snap = await getDoc(ref);
@@ -74,9 +75,23 @@ export async function loadState(uid, orgId) {
                 sessionsTotal: data.sessionsTotal  ?? 0,
                 // isCalibrated: true once 20 real sessions are recorded
                 isCalibrated:  (data.sessionsTotal ?? 0) >= 20,
+                // Seniority and role title come from the user profile document —
+                // set at invite time and used to calibrate scenario difficulty.
+                // Without this, all Employees get mid-level scenarios regardless
+                // of their actual experience level.
+                seniority:     data.seniority  ?? 'mid',
+                roleTitle:     data.roleTitle   ?? '',
             };
+            console.log('LORE state.js: State loaded from Firestore.', {
+                xp: _state.xp,
+                streak: _state.streak,
+                sessionsTotal: _state.sessionsTotal,
+                seniority: _state.seniority,
+                isCalibrated: _state.isCalibrated,
+            });
         } else {
             // First ever sign-in — create the user document
+            console.log('LORE state.js: No existing user document — creating fresh state.');
             _state = {
                 uid,
                 orgId,
@@ -86,6 +101,8 @@ export async function loadState(uid, orgId) {
                 domainMastery: {},
                 sessionsTotal: 0,
                 isCalibrated: false,
+                seniority: 'mid',
+                roleTitle: '',
             };
             await setDoc(ref, {
                 xp: 0,
@@ -102,15 +119,17 @@ export async function loadState(uid, orgId) {
         return _state;
 
     } catch (err) {
-        console.warn('LORE: Could not load state from Firestore.', err);
+        console.warn('LORE state.js: Could not load state from Firestore.', err);
         // Fall back to localStorage if Firestore fails
         const cached = localStorage.getItem('lore_state');
         if (cached) {
             _state = JSON.parse(cached);
+            console.log('LORE state.js: Fell back to localStorage state.');
             return _state;
         }
         // Return a zeroed state as last resort
-        _state = { uid, orgId, xp: 0, streak: 0, domainMastery: {}, sessionsTotal: 0, isCalibrated: false };
+        console.warn('LORE state.js: No localStorage fallback — returning zeroed state.');
+        _state = { uid, orgId, xp: 0, streak: 0, domainMastery: {}, sessionsTotal: 0, isCalibrated: false, seniority: 'mid', roleTitle: '' };
         return _state;
     }
 }
@@ -128,6 +147,7 @@ export function getState() {
 // Clear state on sign-out.
 // ---------------------------------------------------------------------------
 export function clearState() {
+    console.log('LORE state.js: State cleared on sign-out.');
     _state = null;
     localStorage.removeItem('lore_state');
 }
@@ -197,6 +217,17 @@ export async function recordResponse(verdict, domain) {
         [`domainMastery.${domain}.correct`]: increment(verdict === 'correct' ? 1 : 0),
         sessionsTotal: increment(1),
     }).catch(err => console.warn('LORE: State sync to Firestore failed.', err));
+
+    console.log('LORE state.js: Response recorded.', {
+        verdict,
+        domain,
+        xpGained,
+        newTotal: newXP,
+        rankUp,
+        newRank: newRank.name,
+        newStreak,
+        sessionsTotal: newSessions,
+    });
 
     return { xpGained, newTotal: newXP, rankUp, newRank };
 }

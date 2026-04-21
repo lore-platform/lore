@@ -39,6 +39,7 @@ export async function generate(prompt, systemPrompt = '') {
 // Internal call — sends request to Worker, returns safe response shape.
 // ---------------------------------------------------------------------------
 async function _call({ mode, prompt, systemPrompt }) {
+    console.log(`LORE ai.js: Calling Worker — mode: ${mode}, prompt length: ${prompt.length} chars`);
     try {
         const res = await fetch(WORKER_URL, {
             method: 'POST',
@@ -48,15 +49,16 @@ async function _call({ mode, prompt, systemPrompt }) {
 
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            console.warn('LORE AI: Worker returned error', res.status, err);
+            console.warn('LORE ai.js: Worker returned error', res.status, err);
             return { ok: false, error: err.error ?? 'AI_ERROR', quota: err.quota ?? false };
         }
 
         const data = await res.json();
+        console.log(`LORE ai.js: Worker responded OK — mode: ${mode}, response length: ${data?.text?.length ?? 0} chars`);
         return data;
 
     } catch (err) {
-        console.warn('LORE AI: Fetch to Worker failed.', err.message);
+        console.warn('LORE ai.js: Fetch to Worker failed.', err.message);
         return { ok: false, error: 'NETWORK_ERROR', quota: false };
     }
 }
@@ -132,6 +134,6 @@ export function extractJSON(text) {
     } catch {}
 
     // All five passes failed
-    console.warn('LORE AI: JSON extraction failed after five passes.');
+    console.warn('LORE ai.js: JSON extraction failed after five passes. Raw text sample:', text.slice(0, 200));
     return null;
 }

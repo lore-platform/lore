@@ -6,12 +6,21 @@
 //
 // Pre-pull: the next scenario is fetched from Firestore while the Employee
 // is reading the result screen, so there is no wait on the next encounter.
+//
+// Phase 2 additions:
+//   evaluateResponse() — now writes a mentorship task to the assigned
+//   Reviewer's tasks sub-collection when verdict is 'missed'. This is the
+//   correct place for that write because the missed verdict is the trigger.
+//
+//   queueScenarioReview() — callable from the dashboard to queue a specific
+//   scenario for a Reviewer's quality check session.
 // =============================================================================
 
 import { db } from './firebase.js';
 import {
     collection,
     doc,
+    getDoc,
     getDocs,
     addDoc,
     query,
@@ -33,8 +42,11 @@ let _prePulled = null;
 // Returns a scenario object or null.
 // ---------------------------------------------------------------------------
 export async function getNextScenario(orgId, domain, employeeContext) {
-    // If we have a pre-pulled scenario, use it
+    console.log('LORE scenarios.js: getNextScenario called —', { orgId, domain, seniority: employeeContext?.seniority });
+
+    // If we have a pre-pulled scenario ready, use it
     if (_prePulled && _prePulled.domain === domain) {
+        console.log('LORE scenarios.js: Using pre-pulled scenario, id:', _prePulled.id);
         const scenario = _prePulled;
         _prePulled = null;
         return scenario;
@@ -49,9 +61,13 @@ export async function getNextScenario(orgId, domain, employeeContext) {
 // ---------------------------------------------------------------------------
 export function prePullNext(orgId, domain, employeeContext) {
     // Fire and forget — populates _prePulled for the next call to getNextScenario
+    console.log('LORE scenarios.js: Pre-pulling next scenario for domain:', domain);
     _fetchOrGenerate(orgId, domain, employeeContext)
-        .then(scenario => { _prePulled = scenario; })
-        .catch(err => console.warn('LORE: Pre-pull failed.', err));
+        .then(scenario => {
+            _prePulled = scenario;
+            console.log('LORE scenarios.js: Pre-pull complete, id:', scenario?.id ?? 'null');
+        })
+        .catch(err => console.warn('LORE scenarios.js: Pre-pull failed.', err));
 }
 
 // ---------------------------------------------------------------------------
@@ -67,11 +83,18 @@ export function clearPrePull() {
 async function _fetchOrGenerate(orgId, domain, employeeContext) {
     // 1. Try to get an approved scenario in this domain that isn't exhausted
     const storedScenario = await _getStoredScenario(orgId, domain);
-    if (storedScenario) return storedScenario;
+    if (storedScenario) {
+        console.log('LORE scenarios.js: Fetched stored scenario, id:', storedScenario.id);
+        return storedScenario;
+    }
 
     // 2. No stored scenario available — get a recipe and generate one
+    console.log('LORE scenarios.js: No stored scenario — attempting generation for domain:', domain);
     const recipe = await _getRecipeForDomain(orgId, domain);
-    if (!recipe) return null;
+    if (!recipe) {
+        console.warn('LORE scenarios.js: No approved recipe found for domain:', domain);
+        return null;
+    }
 
     return _generateScenario(orgId, recipe, employeeContext);
 }
@@ -96,7 +119,7 @@ async function _getStoredScenario(orgId, domain) {
         const docSnap = snap.docs[0];
         return { id: docSnap.id, ...docSnap.data() };
     } catch (err) {
-        console.warn('LORE: Could not fetch stored scenario.', err);
+        console.warn('LORE scenarios.js: Could not fetch stored scenario.', err);
         return null;
     }
 }
@@ -119,7 +142,7 @@ async function _getRecipeForDomain(orgId, domain) {
         const docSnap = snap.docs[0];
         return { id: docSnap.id, ...docSnap.data() };
     } catch (err) {
-        console.warn('LORE: Could not fetch recipe.', err);
+        console.warn('LORE scenarios.js: Could not fetch recipe for domain:', domain, err);
         return null;
     }
 }
@@ -133,6 +156,8 @@ async function _generateScenario(orgId, recipe, employeeContext) {
     const scenarioTypes = ['judgement', 'recognition', 'reflection'];
     // [TUNING TARGET] Rotate type based on recent history — for now, random
     const type = scenarioTypes[Math.floor(Math.random() * scenarioTypes.length)];
+
+    console.log('LORE scenarios.js: Generating scenario — type:', type, 'recipe:', recipe.skillName, 'seniority:', employeeContext?.seniority ?? 'mid');
 
     const systemPrompt = `You are generating a professional training scenario for an organisational learning platform.
 The scenario is drawn from a Career Recipe — a structured description of expert judgement in a specific skill area.
@@ -156,29 +181,36 @@ Common flaw pattern: ${recipe.flawPattern ?? 'Not specified'}
 Generate a ${type} scenario from this recipe. The scenario should reflect the trigger condition without naming it directly.`;
 
     const result = await generate(prompt, systemPrompt);
-    if (!result.ok) return null;
+    if (!result.ok) {
+        console.warn('LORE scenarios.js: AI generation failed.');
+        return null;
+    }
 
     const parsed = extractJSON(result.text);
-    if (!parsed || !parsed.scenarioText) return null;
+    if (!parsed || !parsed.scenarioText) {
+        console.warn('LORE scenarios.js: JSON extraction failed on generated scenario.');
+        return null;
+    }
 
     // Store in Firestore for reuse
     const scenario = {
-        recipeId:     recipe.id,
-        domain:       recipe.domain,
-        text:         parsed.scenarioText,
+        recipeId:       recipe.id,
+        domain:         recipe.domain,
+        text:           parsed.scenarioText,
         questionPrompt: parsed.questionPrompt,
-        scenarioType: parsed.scenarioType ?? type,
-        difficulty:   parsed.difficulty ?? 'mid',
-        approved:     true,
-        generatedAt:  serverTimestamp(),
+        scenarioType:   parsed.scenarioType ?? type,
+        difficulty:     parsed.difficulty ?? 'mid',
+        approved:       true,
+        generatedAt:    serverTimestamp(),
     };
 
     try {
         const ref = collection(db, 'organisations', orgId, 'scenarios');
         const added = await addDoc(ref, scenario);
+        console.log('LORE scenarios.js: Scenario stored in Firestore, id:', added.id);
         return { id: added.id, ...scenario, recipe };
     } catch (err) {
-        console.warn('LORE: Could not store generated scenario.', err);
+        console.warn('LORE scenarios.js: Could not store generated scenario.', err);
         // Return it anyway even if storage failed — Employee can still train
         return { id: null, ...scenario, recipe };
     }
@@ -187,8 +219,18 @@ Generate a ${type} scenario from this recipe. The scenario should reflect the tr
 // ---------------------------------------------------------------------------
 // Evaluate an Employee's response against the source recipe.
 // Returns { verdict: 'correct'|'partial'|'missed', explanation: string }.
+//
+// When verdict is 'missed', this function looks up the Reviewer assigned to
+// the scenario's domain and writes a mentorship task to their tasks
+// sub-collection. This is the correct trigger point — the missed verdict
+// is exactly when senior input is most valuable.
+//
+// The Reviewer never knows why they are being asked. They see a mentorship
+// prompt framed as "what would you tell them?" — not "this Employee failed."
 // ---------------------------------------------------------------------------
-export async function evaluateResponse(response, scenario, recipe) {
+export async function evaluateResponse(response, scenario, recipe, orgId, employeeUid) {
+    console.log('LORE scenarios.js: Evaluating response — scenario id:', scenario?.id, 'recipe:', recipe?.skillName);
+
     const systemPrompt = `You are evaluating an employee's response to a professional training scenario.
 Compare their response to the expert Career Recipe below.
 Return a JSON object with exactly two fields:
@@ -211,6 +253,7 @@ Expected outcome: ${recipe.expectedOutcome}`;
 
     const result = await classify(prompt, systemPrompt);
     if (!result.ok) {
+        console.warn('LORE scenarios.js: Evaluation AI call failed — defaulting to partial.');
         return {
             verdict: 'partial',
             explanation: 'We couldn\'t evaluate your response right now. Your answer has been recorded.'
@@ -219,14 +262,131 @@ Expected outcome: ${recipe.expectedOutcome}`;
 
     const parsed = extractJSON(result.text);
     if (!parsed || !parsed.verdict) {
+        console.warn('LORE scenarios.js: Evaluation JSON extraction failed — defaulting to partial.');
         return {
             verdict: 'partial',
             explanation: 'We couldn\'t evaluate your response right now. Your answer has been recorded.'
         };
     }
 
+    console.log('LORE scenarios.js: Evaluation complete — verdict:', parsed.verdict);
+
+    // On a missed verdict, queue a mentorship prompt for the domain's Reviewer.
+    // This is non-blocking — if it fails, the Employee still sees their result.
+    if (parsed.verdict === 'missed' && orgId && scenario.domain) {
+        _writeMentorshipTask(orgId, scenario, recipe, response, employeeUid)
+            .catch(err => console.warn('LORE scenarios.js: Mentorship task write failed silently.', err));
+    }
+
     return {
         verdict:     parsed.verdict,
         explanation: parsed.explanation ?? ''
     };
+}
+
+// ---------------------------------------------------------------------------
+// Internal — look up the Reviewer assigned to a domain and write a
+// mentorship task to their tasks sub-collection.
+//
+// Domain documents store a reviewerIds[] array set by the Manager in the
+// Skill Areas tab of the Dashboard. If no Reviewer is assigned, this is a
+// no-op — the missed verdict is still recorded, there is just no prompt sent.
+// ---------------------------------------------------------------------------
+async function _writeMentorshipTask(orgId, scenario, recipe, employeeResponse, employeeUid) {
+    // 1. Look up the domain document to find assigned Reviewers
+    let reviewerIds = [];
+    try {
+        const domainSnap = await getDocs(
+            query(
+                collection(db, 'organisations', orgId, 'domains'),
+                where('name', '==', scenario.domain),
+                limit(1)
+            )
+        );
+        if (!domainSnap.empty) {
+            reviewerIds = domainSnap.docs[0].data().reviewerIds ?? [];
+        }
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not look up domain for mentorship routing.', err);
+        return;
+    }
+
+    if (reviewerIds.length === 0) {
+        console.log('LORE scenarios.js: No Reviewer assigned to domain:', scenario.domain, '— mentorship task not sent.');
+        return;
+    }
+
+    // 2. Write a mentorship task to each assigned Reviewer's tasks sub-collection.
+    // [TUNING TARGET] Currently writes to all assigned Reviewers — could be
+    // limited to one (round-robin or least-recently-assigned) to avoid duplicate prompts.
+    for (const reviewerId of reviewerIds) {
+        try {
+            await addDoc(
+                collection(db, 'organisations', orgId, 'users', reviewerId, 'tasks'),
+                {
+                    type:             'mentorship_note',
+                    status:           'pending',
+                    scenarioText:     scenario.text,
+                    questionPrompt:   scenario.questionPrompt,
+                    employeeResponse: employeeResponse,
+                    domain:           scenario.domain,
+                    scenarioId:       scenario.id ?? null,
+                    recipeId:         recipe.id   ?? null,
+                    // employeeUid is stored for pattern signal attribution
+                    // but is never surfaced in the Reviewer's prompt UI
+                    employeeUid:      employeeUid ?? null,
+                    createdAt:        serverTimestamp(),
+                }
+            );
+            console.log('LORE scenarios.js: Mentorship task written to Reviewer:', reviewerId, 'domain:', scenario.domain);
+        } catch (err) {
+            console.warn('LORE scenarios.js: Could not write mentorship task to Reviewer:', reviewerId, err);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Queue a scenario for Reviewer quality check (scenario_review type).
+// Called from the Dashboard when the Manager clicks "Send for review" on
+// a specific scenario in the Knowledge Base section.
+//
+// scenarioId: the Firestore ID of the scenario to review
+// reviewerId: the uid of the Reviewer to send it to
+// Returns { ok: true } or { ok: false, error }.
+// ---------------------------------------------------------------------------
+export async function queueScenarioReview(orgId, scenarioId, reviewerId) {
+    console.log('LORE scenarios.js: Queuing scenario review —', { scenarioId, reviewerId });
+
+    // Fetch the scenario text so the task document is self-contained
+    let scenarioText = '';
+    let domain = '';
+    try {
+        const snap = await getDoc(doc(db, 'organisations', orgId, 'scenarios', scenarioId));
+        if (snap.exists()) {
+            scenarioText = snap.data().text ?? '';
+            domain       = snap.data().domain ?? '';
+        }
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not fetch scenario for review queue.', err);
+        return { ok: false, error: 'Could not load scenario.' };
+    }
+
+    try {
+        await addDoc(
+            collection(db, 'organisations', orgId, 'users', reviewerId, 'tasks'),
+            {
+                type:         'scenario_review',
+                status:       'pending',
+                scenarioText,
+                domain,
+                scenarioId,
+                createdAt:    serverTimestamp(),
+            }
+        );
+        console.log('LORE scenarios.js: Scenario review task queued for Reviewer:', reviewerId);
+        return { ok: true };
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not queue scenario review task.', err);
+        return { ok: false, error: 'Could not send to Reviewer.' };
+    }
 }

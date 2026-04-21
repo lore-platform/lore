@@ -299,7 +299,9 @@ function renderEncounter(container, scenario) {
 async function handleSubmit(container, response, scenario) {
     renderLoading(container, 'Reading your response…');
 
-    const evaluation = await evaluateResponse(response, scenario, _activeRecipe);
+    // orgId and _uid are passed so evaluateResponse can write a mentorship
+    // task to the domain's Reviewer when the verdict is 'missed'.
+    const evaluation = await evaluateResponse(response, scenario, _activeRecipe, _orgId, _uid);
 
     // Record XP and streak
     const xpResult = await recordResponse(evaluation.verdict, _activeDomain?.name ?? 'general');
