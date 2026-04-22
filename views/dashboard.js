@@ -289,6 +289,9 @@ function renderDashboard(container) {
             <!-- Section navigation -->
             <div class="dashboard-nav" style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;">
                 ${_navTab('overview',   'Overview')}
+                ${_navTab('progress',   'Team progress')}
+                ${_navTab('ttc',        'Time to readiness')}
+                ${_navTab('reviewer',   'Reviewer activity')}
                 ${_navTab('knowledge',  'Knowledge base')}
                 ${_navTab('queue',      `Review queue${pendingCount > 0 ? ` <span class="queue-badge">${pendingCount}</span>` : ''}`)}
                 ${_navTab('upload',     'Add knowledge')}
@@ -302,7 +305,7 @@ function renderDashboard(container) {
     `;
 
     // Attach nav tab handlers
-    ['overview', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(section => {
+    ['overview', 'progress', 'ttc', 'reviewer', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(section => {
         document.getElementById(`tab-${section}`)?.addEventListener('click', () => {
             _activeSection = section;
             _setActiveTab(section);
@@ -338,7 +341,7 @@ function _navTab(id, label) {
 }
 
 function _setActiveTab(activeId) {
-    ['overview', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(id => {
+    ['overview', 'progress', 'ttc', 'reviewer', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(id => {
         const btn = document.getElementById(`tab-${id}`);
         if (!btn) return;
         if (id === activeId) {
@@ -362,6 +365,9 @@ function renderSection(section, opts = {}) {
 
     switch (section) {
         case 'overview':   renderOverview(el);            break;
+        case 'progress':   renderTeamProgress(el);        break;
+        case 'ttc':        renderTimeToReadiness(el);     break;
+        case 'reviewer':   renderReviewerActivity(el);    break;
         case 'knowledge':  renderKnowledgeBase(el);       break;
         case 'queue':      renderReviewQueue(el);         break;
         case 'upload':     renderUpload(el);              break;
@@ -377,7 +383,7 @@ function renderSection(section, opts = {}) {
 // The Manager sees the health of the knowledge base at a glance.
 // ---------------------------------------------------------------------------
 function renderOverview(el) {
-    // Group recipes by domain name for the coverage summary
+    // Group recipes by domain name for the coverage heat map
     const byDomain = {};
     _recipes.forEach(r => {
         const d = r.domain || 'Uncategorised';
@@ -387,6 +393,12 @@ function renderOverview(el) {
 
     const domainCount  = Object.keys(byDomain).length;
     const pendingCount = _pending.length;
+
+    // Thin areas: domains with fewer than 5 recipes cannot generate varied
+    // scenarios reliably. Flagged prominently so the Manager knows where to
+    // focus knowledge-building effort.
+    const thinAreas = Object.entries(byDomain).filter(([, count]) => count < 5);
+
     const clusterAlert = _clusters.length > 0
         ? `<div class="card mt-4" style="border-left: 3px solid var(--ember);">
                <p style="font-weight: 500; color: var(--ember);">Skill areas ready to confirm</p>
@@ -394,9 +406,21 @@ function renderOverview(el) {
            </div>`
         : '';
 
+    const thinAlert = thinAreas.length > 0 && _recipes.length > 0
+        ? `<div class="card mt-4" style="border-left: 3px solid #D4943A;">
+               <p style="font-weight: 500; color: #8C5A0A;">
+                   ${thinAreas.length} skill area${thinAreas.length !== 1 ? 's' : ''} need${thinAreas.length === 1 ? 's' : ''} more recipes
+               </p>
+               <p class="text-secondary text-sm mt-2">
+                   ${thinAreas.map(([d]) => d).join(', ')} — fewer than 5 recipes each. Scenario variety will be limited until more are added.
+               </p>
+           </div>`
+        : '';
+
     el.innerHTML = `
         <div>
             ${clusterAlert}
+            ${thinAlert}
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-4);">
                 <div class="card">
@@ -411,7 +435,7 @@ function renderOverview(el) {
                 </div>
             </div>
 
-            ${_recipes.length === 0 ? renderEmptyKnowledgeBase() : renderCoverageSummary(byDomain)}
+            ${_recipes.length === 0 ? renderEmptyKnowledgeBase() : renderCoverageHeatMap(byDomain)}
 
             <div class="card mt-4">
                 <h3 style="margin-bottom: var(--space-3);">Getting started</h3>
@@ -441,22 +465,26 @@ function renderEmptyKnowledgeBase() {
     `;
 }
 
-function renderCoverageSummary(byDomain) {
+// Coverage heat map — visual representation of recipe depth per skill area.
+// Colour-coded: sage (strong, >= 5), amber (developing, 3–4), ember (thin, < 3).
+// The 5-recipe threshold is not arbitrary — below it, scenario variety drops
+// and Employees will see repeated content, breaking the learning experience.
+function renderCoverageHeatMap(byDomain) {
     const max = Math.max(...Object.values(byDomain));
     return `
         <div class="card mt-4">
-            <h3 style="margin-bottom: var(--space-4);">Coverage by skill area</h3>
-            ${Object.entries(byDomain).map(([domain, count]) => {
-                // Coverage bar: sage if >= 5 recipes (enough for calibration),
-                // amber if 3-4 (developing), ember if < 3 (thin)
-                const barColour = count >= 5 ? 'var(--sage)' : count >= 3 ? '#D4943A' : 'var(--ember)';
-                const pct = Math.round((count / max) * 100);
-                const label = count >= 5 ? 'Strong' : count >= 3 ? 'Developing' : 'Thin';
+            <h3 style="margin-bottom: var(--space-1);">Coverage heat map</h3>
+            <p class="text-secondary text-sm mb-4">Skill areas with fewer than 5 recipes cannot generate enough varied scenarios for effective training.</p>
+            ${Object.entries(byDomain).sort((a, b) => b[1] - a[1]).map(([domain, count]) => {
+                const barColour  = count >= 5 ? 'var(--sage)' : count >= 3 ? '#D4943A' : 'var(--ember)';
+                const labelColour = count >= 5 ? 'var(--sage)' : count >= 3 ? '#8C5A0A' : 'var(--error)';
+                const pct        = Math.round((count / max) * 100);
+                const label      = count >= 5 ? 'Strong' : count >= 3 ? 'Developing' : 'Thin — needs recipes';
                 return `
                     <div style="margin-bottom: var(--space-4);">
                         <div class="flex-between mb-2">
                             <p style="font-size: var(--text-sm); font-weight: 500;">${domain}</p>
-                            <p class="text-xs text-secondary">${count} recipe${count !== 1 ? 's' : ''} · ${label}</p>
+                            <p style="font-size: var(--text-xs); color: ${labelColour};">${count} recipe${count !== 1 ? 's' : ''} · ${label}</p>
                         </div>
                         <div class="xp-bar-track">
                             <div class="xp-bar-fill" style="width: ${pct}%; background: ${barColour};"></div>
@@ -1304,6 +1332,373 @@ async function _loadTeamList() {
         console.warn('LORE Dashboard: Could not load team list.', err);
         listEl.innerHTML = `<p class="text-secondary text-sm">Could not load team list.</p>`;
     }
+}
+
+// ---------------------------------------------------------------------------
+// SECTION: Team Progress
+// Every Employee's mastery percentage, rank, sessions completed, and last
+// active date — in one scannable list. The Manager uses this to spot who is
+// active, who has stalled, and who needs a nudge.
+// Clicking an Employee's row navigates to their full profile view.
+// ---------------------------------------------------------------------------
+async function renderTeamProgress(el) {
+    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading team progress…</p></div>`;
+
+    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { collection: col, getDocs: gd } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    let employees = [];
+    try {
+        const snap = await gd(col(firestoreDb, 'organisations', _orgId, 'users'));
+        employees = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(u => u.role === 'employee');
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not load employees for team progress.', err);
+    }
+
+    if (employees.length === 0) {
+        el.innerHTML = `
+            <div class="empty-state">
+                <h3>No Employees yet</h3>
+                <p class="mt-2">Invite team members to start tracking their progress here.</p>
+                <button class="btn btn-primary mt-6" id="progress-go-invite">Invite someone</button>
+            </div>
+        `;
+        document.getElementById('progress-go-invite')?.addEventListener('click', () => {
+            _activeSection = 'team'; _setActiveTab('team'); renderSection('team', { openInvite: true });
+        });
+        return;
+    }
+
+    // Sort: most recently active first, never-active last
+    employees.sort((a, b) => {
+        if (!a.lastTrainedAt && !b.lastTrainedAt) return 0;
+        if (!a.lastTrainedAt) return 1;
+        if (!b.lastTrainedAt) return -1;
+        return new Date(b.lastTrainedAt) - new Date(a.lastTrainedAt);
+    });
+
+    const { getRankForXP } = await import('../engine/state.js');
+
+    // Overall mastery: average accuracy across all domains for each Employee
+    function overallMastery(mastery) {
+        const domains = Object.values(mastery ?? {});
+        if (domains.length === 0) return null;
+        const total   = domains.reduce((sum, d) => sum + (d.played ?? 0), 0);
+        const correct = domains.reduce((sum, d) => sum + (d.correct ?? 0), 0);
+        return total > 0 ? Math.round((correct / total) * 100) : null;
+    }
+
+    el.innerHTML = `
+        <div>
+            <div class="flex-between mb-6">
+                <h3>Team progress</h3>
+                <p class="text-secondary text-sm">${employees.length} employee${employees.length !== 1 ? 's' : ''}</p>
+            </div>
+
+            ${employees.map(emp => {
+                const rank    = getRankForXP(emp.xp ?? 0);
+                const mastery = overallMastery(emp.domainMastery);
+                const masteryColour = mastery === null ? 'var(--warm-grey)'
+                    : mastery >= 70 ? 'var(--sage)'
+                    : mastery >= 40 ? '#8C5A0A'
+                    : 'var(--error)';
+
+                const lastActive = emp.lastTrainedAt
+                    ? _relativeTime(new Date(emp.lastTrainedAt))
+                    : 'Never trained';
+
+                const isStale = emp.lastTrainedAt
+                    ? (Date.now() - new Date(emp.lastTrainedAt).getTime()) > 7 * 24 * 60 * 60 * 1000
+                    : true;
+
+                return `
+                    <div class="card" style="margin-bottom: var(--space-3); cursor: pointer;" id="emp-row-${emp.id}">
+                        <div class="flex-between">
+                            <div style="flex: 1;">
+                                <div class="flex-between">
+                                    <p style="font-weight: 500;">${emp.displayName ?? emp.email ?? 'Team member'}</p>
+                                    <span class="rank-badge" style="font-size: 10px;">${rank.name}</span>
+                                </div>
+                                <p class="text-secondary text-sm mt-1">${emp.roleTitle ?? ''}</p>
+                                <div style="display: flex; gap: var(--space-6); margin-top: var(--space-3); flex-wrap: wrap;">
+                                    <div>
+                                        <p class="text-xs text-secondary">Overall mastery</p>
+                                        <p style="font-size: var(--text-sm); font-weight: 500; color: ${masteryColour};">
+                                            ${mastery !== null ? mastery + '%' : 'No sessions yet'}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs text-secondary">Sessions</p>
+                                        <p style="font-size: var(--text-sm); font-weight: 500;">${emp.sessionsTotal ?? 0}</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs text-secondary">Last active</p>
+                                        <p style="font-size: var(--text-sm); font-weight: 500; color: ${isStale ? 'var(--error)' : 'var(--ink)'};">
+                                            ${lastActive}
+                                        </p>
+                                    </div>
+                                    <div>
+                                        <p class="text-xs text-secondary">XP</p>
+                                        <p style="font-size: var(--text-sm); font-weight: 500;">${(emp.xp ?? 0).toLocaleString()}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+
+    // Each row navigates to the Employee's full profile view
+    employees.forEach(emp => {
+        document.getElementById(`emp-row-${emp.id}`)?.addEventListener('click', () => {
+            // Navigate using the ?employee=UID pattern that app.js handles
+            window.location.href = `${window.location.pathname}?employee=${emp.id}`;
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// SECTION: Time to Readiness
+// Per-Employee progress narratives. Not a raw metric — a plain-language
+// read of where each Employee is in their development curve.
+// Generated by AI on demand, or shown as a skeleton if no sessions yet.
+//
+// The internal label is "Time to Competency". What the Manager sees is
+// always expressed as a progress narrative: "Adaeze has moved from
+// developing to mid-level in client management over 4 months."
+// ---------------------------------------------------------------------------
+async function renderTimeToReadiness(el) {
+    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+
+    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { collection: col, getDocs: gd } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    let employees = [];
+    try {
+        const snap = await gd(col(firestoreDb, 'organisations', _orgId, 'users'));
+        employees = snap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(u => u.role === 'employee' && (u.sessionsTotal ?? 0) > 0);
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not load employees for TTC.', err);
+    }
+
+    if (employees.length === 0) {
+        el.innerHTML = `
+            <div class="empty-state">
+                <h3>No training data yet</h3>
+                <p class="mt-2">Progress narratives appear here once Employees have completed their first training sessions.</p>
+            </div>
+        `;
+        return;
+    }
+
+    el.innerHTML = `
+        <div>
+            <h3 style="margin-bottom: var(--space-2);">Time to readiness</h3>
+            <p class="text-secondary text-sm mb-6">Where each person is in their development curve, in plain language.</p>
+            ${employees.map((emp, i) => `
+                <div class="card" style="margin-bottom: var(--space-4);">
+                    <div class="flex-between mb-3">
+                        <div>
+                            <p style="font-weight: 500;">${emp.displayName ?? 'Team member'}</p>
+                            <p class="text-secondary text-sm">${emp.roleTitle ?? ''} · ${emp.sessionsTotal ?? 0} sessions</p>
+                        </div>
+                        <button class="btn btn-secondary" id="ttc-gen-${i}" style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
+                            Generate
+                        </button>
+                    </div>
+                    <p id="ttc-text-${i}" class="text-secondary text-sm" style="line-height: 1.8;">
+                        Click Generate to see a progress narrative for ${emp.displayName ?? 'this team member'}.
+                    </p>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    const { generate } = await import('../engine/ai.js');
+
+    employees.forEach((emp, i) => {
+        document.getElementById(`ttc-gen-${i}`)?.addEventListener('click', async () => {
+            const btn    = document.getElementById(`ttc-gen-${i}`);
+            const textEl = document.getElementById(`ttc-text-${i}`);
+            btn.disabled    = true;
+            btn.textContent = 'Generating…';
+
+            const masteryLines = Object.entries(emp.domainMastery ?? {}).map(([domain, stats]) => {
+                const acc = stats.played > 0 ? Math.round((stats.correct / stats.played) * 100) : 0;
+                return `${domain}: ${acc}% accuracy across ${stats.played} session${stats.played !== 1 ? 's' : ''}`;
+            }).join('; ') || 'No domain data yet';
+
+            const systemPrompt = `You are writing a brief, plain-language progress narrative for a manager about one of their team members.
+This is about their development trajectory — not a performance score.
+Tone: trusted colleague, warm but precise. Not clinical.
+Length: 2 to 3 sentences maximum.
+Never use: "time to competency", "metric", "data shows", "score", "percentage", LORE, training.
+Do not begin with the person's name.
+Focus on: where they are now, how far they have come, a realistic sense of what comes next.`;
+
+            const prompt = `Team member: ${emp.displayName ?? 'this person'}
+Role: ${emp.roleTitle ?? 'not specified'}
+Experience level: ${emp.seniority ?? 'not specified'}
+Sessions completed: ${emp.sessionsTotal ?? 0}
+Calibration confirmed: ${(emp.sessionsTotal ?? 0) >= 20 ? 'yes' : 'not yet — still forming'}
+Skill area performance: ${masteryLines}
+
+Write the progress narrative.`;
+
+            console.log('LORE dashboard.js: Generating TTC narrative for employee:', emp.id);
+            const result = await generate(prompt, systemPrompt);
+
+            btn.disabled    = false;
+            btn.textContent = 'Regenerate';
+
+            if (!result.ok) {
+                if (textEl) textEl.textContent = 'Could not generate right now. Try again shortly.';
+                return;
+            }
+
+            if (textEl) {
+                textEl.textContent    = result.text;
+                textEl.style.color    = 'var(--ink)';
+                textEl.style.fontStyle = 'normal';
+            }
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// SECTION: Reviewer Activity
+// Shows what each Reviewer has contributed: scenarios reviewed, mentorship
+// notes written, documents processed. The Manager needs this to know whether
+// the extraction side of the system is producing at the rate expected.
+//
+// Data is read from the extractions collection grouped by reviewerId,
+// and from the tasks sub-collection completion counts.
+// ---------------------------------------------------------------------------
+async function renderReviewerActivity(el) {
+    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+
+    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const {
+        collection: col,
+        query: q,
+        where: wh,
+        getDocs: gd,
+    } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    // Load all Reviewers and all extractions in parallel
+    let reviewers = [];
+    let allExtractions = [];
+    try {
+        const [reviewerSnap, extractionSnap] = await Promise.all([
+            gd(q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))),
+            gd(col(firestoreDb, 'organisations', _orgId, 'extractions')),
+        ]);
+        reviewers       = reviewerSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        allExtractions  = extractionSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not load Reviewer activity data.', err);
+    }
+
+    if (reviewers.length === 0) {
+        el.innerHTML = `
+            <div class="empty-state">
+                <h3>No Reviewers yet</h3>
+                <p class="mt-2">Invite senior team members as Reviewers to start building your knowledge base.</p>
+                <button class="btn btn-primary mt-6" id="reviewer-go-invite">Invite a Reviewer</button>
+            </div>
+        `;
+        document.getElementById('reviewer-go-invite')?.addEventListener('click', () => {
+            _activeSection = 'team'; _setActiveTab('team'); renderSection('team', { openInvite: true });
+        });
+        return;
+    }
+
+    // Group extractions by reviewerId and sourceType
+    const activityByReviewer = {};
+    reviewers.forEach(r => {
+        activityByReviewer[r.id] = {
+            scenario_review:  0,
+            mentorship_note:  0,
+            document:         0,
+            approved:         0,
+        };
+    });
+
+    allExtractions.forEach(ext => {
+        if (ext.reviewerId && activityByReviewer[ext.reviewerId]) {
+            const type = ext.sourceType ?? 'document';
+            if (activityByReviewer[ext.reviewerId][type] !== undefined) {
+                activityByReviewer[ext.reviewerId][type]++;
+            }
+            if (ext.status === 'approved') {
+                activityByReviewer[ext.reviewerId].approved++;
+            }
+        }
+    });
+
+    el.innerHTML = `
+        <div>
+            <h3 style="margin-bottom: var(--space-2);">Reviewer activity</h3>
+            <p class="text-secondary text-sm mb-6">Contributions from each Reviewer — scenarios reviewed, mentorship notes, and approved recipes they helped build.</p>
+
+            ${reviewers.map(r => {
+                const activity = activityByReviewer[r.id];
+                const total    = (activity.scenario_review ?? 0) + (activity.mentorship_note ?? 0);
+                return `
+                    <div class="card" style="margin-bottom: var(--space-4);">
+                        <div class="flex-between mb-4">
+                            <div>
+                                <p style="font-weight: 500;">${r.displayName ?? r.email ?? 'Reviewer'}</p>
+                                <p class="text-secondary text-sm mt-1">${r.roleTitle ?? ''}</p>
+                            </div>
+                            <span class="chip chip-${total > 0 ? 'correct' : 'pending'}">${total > 0 ? 'Active' : 'No contributions yet'}</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4);">
+                            <div>
+                                <p class="text-xs text-secondary">Scenarios reviewed</p>
+                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1);">${activity.scenario_review ?? 0}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-secondary">Mentorship notes</p>
+                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1);">${activity.mentorship_note ?? 0}</p>
+                            </div>
+                            <div>
+                                <p class="text-xs text-secondary">Recipes contributed</p>
+                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1); color: var(--sage);">${activity.approved ?? 0}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+// ---------------------------------------------------------------------------
+// Relative time helper — converts a Date to "2 days ago", "just now", etc.
+// Used in Team Progress to show last active without exposing raw timestamps.
+// ---------------------------------------------------------------------------
+function _relativeTime(date) {
+    const diff = Date.now() - date.getTime();
+    const mins  = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days  = Math.floor(diff / 86400000);
+
+    if (mins  <  2) return 'Just now';
+    if (mins  < 60) return `${mins} minutes ago`;
+    if (hours <  2) return '1 hour ago';
+    if (hours < 24) return `${hours} hours ago`;
+    if (days  <  2) return 'Yesterday';
+    if (days  <  7) return `${days} days ago`;
+    return `${Math.floor(days / 7)} week${Math.floor(days / 7) !== 1 ? 's' : ''} ago`;
 }
 
 // ---------------------------------------------------------------------------

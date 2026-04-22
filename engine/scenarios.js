@@ -271,6 +271,15 @@ Expected outcome: ${recipe.expectedOutcome}`;
 
     console.log('LORE scenarios.js: Evaluation complete — verdict:', parsed.verdict);
 
+    // Write a pattern signal for the Manager's intelligence view.
+    // Pattern signals are inferred tendencies — not a log of individual mistakes.
+    // They are stored Manager-side only and never surfaced to the Employee.
+    // This is non-blocking — a failure here does not affect the Employee's result.
+    if (orgId && employeeUid && scenario.domain) {
+        _writePatternSignal(orgId, employeeUid, scenario, recipe, parsed.verdict, response)
+            .catch(err => console.warn('LORE scenarios.js: Pattern signal write failed silently.', err));
+    }
+
     // On a missed verdict, queue a mentorship prompt for the domain's Reviewer.
     // This is non-blocking — if it fails, the Employee still sees their result.
     if (parsed.verdict === 'missed' && orgId && scenario.domain) {
@@ -282,6 +291,40 @@ Expected outcome: ${recipe.expectedOutcome}`;
         verdict:     parsed.verdict,
         explanation: parsed.explanation ?? ''
     };
+}
+
+// ---------------------------------------------------------------------------
+// Internal — write a pattern signal to the Manager-only patternSignals
+// sub-collection on the Employee's user document.
+//
+// Pattern signals accumulate over many sessions. The Manager's profile view
+// reads them in aggregate to surface inferred tendencies — not individual
+// mistakes. The Employee never sees this collection.
+//
+// Signal shape: { domain, scenarioType, verdict, responseLength, createdAt }
+// Response length is a weak proxy for response depth/confidence — cheap to
+// compute, useful in aggregate.
+// ---------------------------------------------------------------------------
+async function _writePatternSignal(orgId, employeeUid, scenario, recipe, verdict, response) {
+    try {
+        await addDoc(
+            collection(db, 'organisations', orgId, 'users', employeeUid, 'patternSignals'),
+            {
+                domain:         scenario.domain,
+                scenarioType:   scenario.scenarioType ?? 'unknown',
+                recipeId:       recipe?.id ?? null,
+                skillName:      recipe?.skillName ?? null,
+                verdict,
+                // Response length in characters — used as a rough proxy for
+                // engagement depth when aggregated across many sessions.
+                responseLength: response?.length ?? 0,
+                createdAt:      serverTimestamp(),
+            }
+        );
+        console.log('LORE scenarios.js: Pattern signal written — verdict:', verdict, 'domain:', scenario.domain);
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not write pattern signal.', err);
+    }
 }
 
 // ---------------------------------------------------------------------------
