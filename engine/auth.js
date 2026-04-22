@@ -33,10 +33,13 @@ import {
 // The error string is safe to show to a user.
 // ---------------------------------------------------------------------------
 export async function signIn(email, password) {
+    console.log('LORE auth.js: Sign-in attempt for:', email);
     try {
         await signInWithEmailAndPassword(auth, email, password);
+        console.log('LORE auth.js: Sign-in successful.');
         return { ok: true };
     } catch (err) {
+        console.warn('LORE auth.js: Sign-in failed —', err.code);
         return { ok: false, error: friendlyAuthError(err.code) };
     }
 }
@@ -110,6 +113,7 @@ export async function redeemInvite(inviteId, name, password) {
 // Returns { ok: true, inviteId, inviteUrl } or { ok: false, error }.
 // ---------------------------------------------------------------------------
 export async function generateInvite(orgId, creatorUid, options) {
+    console.log('LORE auth.js: Generating invite — email:', options.email, 'role:', options.role);
     // Invites expire after 7 days — [TUNING TARGET] adjust if needed
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
@@ -153,9 +157,14 @@ export async function getClaims() {
         // forceRefresh: true ensures we get the latest claims after invite redemption
         const token = await user.getIdTokenResult(true);
         const { orgId, role } = token.claims;
-        if (!orgId || !role) return null;
+        if (!orgId || !role) {
+            console.warn('LORE auth.js: Claims present but orgId or role missing — claims not yet set by Cloud Function.');
+            return null;
+        }
+        console.log('LORE auth.js: Claims read — role:', role, 'orgId:', orgId);
         return { orgId, role, uid: user.uid, email: user.email };
-    } catch {
+    } catch (err) {
+        console.warn('LORE auth.js: Could not read claims.', err);
         return null;
     }
 }

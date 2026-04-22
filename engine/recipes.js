@@ -124,15 +124,56 @@ export async function saveToLibrary(orgId, uid, recipe) {
 // ---------------------------------------------------------------------------
 export async function getPendingExtractions(orgId) {
     try {
+        // Fetch both 'pending' and 'processed' extractions — the auto-approval
+        // pass below may promote some processed ones before returning the list.
         const ref = collection(db, 'organisations', orgId, 'extractions');
         const q = query(
             ref,
-            where('status', '==', 'pending'),
+            where('status', 'in', ['pending', 'processed']),
             orderBy('createdAt', 'desc')
         );
         const snap = await getDocs(q);
-        return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    } catch {
+        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Auto-approval pass — tiered by confidence and age.
+        // A 'processed' extraction with high confidence that has been sitting
+        // for 48+ hours without Manager action is silently approved and moved
+        // into the knowledge base. This keeps the queue from becoming stale.
+        // [TUNING TARGET] 48-hour window — adjust if Managers review more or less frequently.
+        const now          = Date.now();
+        const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000;
+        const autoApproved = [];
+
+        for (const ext of docs) {
+            if (
+                ext.status === 'processed' &&
+                ext.draft?.confidence === 'high' &&
+                ext.draft?.hasRecipe !== false &&
+                ext.processedAt
+            ) {
+                // Firestore Timestamps have a toMillis() method; plain numbers work directly
+                const processedMs = typeof ext.processedAt.toMillis === 'function'
+                    ? ext.processedAt.toMillis()
+                    : ext.processedAt;
+
+                if (now - processedMs >= FORTY_EIGHT_HOURS) {
+                    // Auto-approve — use the first confirmed domain or 'General'
+                    const domain = ext.draft.domain ?? 'General';
+                    const recipeId = await approveRecipe(orgId, ext.draft, ext.id, domain);
+                    if (recipeId) {
+                        autoApproved.push(ext.id);
+                        console.log('LORE recipes.js: Auto-approved high-confidence extraction:', ext.id, '→ recipe:', recipeId);
+                    }
+                }
+            }
+        }
+
+        // Return only items that were not auto-approved and are still pending/processed
+        const remaining = docs.filter(d => !autoApproved.includes(d.id));
+        console.log('LORE recipes.js: getPendingExtractions — found', docs.length, 'total,', autoApproved.length, 'auto-approved,', remaining.length, 'remaining for review.');
+        return remaining;
+    } catch (err) {
+        console.warn('LORE recipes.js: Could not fetch pending extractions.', err);
         return [];
     }
 }
@@ -150,6 +191,7 @@ export async function getPendingExtractions(orgId) {
 // Returns the extraction ID or null.
 // ---------------------------------------------------------------------------
 export async function createExtraction(orgId, extraction) {
+    console.log('LORE recipes.js: Creating extraction — sourceType:', extraction.sourceType, 'reviewerId:', extraction.reviewerId ?? 'none');
     try {
         const ref = collection(db, 'organisations', orgId, 'extractions');
         const added = await addDoc(ref, {
@@ -160,9 +202,10 @@ export async function createExtraction(orgId, extraction) {
             status:      'pending',       // pending → processed → approved / rejected
             createdAt:   serverTimestamp(),
         });
+        console.log('LORE recipes.js: Extraction created, id:', added.id);
         return added.id;
     } catch (err) {
-        console.warn('LORE Recipes: Could not create extraction.', err);
+        console.warn('LORE recipes.js: Could not create extraction.', err);
         return null;
     }
 }
@@ -235,6 +278,7 @@ Extract any expert decision logic present. Return the JSON object.`;
 // Returns the new recipe ID or null.
 // ---------------------------------------------------------------------------
 export async function approveRecipe(orgId, draft, extractionId, domain) {
+    console.log('LORE recipes.js: Approving recipe — skill:', draft.skillName, 'domain:', domain);
     try {
         // Write to the recipes collection — this is now live knowledge
         const recipesRef = collection(db, 'organisations', orgId, 'recipes');
@@ -273,14 +317,16 @@ export async function approveRecipe(orgId, draft, extractionId, domain) {
 // Returns true on success.
 // ---------------------------------------------------------------------------
 export async function rejectExtraction(orgId, extractionId) {
+    console.log('LORE recipes.js: Rejecting extraction:', extractionId);
     try {
         await updateDoc(doc(db, 'organisations', orgId, 'extractions', extractionId), {
             status:     'rejected',
             rejectedAt: serverTimestamp(),
         });
+        console.log('LORE recipes.js: Extraction rejected.');
         return true;
     } catch (err) {
-        console.warn('LORE Recipes: Could not reject extraction.', err);
+        console.warn('LORE recipes.js: Could not reject extraction.', err);
         return false;
     }
 }
@@ -299,6 +345,7 @@ export async function rejectExtraction(orgId, extractionId) {
 // Each extraction in the array is a draft recipe with confidence and context.
 // ---------------------------------------------------------------------------
 export async function processDocument(orgId, documentText, documentName) {
+    console.log('LORE recipes.js: Processing document — name:', documentName, 'length:', documentText.length, 'chars');
     const systemPrompt = `You are reading an organisational document — a retrospective, post-mortem, playbook, or similar internal material.
 Your job is to identify expert decision logic embedded in this document — specific patterns of professional judgement that a less experienced person would not automatically apply.
 Each pattern you find should be extractable as a distinct skill.

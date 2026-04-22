@@ -80,12 +80,23 @@ export async function initDashboard(orgId, uid) {
     _pending  = pending;
     _clusters = clusters;
 
-    renderDashboard(container);
+    // If the org has not yet set their industry, show the onboarding gate first.
+    // The gate is a single question — once answered the Manager proceeds to the
+    // main dashboard. It does not block anything; it enriches the domain seed.
+    if (!_industry) {
+        renderOnboarding(container);
+    } else {
+        renderDashboard(container);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Load the org profile to get the org name — used in invite generation.
 // ---------------------------------------------------------------------------
+// Module-level — industry stored here after onboarding so the gate
+// does not re-appear on subsequent loads within the same session.
+let _industry = null;
+
 async function _loadOrgProfile() {
     const { db } = await import('../engine/../firebase.js');
     const { doc, getDoc } = await import(
@@ -94,11 +105,165 @@ async function _loadOrgProfile() {
     try {
         const snap = await getDoc(doc(db, 'organisations', _orgId, 'profile'));
         if (snap.exists()) {
-            _orgName = snap.data().orgName ?? '';
+            _orgName  = snap.data().orgName  ?? '';
+            _industry = snap.data().industry ?? null;
         }
+        console.log('LORE dashboard.js: Org profile loaded — orgName:', _orgName, 'industry:', _industry);
     } catch (err) {
-        console.warn('LORE Dashboard: Could not load org profile.', err);
+        console.warn('LORE dashboard.js: Could not load org profile.', err);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Onboarding gate — shown once, on first Manager sign-in, before the main
+// dashboard. Asks one question: what industry does the organisation operate in?
+// The answer seeds tentative domain name suggestions — clearly labelled as
+// starting points, not confirmed skill areas.
+//
+// Copy rule: never say "knowledge base", "training data", or "recipes" here.
+// Frame everything as helping LORE understand the organisation's context.
+// ---------------------------------------------------------------------------
+function renderOnboarding(container) {
+    console.log('LORE dashboard.js: Rendering onboarding gate — no industry set yet.');
+
+    // Tentative domain seeds by broad industry category.
+    // These are displayed as dismissible chips after the Manager answers.
+    // [TUNING TARGET] Expand this list as LORE is used across more industries.
+    const seeds = {
+        'Consulting':        ['Client Engagement', 'Stakeholder Management', 'Proposal Development', 'Delivery Excellence', 'Commercial Judgement'],
+        'Financial Services':['Risk Assessment', 'Client Advisory', 'Regulatory Navigation', 'Portfolio Management', 'Deal Execution'],
+        'Technology':        ['Product Thinking', 'Technical Communication', 'Delivery Management', 'Stakeholder Alignment', 'Incident Response'],
+        'Healthcare':        ['Clinical Judgement', 'Patient Communication', 'Protocol Navigation', 'Team Coordination', 'Documentation'],
+        'Legal':             ['Client Counsel', 'Matter Management', 'Risk Identification', 'Negotiation', 'Document Drafting'],
+        'Education':         ['Learner Engagement', 'Curriculum Design', 'Assessment', 'Parent Communication', 'Classroom Management'],
+        'Retail & Consumer': ['Customer Experience', 'Merchandising', 'Supplier Management', 'Operations', 'Sales Execution'],
+        'Media & Creative':  ['Brief Interpretation', 'Client Management', 'Creative Direction', 'Production', 'Pitching'],
+        'Non-profit':        ['Programme Delivery', 'Funder Relations', 'Community Engagement', 'Impact Measurement', 'Partnerships'],
+        'Other':             ['Leadership', 'Communication', 'Problem Solving', 'Stakeholder Management', 'Decision Making'],
+    };
+
+    const industryOptions = Object.keys(seeds);
+
+    container.innerHTML = `
+        <div style="max-width: 520px; margin: var(--space-16) auto 0;">
+            <p class="auth-wordmark" style="color: var(--ink); margin-bottom: var(--space-2);">Welcome to LORE</p>
+            <p class="text-secondary mt-2 mb-8">One question before we start. What industry does your organisation operate in?</p>
+
+            <div class="card">
+                <div class="auth-field">
+                    <label class="label" for="industry-select">Industry</label>
+                    <select class="input" id="industry-select">
+                        <option value="">Choose one…</option>
+                        ${industryOptions.map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                    </select>
+                </div>
+
+                <!-- Seed chips — shown after an industry is chosen -->
+                <div id="seed-preview" style="display: none; margin-top: var(--space-4);">
+                    <p class="label mb-3">Starting points</p>
+                    <p class="text-secondary text-sm mb-3">These are tentative skill areas based on your industry. LORE will replace them with your organisation's own as knowledge is added — they are not permanent.</p>
+                    <div id="seed-chips" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4);"></div>
+                </div>
+
+                <p id="onboarding-error" style="color: var(--error); font-size: var(--text-sm); display: none; margin-bottom: var(--space-3);"></p>
+
+                <button class="btn btn-primary btn-full" id="onboarding-submit" disabled>
+                    Set up my dashboard
+                </button>
+            </div>
+        </div>
+    `;
+
+    // Show seed chips when industry is selected
+    document.getElementById('industry-select')?.addEventListener('change', (e) => {
+        const selected  = e.target.value;
+        const preview   = document.getElementById('seed-preview');
+        const chipsEl   = document.getElementById('seed-chips');
+        const submitBtn = document.getElementById('onboarding-submit');
+
+        if (!selected) {
+            preview.style.display   = 'none';
+            submitBtn.disabled      = true;
+            return;
+        }
+
+        const domainSeeds = seeds[selected] ?? seeds['Other'];
+        chipsEl.innerHTML = domainSeeds.map(name => `
+            <span class="chip chip-pending" style="cursor: default;">${name}</span>
+        `).join('');
+
+        preview.style.display  = 'block';
+        submitBtn.disabled     = false;
+    });
+
+    document.getElementById('onboarding-submit')?.addEventListener('click', async () => {
+        const selected  = document.getElementById('industry-select')?.value;
+        const errorEl   = document.getElementById('onboarding-error');
+        if (!selected) {
+            errorEl.textContent   = 'Please choose an industry to continue.';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        const btn = document.getElementById('onboarding-submit');
+        btn.disabled    = true;
+        btn.textContent = 'Setting up…';
+
+        await _saveIndustryAndProceed(container, selected, seeds[selected] ?? seeds['Other']);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Save the industry to the org profile and seed tentative domains.
+// Then proceed to the main dashboard.
+// ---------------------------------------------------------------------------
+async function _saveIndustryAndProceed(container, industry, domainSeeds) {
+    const { db } = await import('../engine/../firebase.js');
+    const {
+        doc,
+        setDoc,
+        addDoc,
+        collection,
+        serverTimestamp
+    } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    // Save industry to org profile — this is what prevents the gate
+    // from showing on subsequent sign-ins.
+    try {
+        await setDoc(
+            doc(db, 'organisations', _orgId, 'profile'),
+            { industry, updatedAt: serverTimestamp() },
+            { merge: true }
+        );
+        _industry = industry;
+        console.log('LORE dashboard.js: Industry saved:', industry);
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not save industry.', err);
+        // Proceed anyway — the gate will show again next sign-in but that is acceptable
+    }
+
+    // Seed tentative domain documents — each labelled as provisional so
+    // the Manager knows they are starting points, not confirmed skill areas.
+    for (const name of domainSeeds) {
+        try {
+            await addDoc(collection(db, 'organisations', _orgId, 'domains'), {
+                name,
+                description: '',
+                recipeIds:   [],
+                reviewerIds: [],
+                provisional: true,   // shown differently in Skill Areas — greyed, dismissible
+                confirmedAt: serverTimestamp(),
+            });
+        } catch (err) {
+            console.warn('LORE dashboard.js: Could not seed domain:', name, err);
+        }
+    }
+
+    console.log('LORE dashboard.js: Seeded', domainSeeds.length, 'provisional domains. Proceeding to dashboard.');
+
+    // Reload domains (now includes the seeds) and render main dashboard
+    _domains = await getDomains(_orgId);
+    renderDashboard(container);
 }
 
 // ---------------------------------------------------------------------------
@@ -830,6 +995,16 @@ function renderSkillAreas(el) {
         });
     });
 
+    // Dismiss handlers for provisional (seeded) domains
+    _domains.filter(d => d.provisional).forEach(d => {
+        document.getElementById(`dismiss-provisional-${d.id}`)?.addEventListener('click', async () => {
+            await deleteDomain(_orgId, d.id);
+            _domains = _domains.filter(x => x.id !== d.id);
+            console.log('LORE dashboard.js: Provisional domain dismissed:', d.name);
+            renderSkillAreas(el);
+        });
+    });
+
     // Trigger re-clustering if there are enough recipes but no proposals yet
     document.getElementById('run-clustering')?.addEventListener('click', async () => {
         const btn = document.getElementById('run-clustering');
@@ -887,20 +1062,45 @@ function renderProposedClusters() {
 }
 
 function renderConfirmedDomains() {
+    const confirmed    = _domains.filter(d => !d.provisional);
+    const provisional  = _domains.filter(d =>  d.provisional);
+
     return `
         <div>
-            <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
-            ${_domains.map(d => `
-                <div class="card" style="margin-bottom: var(--space-3);">
-                    <div class="flex-between">
-                        <div>
-                            <p style="font-weight: 500;">${d.name}</p>
-                            <p class="text-secondary text-sm mt-1">${d.description ?? ''}</p>
+            ${confirmed.length > 0 ? `
+                <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
+                ${confirmed.map(d => `
+                    <div class="card" style="margin-bottom: var(--space-3);">
+                        <div class="flex-between">
+                            <div>
+                                <p style="font-weight: 500;">${d.name}</p>
+                                <p class="text-secondary text-sm mt-1">${d.description ?? ''}</p>
+                            </div>
+                            <p class="text-xs text-secondary">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
                         </div>
-                        <p class="text-xs text-secondary">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
                     </div>
-                </div>
-            `).join('')}
+                `).join('')}
+            ` : ''}
+
+            ${provisional.length > 0 ? `
+                <h3 style="margin-bottom: var(--space-2); margin-top: ${confirmed.length > 0 ? 'var(--space-8)' : '0'};">Starting points</h3>
+                <p class="text-secondary text-sm mb-4">These are provisional — based on your industry. They will be replaced by LORE as your organisation's own knowledge builds. Dismiss any that don't apply.</p>
+                ${provisional.map(d => `
+                    <div class="card" style="margin-bottom: var(--space-3); opacity: 0.7;">
+                        <div class="flex-between">
+                            <div>
+                                <p style="font-weight: 500; color: var(--warm-grey);">${d.name}</p>
+                                <span class="chip chip-pending" style="margin-top: var(--space-1); font-size: 10px;">Provisional</span>
+                            </div>
+                            <button
+                                class="btn btn-secondary"
+                                id="dismiss-provisional-${d.id}"
+                                style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);"
+                            >Dismiss</button>
+                        </div>
+                    </div>
+                `).join('')}
+            ` : ''}
         </div>
     `;
 }

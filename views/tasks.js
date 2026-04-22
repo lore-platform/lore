@@ -43,11 +43,14 @@ export async function initTasks(orgId, uid, claims) {
     _uid    = uid;
     _claims = claims;
 
+    console.log('LORE tasks.js: initTasks — orgId:', orgId, 'uid:', uid);
+
     const container = document.getElementById('tasks-content');
     if (!container) return;
 
     // Load any pending prompts for this Reviewer from Firestore
     _prompts = await _fetchPendingPrompts(orgId, uid);
+    console.log('LORE tasks.js: Fetched', _prompts.length, 'pending prompts.');
 
     if (_prompts.length === 0) {
         renderAllClear(container);
@@ -219,6 +222,7 @@ function renderScenarioReview(container, prompt, progress) {
         btn.textContent = 'Saving…';
 
         // Stage the Reviewer's correction as a raw extraction
+        console.log('LORE tasks.js: Staging scenario review extraction.');
         await createExtraction(_orgId, {
             sourceType:  'scenario_review',
             rawContent:  text,

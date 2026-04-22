@@ -30,6 +30,7 @@ import { getRankForXP, RANKS } from '../engine/state.js';
 // employeeId: the Firestore UID of the Employee being viewed.
 // ---------------------------------------------------------------------------
 export async function initProfile(orgId, employeeId) {
+    console.log('LORE profile.js: initProfile — orgId:', orgId, 'employeeId:', employeeId);
     const container = document.getElementById('profile-content');
     if (!container) return;
 
@@ -325,15 +326,18 @@ Skill area performance: ${masteryText || 'No sessions yet'}
 
 Write the summary.`;
 
+        console.log('LORE profile.js: Generating AI summary for employee:', data.uid);
         const result = await generate(prompt, systemPrompt);
 
         btn.disabled    = false;
         btn.textContent = 'Regenerate';
 
         if (!result.ok) {
+            console.warn('LORE profile.js: Summary generation failed.');
             if (textEl) textEl.textContent = 'Could not generate summary right now. Try again shortly.';
             return;
         }
+        console.log('LORE profile.js: Summary generated successfully.');
 
         if (textEl) {
             textEl.textContent = result.text;

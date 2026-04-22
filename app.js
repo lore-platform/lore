@@ -187,11 +187,13 @@ function showAuthError(message) {
 // ---------------------------------------------------------------------------
 onAuthChange(async (user) => {
     if (!user) {
+        console.log('LORE app.js: Auth state — no user. Routing to auth screen.');
         clearState();
         initAuth();
         return;
     }
 
+    console.log('LORE app.js: Auth state — user signed in, uid:', user.uid);
     // User is signed in — get their role and org from token claims
     const claims = await getClaims();
 
@@ -234,6 +236,7 @@ onAuthChange(async (user) => {
     });
 
     // Route to the correct view
+    console.log('LORE app.js: Routing — role:', role, 'orgId:', orgId);
     switch (role) {
         case 'employee':
             showView('view-training');
