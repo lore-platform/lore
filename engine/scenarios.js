@@ -332,9 +332,6 @@ Expected outcome: ${recipe.expectedOutcome}`;
             .catch(err => console.warn('LORE scenarios.js: Mentorship task write failed silently.', err));
     }
 
-    // Write pattern signal including response speed for cohort benchmarking.
-    // secondsTaken is passed through from training.js where the timer lives.
-
     return {
         verdict:     parsed.verdict,
         explanation: parsed.explanation ?? ''

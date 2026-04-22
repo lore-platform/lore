@@ -532,7 +532,12 @@ async function loadOrgList() {
         });
 
     } catch (err) {
-        listEl.innerHTML = '<p style="color:var(--error);font-size:0.875rem;">Could not load organisations.</p>';
+        const isPermissions = err?.code === 'permission-denied' || err?.message?.includes('permission');
+        listEl.innerHTML = `<p style="color:var(--error);font-size:0.875rem;">${
+            isPermissions
+                ? 'Permission denied. Check your Firestore security rules allow admin access.'
+                : 'Could not load organisations. Check the console for details.'
+        }</p>`;
         console.error('LORE provision: loadOrgList error:', err);
     }
 }
