@@ -206,7 +206,9 @@ async function startSession(domain, container) {
     const scenario = await getNextScenario(
         _orgId,
         domain.name,
-        { seniority: _state?.seniority ?? 'mid' }
+        // uid is passed so scenarios.js can read recent type history
+        // to ensure balanced exposure across judgement/recognition/reflection.
+        { seniority: _state?.seniority ?? 'mid', uid: _uid }
     );
 
     if (!scenario) {
@@ -299,9 +301,14 @@ function renderEncounter(container, scenario) {
 async function handleSubmit(container, response, scenario) {
     renderLoading(container, 'Reading your response…');
 
+    // Capture seconds taken — RESPONSE_TIME_SECONDS minus what was left on the clock.
+    // Used as a proxy for response speed under time pressure, stored in patternSignals
+    // for the Manager's cohort comparison view. Not shown to the Employee.
+    const secondsTaken = RESPONSE_TIME_SECONDS - _secondsLeft;
+
     // orgId and _uid are passed so evaluateResponse can write a mentorship
     // task to the domain's Reviewer when the verdict is 'missed'.
-    const evaluation = await evaluateResponse(response, scenario, _activeRecipe, _orgId, _uid);
+    const evaluation = await evaluateResponse(response, scenario, _activeRecipe, _orgId, _uid, secondsTaken);
 
     // Record XP and streak
     const xpResult = await recordResponse(evaluation.verdict, _activeDomain?.name ?? 'general');
@@ -319,7 +326,7 @@ async function handleSubmit(container, response, scenario) {
     if (rankEl) rankEl.textContent = getRankForXP(_state.xp).name;
 
     // Pre-pull the next scenario while Employee reads the result
-    prePullNext(_orgId, _activeDomain?.name, { seniority: _state?.seniority ?? 'mid' });
+    prePullNext(_orgId, _activeDomain?.name, { seniority: _state?.seniority ?? 'mid', uid: _uid });
 
     renderResult(container, evaluation, xpResult);
 }

@@ -154,8 +154,13 @@ async function _getRecipeForDomain(orgId, domain) {
 // ---------------------------------------------------------------------------
 async function _generateScenario(orgId, recipe, employeeContext) {
     const scenarioTypes = ['judgement', 'recognition', 'reflection'];
-    // [TUNING TARGET] Rotate type based on recent history — for now, random
-    const type = scenarioTypes[Math.floor(Math.random() * scenarioTypes.length)];
+
+    // Rotate scenario type based on recent history from patternSignals.
+    // The goal is balanced exposure: if the Employee has played more
+    // judgement scenarios recently than the others, pick recognition or
+    // reflection next. This ensures the full range of thinking is trained.
+    // Falls back to random if signal data is unavailable.
+    const type = await _chooseScenarioType(orgId, employeeContext?.uid, scenarioTypes);
 
     console.log('LORE scenarios.js: Generating scenario — type:', type, 'recipe:', recipe.skillName, 'seniority:', employeeContext?.seniority ?? 'mid');
 
@@ -217,6 +222,46 @@ Generate a ${type} scenario from this recipe. The scenario should reflect the tr
 }
 
 // ---------------------------------------------------------------------------
+// Choose the next scenario type to ensure balanced exposure across
+// judgement, recognition, and reflection.
+//
+// Reads the Employee's 20 most recent patternSignals, counts how many of
+// each type have been played, and returns whichever is least represented.
+// Falls back to random if the Employee uid is unknown or reads fail.
+// ---------------------------------------------------------------------------
+async function _chooseScenarioType(orgId, employeeUid, scenarioTypes) {
+    if (!orgId || !employeeUid) {
+        return scenarioTypes[Math.floor(Math.random() * scenarioTypes.length)];
+    }
+
+    try {
+        const snap = await getDocs(
+            query(
+                collection(db, 'organisations', orgId, 'users', employeeUid, 'patternSignals'),
+                orderBy('createdAt', 'desc'),
+                limit(20)
+            )
+        );
+
+        const counts = { judgement: 0, recognition: 0, reflection: 0 };
+        snap.docs.forEach(d => {
+            const type = d.data().scenarioType;
+            if (counts[type] !== undefined) counts[type]++;
+        });
+
+        console.log('LORE scenarios.js: Scenario type counts (last 20):', counts);
+
+        // Pick the type with the lowest count — if tied, pick randomly among the tied
+        const minCount = Math.min(...Object.values(counts));
+        const candidates = Object.keys(counts).filter(t => counts[t] === minCount);
+        return candidates[Math.floor(Math.random() * candidates.length)];
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not read type history — falling back to random.', err);
+        return scenarioTypes[Math.floor(Math.random() * scenarioTypes.length)];
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Evaluate an Employee's response against the source recipe.
 // Returns { verdict: 'correct'|'partial'|'missed', explanation: string }.
 //
@@ -228,7 +273,7 @@ Generate a ${type} scenario from this recipe. The scenario should reflect the tr
 // The Reviewer never knows why they are being asked. They see a mentorship
 // prompt framed as "what would you tell them?" — not "this Employee failed."
 // ---------------------------------------------------------------------------
-export async function evaluateResponse(response, scenario, recipe, orgId, employeeUid) {
+export async function evaluateResponse(response, scenario, recipe, orgId, employeeUid, secondsTaken) {
     console.log('LORE scenarios.js: Evaluating response — scenario id:', scenario?.id, 'recipe:', recipe?.skillName);
 
     const systemPrompt = `You are evaluating an employee's response to a professional training scenario.
@@ -276,7 +321,7 @@ Expected outcome: ${recipe.expectedOutcome}`;
     // They are stored Manager-side only and never surfaced to the Employee.
     // This is non-blocking — a failure here does not affect the Employee's result.
     if (orgId && employeeUid && scenario.domain) {
-        _writePatternSignal(orgId, employeeUid, scenario, recipe, parsed.verdict, response)
+        _writePatternSignal(orgId, employeeUid, scenario, recipe, parsed.verdict, response, secondsTaken)
             .catch(err => console.warn('LORE scenarios.js: Pattern signal write failed silently.', err));
     }
 
@@ -286,6 +331,9 @@ Expected outcome: ${recipe.expectedOutcome}`;
         _writeMentorshipTask(orgId, scenario, recipe, response, employeeUid)
             .catch(err => console.warn('LORE scenarios.js: Mentorship task write failed silently.', err));
     }
+
+    // Write pattern signal including response speed for cohort benchmarking.
+    // secondsTaken is passed through from training.js where the timer lives.
 
     return {
         verdict:     parsed.verdict,
@@ -305,7 +353,7 @@ Expected outcome: ${recipe.expectedOutcome}`;
 // Response length is a weak proxy for response depth/confidence — cheap to
 // compute, useful in aggregate.
 // ---------------------------------------------------------------------------
-async function _writePatternSignal(orgId, employeeUid, scenario, recipe, verdict, response) {
+async function _writePatternSignal(orgId, employeeUid, scenario, recipe, verdict, response, secondsTaken) {
     try {
         await addDoc(
             collection(db, 'organisations', orgId, 'users', employeeUid, 'patternSignals'),
@@ -318,10 +366,14 @@ async function _writePatternSignal(orgId, employeeUid, scenario, recipe, verdict
                 // Response length in characters — used as a rough proxy for
                 // engagement depth when aggregated across many sessions.
                 responseLength: response?.length ?? 0,
+                // Seconds taken to respond — used for cohort speed benchmarking
+                // in the Manager's profile view. Never shown to the Employee.
+                // [TUNING TARGET] Null when timer data is unavailable (legacy signals).
+                secondsTaken:   secondsTaken ?? null,
                 createdAt:      serverTimestamp(),
             }
         );
-        console.log('LORE scenarios.js: Pattern signal written — verdict:', verdict, 'domain:', scenario.domain);
+        console.log('LORE scenarios.js: Pattern signal written — verdict:', verdict, 'domain:', scenario.domain, 'secondsTaken:', secondsTaken ?? 'n/a');
     } catch (err) {
         console.warn('LORE scenarios.js: Could not write pattern signal.', err);
     }

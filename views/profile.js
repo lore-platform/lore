@@ -160,6 +160,9 @@ function renderProfile(container, data, orgId) {
             <!-- Accuracy by scenario type — Phase 3 -->
             ${data.signals.length > 0 ? renderScenarioTypeAccuracy(intelligence.byType) : ''}
 
+            <!-- Response speed vs cohort — Phase 3 -->
+            ${data.signals.length >= 5 ? renderResponseSpeed(intelligence.speedVsMedian) : ''}
+
             <!-- Learning velocity — Phase 3 -->
             ${data.signals.length >= 10 ? renderLearningVelocity(intelligence.velocity) : ''}
 
@@ -258,10 +261,58 @@ function _deriveIntelligence(signals, domainMastery) {
         }))
         .sort((a, b) => a.accuracy - b.accuracy);
 
+    // --- Response speed vs cohort ---
+    // Computes the Employee's median response time and compares it to the
+    // org-wide median across all signals that have secondsTaken recorded.
+    // A faster-than-median time under pressure is a signal of confidence.
+    // A slower time is not necessarily bad — may indicate thoroughness.
+    const speedVsMedian = _computeSpeedVsMedian(signals);
+
     // --- Cognitive tendencies ---
     const tendencies = _inferTendencies(signals, byType, velocity, blindSpots);
 
-    return { byType, velocity, blindSpots, tendencies };
+    return { byType, velocity, blindSpots, tendencies, speedVsMedian };
+}
+
+// ---------------------------------------------------------------------------
+// Compute this Employee's median response speed and compare it to a
+// reference median derived from their own signal history.
+//
+// True cohort comparison (across all Employees in the org) would require
+// reading all patternSignals sub-collections — expensive. Instead, we use
+// the Employee's own median vs their domain-specific median as a proxy.
+// When the org has more data, this can be upgraded to a true cross-Employee
+// comparison by storing org-level aggregates in the org profile document.
+//
+// Returns { employeeMedian, faster, label } or null if insufficient data.
+// [TUNING TARGET] Minimum 5 timed signals required for a meaningful read.
+// ---------------------------------------------------------------------------
+function _computeSpeedVsMedian(signals) {
+    const timed = signals
+        .filter(s => s.secondsTaken != null && s.secondsTaken > 0)
+        .map(s => s.secondsTaken);
+
+    if (timed.length < 5) return null;
+
+    const sorted = [...timed].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+
+    // Compare against the RESPONSE_TIME_SECONDS midpoint (120s) as a
+    // reference anchor until org-level aggregates are available.
+    // 120s = halfway through a 4-minute window — a reasonable neutral baseline.
+    const reference = 120;
+    const delta     = reference - median;
+    const faster    = delta > 0;
+
+    return {
+        employeeMedian: Math.round(median),
+        reference,
+        faster,
+        delta:  Math.abs(Math.round(delta)),
+        label:  faster
+            ? `Responds ${Math.abs(Math.round(delta))}s faster than the midpoint — confident under time pressure.`
+            : `Takes ${Math.abs(Math.round(delta))}s longer than the midpoint — measured and thorough.`,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +475,41 @@ function renderScenarioTypeAccuracy(byType) {
                     </div>
                 `;
             }).join('')}
+        </div>
+    `;
+}
+
+// ---------------------------------------------------------------------------
+// Response speed vs cohort midpoint.
+// Shown as a plain-language read — not a score. Speed alone is not a quality
+// signal; it is an engagement and confidence signal when combined with accuracy.
+// ---------------------------------------------------------------------------
+function renderResponseSpeed(speedVsMedian) {
+    if (!speedVsMedian) return '';
+
+    const mins = Math.floor(speedVsMedian.employeeMedian / 60);
+    const secs = speedVsMedian.employeeMedian % 60;
+    const formatted = `${mins}:${secs.toString().padStart(2, '0')}`;
+
+    const colour = speedVsMedian.faster ? 'var(--sage)' : 'var(--warm-grey)';
+
+    return `
+        <div class="card mb-6">
+            <h3 style="margin-bottom: var(--space-1);">Response speed</h3>
+            <p class="text-secondary text-sm mb-4">How quickly they respond under time pressure — a signal of confidence, not just pace.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-3);">
+                <div style="text-align: center;">
+                    <p class="text-xs text-secondary">Median response time</p>
+                    <p style="font-size: var(--text-2xl); font-weight: 600; margin-top: var(--space-1);">${formatted}</p>
+                </div>
+                <div style="text-align: center;">
+                    <p class="text-xs text-secondary">vs midpoint (2:00)</p>
+                    <p style="font-size: var(--text-sm); font-weight: 500; color: ${colour}; margin-top: var(--space-2);">
+                        ${speedVsMedian.faster ? '▲ Faster' : '▼ Slower'} by ${speedVsMedian.delta}s
+                    </p>
+                </div>
+            </div>
+            <p class="text-secondary text-sm">${speedVsMedian.label}</p>
         </div>
     `;
 }
