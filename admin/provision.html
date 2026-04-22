@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LORE — Provision</title>
+    <style>
+        :root {
+            --ember:     #C4622D;
+            --parchment: #F5F0EB;
+            --surface:   #FDF8F4;
+            --ink:       #2C2416;
+            --deep-ink:  #1C1812;
+            --warm-grey: #8C7B6A;
+            --sage:      #3D8B6E;
+            --error:     #B83232;
+            --border:    rgba(44,36,22,0.15);
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--deep-ink);
+            color: var(--ink);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem 1rem;
+        }
+        .shell { width: 100%; max-width: 640px; }
+        .wordmark {
+            font-size: 1.25rem; font-weight: 500; letter-spacing: 0.18em;
+            text-transform: uppercase; color: var(--parchment); margin-bottom: 0.25rem;
+        }
+        .subtitle {
+            font-size: 0.8rem; color: var(--warm-grey); margin-bottom: 2rem;
+            letter-spacing: 0.06em; text-transform: uppercase;
+        }
+        .card { background: var(--surface); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+        h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--ink); }
+        .field { margin-bottom: 0.75rem; }
+        label {
+            display: block; font-size: 0.7rem; font-weight: 500; text-transform: uppercase;
+            letter-spacing: 0.06em; color: var(--warm-grey); margin-bottom: 0.35rem;
+        }
+        input, select {
+            width: 100%; padding: 0.6rem 0.85rem; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--parchment); color: var(--ink);
+            font-size: 0.875rem; font-family: inherit;
+        }
+        input:focus, select:focus { outline: none; border-color: var(--ember); }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 0.6rem 1.25rem; border-radius: 8px; font-size: 0.875rem;
+            font-weight: 500; cursor: pointer; border: none; font-family: inherit;
+        }
+        .btn-primary  { background: var(--ember); color: white; }
+        .btn-secondary { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+        .btn-danger   { background: transparent; color: var(--error); border: 1px solid rgba(184,50,50,0.3); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-full { width: 100%; margin-top: 0.75rem; }
+        .status { font-size: 0.8rem; margin-top: 0.5rem; padding: 0.5rem 0.75rem; border-radius: 6px; display: none; }
+        .status.ok  { background: rgba(61,139,110,0.1); color: var(--sage);  display: block; }
+        .status.err { background: rgba(184,50,50,0.08); color: var(--error); display: block; }
+        .result-box {
+            background: var(--parchment); border: 1px solid var(--border); border-radius: 8px;
+            padding: 1rem; margin-top: 0.75rem; font-size: 0.8rem; line-height: 1.8; display: none;
+        }
+        .copy-row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.25rem; }
+        .copy-row input { flex: 1; font-family: monospace; font-size: 0.75rem; background: white; }
+        .copy-row button { padding: 0.4rem 0.75rem; font-size: 0.75rem; white-space: nowrap; }
+        .org-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.75rem 0; border-bottom: 1px solid rgba(44,36,22,0.06); font-size: 0.875rem;
+        }
+        .org-row:last-child { border-bottom: none; }
+        .org-meta { color: var(--warm-grey); font-size: 0.75rem; margin-top: 0.2rem; }
+        .divider { height: 1px; background: rgba(44,36,22,0.08); margin: 1.25rem 0; }
+        .spinner {
+            width: 20px; height: 20px; border: 2px solid rgba(196,98,45,0.2);
+            border-top-color: var(--ember); border-radius: 50%;
+            animation: spin 700ms linear infinite; display: inline-block; vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .admin-secret-note {
+            background: rgba(196,98,45,0.08); border: 1px solid rgba(196,98,45,0.2);
+            border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem;
+            font-size: 0.8rem; color: var(--ink); line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <p class="wordmark">LORE</p>
+    <p class="subtitle">Platform admin — provision</p>
+
+    <!-- Auth gate — sign in required.
+         Security model: this page is gated by Firebase Auth. Only a user whose
+         email matches ADMIN_EMAIL (your email, hardcoded below) can proceed.
+         Your email is not a secret — it is an identity check. The actual
+         security boundary is Firebase Auth (you must know your password to
+         sign in) and the ADMIN_SECRET Wrangler environment variable (which
+         is never in source code and is required by the Worker to set claims).
+         Anyone who finds this URL but does not have your Firebase credentials
+         cannot do anything useful. -->
+    <div id="gate" class="card">
+        <h2>Sign in to continue</h2>
+        <p style="font-size: 0.8rem; color: var(--warm-grey); margin-bottom: 1rem;">
+            This page requires your platform admin account.
+        </p>
+        <div class="field">
+            <label for="gate-email">Email</label>
+            <input type="email" id="gate-email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <div class="field">
+            <label for="gate-password">Password</label>
+            <input type="password" id="gate-password" placeholder="••••••••" autocomplete="current-password">
+        </div>
+        <div class="status" id="gate-status"></div>
+        <button class="btn btn-primary btn-full" id="gate-submit">Sign in</button>
+    </div>
+
+    <!-- Runtime config — shown after auth gate passes, before provisioning.
+         The ADMIN_SECRET is entered here at runtime, never stored anywhere.
+         It must match what you set with `wrangler secret put ADMIN_SECRET`.
+         It is used only for the setClaims Worker call and is not persisted. -->
+    <div id="config-screen" style="display: none;" class="card">
+        <h2>Admin secret</h2>
+        <div class="admin-secret-note">
+            Enter the ADMIN_SECRET value you set in your Wrangler environment.
+            This is checked by the Worker before it will set custom claims.
+            It is not stored — you enter it each session.
+        </div>
+        <div class="field">
+            <label for="admin-secret-input">Admin secret (from Wrangler)</label>
+            <input type="password" id="admin-secret-input" placeholder="Your ADMIN_SECRET value">
+        </div>
+        <div class="status" id="config-status"></div>
+        <button class="btn btn-primary btn-full" id="config-submit">Continue to provisioning</button>
+    </div>
+
+    <!-- Main app — shown after both auth and secret entry -->
+    <div id="app" style="display: none;">
+
+        <div class="card">
+            <h2>Provision a Manager</h2>
+            <p style="font-size: 0.8rem; color: var(--warm-grey); margin-bottom: 1rem;">
+                Creates the Firebase Auth account, sets custom claims (orgId + role), creates the org profile, and generates a temporary password.
+            </p>
+
+            <div class="row">
+                <div class="field">
+                    <label for="p-org-name">Organisation name</label>
+                    <input type="text" id="p-org-name" placeholder="Acme Consulting">
+                </div>
+                <div class="field">
+                    <label for="p-org-id">Org ID (Firestore path)</label>
+                    <input type="text" id="p-org-id" placeholder="acme-consulting">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label for="p-display-name">Manager's full name</label>
+                    <input type="text" id="p-display-name" placeholder="Adaeze Okafor">
+                </div>
+                <div class="field">
+                    <label for="p-email">Manager's email</label>
+                    <input type="email" id="p-email" placeholder="adaeze@acme.com">
+                </div>
+            </div>
+            <div class="row">
+                <div class="field">
+                    <label for="p-industry">Industry</label>
+                    <select id="p-industry">
+                        <option value="">Select…</option>
+                        <option>Consulting</option>
+                        <option>Financial Services</option>
+                        <option>Technology</option>
+                        <option>Healthcare</option>
+                        <option>Legal</option>
+                        <option>Education</option>
+                        <option>Retail &amp; Consumer</option>
+                        <option>Media &amp; Creative</option>
+                        <option>Non-profit</option>
+                        <option>Other</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="p-role-title">Manager's job title</label>
+                    <input type="text" id="p-role-title" placeholder="Head of L&amp;D">
+                </div>
+            </div>
+
+            <div class="divider"></div>
+            <div class="status" id="provision-status"></div>
+            <button class="btn btn-primary btn-full" id="provision-submit">Create Manager account</button>
+            <div class="result-box" id="provision-result"></div>
+        </div>
+
+        <div class="card">
+            <h2>Provisioned organisations</h2>
+            <div id="org-list"><p style="color: var(--warm-grey); font-size: 0.875rem;">Loading…</p></div>
+        </div>
+
+    </div>
+</div>
+
+<script type="module">
+import { initializeApp }   from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import {
+    getAuth,
+    signInWithEmailAndPassword,
+    onAuthStateChanged,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import {
+    getFirestore,
+    doc, setDoc, getDoc, addDoc,
+    collection, getDocs, deleteDoc,
+    serverTimestamp,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ---------------------------------------------------------------------------
+// ADMIN_EMAIL — the only email address allowed to use this page.
+// This is an identity check, not a secret. Anyone can see this value
+// in source — but they still need to know your Firebase password to sign in.
+// Change this to your actual platform owner email before deploying.
+// ---------------------------------------------------------------------------
+const ADMIN_EMAIL   = 'osioke@yourcompany.com';   // ← change to your email
+const WORKER_URL    = 'https://lore-worker.slop-runner.workers.dev';
+
+const firebaseConfig = {
+    apiKey:            "AIzaSyBW_PE2RiIs-4_tAoOtKdQLXijh9-WNv7Q",
+    authDomain:        "lore-platform-hu247.firebaseapp.com",
+    projectId:         "lore-platform-hu247",
+    storageBucket:     "lore-platform-hu247.firebasestorage.app",
+    messagingSenderId: "805876457264",
+    appId:             "1:805876457264:web:8fbed6dd7209a3677132f5",
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// Session-only — entered at runtime, never stored
+let _adminSecret = null;
+
+// ---------------------------------------------------------------------------
+// Auth state — if already signed in as the admin email, skip the gate.
+// ---------------------------------------------------------------------------
+onAuthStateChanged(auth, user => {
+    if (user && user.email === ADMIN_EMAIL) {
+        document.getElementById('gate').style.display          = 'none';
+        document.getElementById('config-screen').style.display = 'block';
+    }
+});
+
+// Sign-in gate
+document.getElementById('gate-submit').addEventListener('click', async () => {
+    const email    = document.getElementById('gate-email').value.trim();
+    const password = document.getElementById('gate-password').value;
+    const statusEl = document.getElementById('gate-status');
+
+    if (!email || !password) {
+        statusEl.textContent = 'Please enter your email and password.';
+        statusEl.className   = 'status err';
+        return;
+    }
+
+    const btn = document.getElementById('gate-submit');
+    btn.disabled    = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        if (cred.user.email !== ADMIN_EMAIL) {
+            statusEl.textContent = 'This account does not have admin access.';
+            statusEl.className   = 'status err';
+            btn.disabled    = false;
+            btn.textContent = 'Sign in';
+            return;
+        }
+        document.getElementById('gate').style.display          = 'none';
+        document.getElementById('config-screen').style.display = 'block';
+    } catch (err) {
+        statusEl.textContent = 'Sign-in failed. Check your credentials.';
+        statusEl.className   = 'status err';
+        btn.disabled    = false;
+        btn.textContent = 'Sign in';
+    }
+});
+
+document.getElementById('gate-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('gate-submit').click();
+});
+
+// Runtime config — admin secret entry
+document.getElementById('config-submit').addEventListener('click', () => {
+    const secret   = document.getElementById('admin-secret-input').value.trim();
+    const statusEl = document.getElementById('config-status');
+
+    if (!secret) {
+        statusEl.textContent = 'Please enter the admin secret.';
+        statusEl.className   = 'status err';
+        return;
+    }
+
+    _adminSecret = secret;
+    document.getElementById('config-screen').style.display = 'none';
+    document.getElementById('app').style.display           = 'block';
+    loadOrgList();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function slugify(str) {
+    return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function generateTempPassword() {
+    const upper   = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const lower   = 'abcdefghjkmnpqrstuvwxyz';
+    const digits  = '23456789';
+    const symbols = '@#$!';
+    const all     = upper + lower + digits + symbols;
+    let pwd = [
+        upper  [Math.floor(Math.random() * upper.length)],
+        lower  [Math.floor(Math.random() * lower.length)],
+        digits [Math.floor(Math.random() * digits.length)],
+        symbols[Math.floor(Math.random() * symbols.length)],
+    ];
+    for (let i = pwd.length; i < 12; i++) pwd.push(all[Math.floor(Math.random() * all.length)]);
+    return pwd.sort(() => Math.random() - 0.5).join('');
+}
+
+function copyToClipboard(text, btn) {
+    navigator.clipboard.writeText(text).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+    });
+}
+
+function setStatus(id, message, type) {
+    const el = document.getElementById(id);
+    el.textContent = message;
+    el.className   = `status ${type}`;
+}
+
+// Auto-populate org ID from org name
+document.getElementById('p-org-name').addEventListener('input', e => {
+    const orgIdEl = document.getElementById('p-org-id');
+    if (!orgIdEl._manuallyEdited) orgIdEl.value = slugify(e.target.value);
+});
+document.getElementById('p-org-id').addEventListener('input', () => {
+    document.getElementById('p-org-id')._manuallyEdited = true;
+});
+
+// ---------------------------------------------------------------------------
+// Provision
+// ---------------------------------------------------------------------------
+document.getElementById('provision-submit').addEventListener('click', async () => {
+    const orgName     = document.getElementById('p-org-name').value.trim();
+    const orgId       = document.getElementById('p-org-id').value.trim();
+    const displayName = document.getElementById('p-display-name').value.trim();
+    const email       = document.getElementById('p-email').value.trim();
+    const industry    = document.getElementById('p-industry').value;
+    const roleTitle   = document.getElementById('p-role-title').value.trim();
+    const resultEl    = document.getElementById('provision-result');
+
+    if (!orgName || !orgId || !displayName || !email || !industry) {
+        setStatus('provision-status', 'Please fill in all required fields.', 'err');
+        return;
+    }
+    if (!/^[a-z0-9-]+$/.test(orgId)) {
+        setStatus('provision-status', 'Org ID must be lowercase letters, numbers, and hyphens only.', 'err');
+        return;
+    }
+
+    const btn = document.getElementById('provision-submit');
+    btn.disabled    = true;
+    btn.textContent = 'Creating…';
+    resultEl.style.display = 'none';
+    document.getElementById('provision-status').className = 'status';
+
+    const tempPassword = generateTempPassword();
+
+    try {
+        // Check org does not already exist
+        const existingProfile = await getDoc(doc(db, 'organisations', orgId, 'profile'));
+        if (existingProfile.exists()) {
+            throw new Error(`Org ID "${orgId}" is already taken. Choose a different one.`);
+        }
+
+        // Create Firebase Auth account.
+        // We use the Firebase Auth REST API directly because the Admin SDK
+        // is not available client-side. The signUp endpoint creates the account.
+        setStatus('provision-status', 'Creating auth account…', 'ok');
+        const signUpRes = await fetch(
+            `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`,
+            {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ email, password: tempPassword, returnSecureToken: true }),
+            }
+        );
+        const signUpData = await signUpRes.json();
+        if (!signUpData.localId) {
+            throw new Error(signUpData.error?.message ?? 'Could not create auth account.');
+        }
+        const uid = signUpData.localId;
+
+        // Set custom claims via Worker
+        setStatus('provision-status', 'Setting custom claims…', 'ok');
+        const claimsRes = await fetch(WORKER_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({
+                mode:        'setClaims',
+                uid,
+                orgId,
+                role:        'manager',
+                adminSecret: _adminSecret,
+            }),
+        });
+        const claimsData = await claimsRes.json();
+        if (!claimsData.ok) {
+            // Non-fatal — log and continue. Claims can be set manually.
+            console.warn('LORE provision: Claims failed:', claimsData);
+            setStatus('provision-status',
+                `Account created (uid: ${uid}) but claims failed — set them manually in Firebase Console. orgId: ${orgId}, role: manager`,
+                'err'
+            );
+        }
+
+        // Create org profile document
+        setStatus('provision-status', 'Creating org profile…', 'ok');
+        await setDoc(doc(db, 'organisations', orgId, 'profile'), {
+            orgName,
+            industry,
+            createdAt:     serverTimestamp(),
+            provisionedBy: 'admin-tool',
+        });
+
+        // Create Manager user profile document
+        await setDoc(doc(db, 'organisations', orgId, 'users', uid), {
+            displayName,
+            email,
+            role:      'manager',
+            roleTitle: roleTitle || 'Manager',
+            orgId,
+            createdAt: serverTimestamp(),
+        });
+
+        setStatus('provision-status', 'Manager provisioned successfully.', 'ok');
+
+        resultEl.style.display = 'block';
+        resultEl.innerHTML = `
+            <p style="font-weight:600; margin-bottom:0.75rem;">Send to ${displayName}</p>
+            <p><strong>Organisation:</strong> ${orgName}</p>
+            <p><strong>Email:</strong> ${email}</p>
+            <p style="margin-top:0.5rem;"><strong>Temporary password:</strong></p>
+            <div class="copy-row">
+                <input type="text" value="${tempPassword}" readonly id="copy-pwd">
+                <button class="btn btn-secondary" id="copy-pwd-btn">Copy</button>
+            </div>
+            <p style="margin-top:0.75rem;"><strong>Login URL:</strong></p>
+            <div class="copy-row">
+                <input type="text" value="https://lore-platform.github.io/lore/" readonly id="copy-url">
+                <button class="btn btn-secondary" id="copy-url-btn">Copy</button>
+            </div>
+            <p style="margin-top:0.75rem; color:var(--warm-grey); font-size:0.75rem;">UID: ${uid} · Org ID: ${orgId}</p>
+        `;
+
+        document.getElementById('copy-pwd-btn').addEventListener('click', () =>
+            copyToClipboard(tempPassword, document.getElementById('copy-pwd-btn')));
+        document.getElementById('copy-url-btn').addEventListener('click', () =>
+            copyToClipboard('https://lore-platform.github.io/lore/', document.getElementById('copy-url-btn')));
+
+        loadOrgList();
+
+    } catch (err) {
+        setStatus('provision-status', err.message ?? 'Something went wrong. Check the console.', 'err');
+        console.error('LORE provision:', err);
+    } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Create Manager account';
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Org list
+// ---------------------------------------------------------------------------
+async function loadOrgList() {
+    const listEl = document.getElementById('org-list');
+    listEl.innerHTML = '<span class="spinner"></span>';
+
+    try {
+        const orgsSnap = await getDocs(collection(db, 'organisations'));
+        if (orgsSnap.empty) {
+            listEl.innerHTML = '<p style="color:var(--warm-grey);font-size:0.875rem;">No organisations yet.</p>';
+            return;
+        }
+
+        const orgs = await Promise.all(orgsSnap.docs.map(async orgDoc => {
+            const orgId = orgDoc.id;
+            try {
+                const profile = await getDoc(doc(db, 'organisations', orgId, 'profile'));
+                return { orgId, ...(profile.exists() ? profile.data() : {}) };
+            } catch { return { orgId }; }
+        }));
+
+        listEl.innerHTML = orgs.map(org => `
+            <div class="org-row" id="org-row-${org.orgId}">
+                <div>
+                    <p style="font-weight:500;">${org.orgName ?? org.orgId}</p>
+                    <p class="org-meta">${org.orgId} · ${org.industry ?? '—'}</p>
+                </div>
+                <button class="btn btn-danger" id="delete-${org.orgId}" style="font-size:0.75rem;padding:0.35rem 0.75rem;">Delete</button>
+            </div>
+        `).join('');
+
+        orgs.forEach(org => {
+            document.getElementById(`delete-${org.orgId}`)?.addEventListener('click', async () => {
+                if (!confirm(`Delete "${org.orgName ?? org.orgId}" and all its data? This cannot be undone.`)) return;
+                const btn = document.getElementById(`delete-${org.orgId}`);
+                btn.disabled = true; btn.textContent = 'Deleting…';
+                await deleteOrg(org.orgId);
+                document.getElementById(`org-row-${org.orgId}`)?.remove();
+            });
+        });
+
+    } catch (err) {
+        listEl.innerHTML = '<p style="color:var(--error);font-size:0.875rem;">Could not load organisations.</p>';
+        console.error('LORE provision: loadOrgList error:', err);
+    }
+}
+
+async function deleteOrg(orgId) {
+    for (const sub of ['users', 'recipes', 'scenarios', 'extractions', 'domains']) {
+        try {
+            const snap = await getDocs(collection(db, 'organisations', orgId, sub));
+            for (const d of snap.docs) await deleteDoc(d.ref);
+        } catch (err) { console.warn('LORE provision: delete sub-collection error:', sub, err); }
+    }
+    try { await deleteDoc(doc(db, 'organisations', orgId, 'profile')); } catch {}
+    console.log('LORE provision: Org deleted:', orgId);
+}
+</script>
+</body>
+</html>

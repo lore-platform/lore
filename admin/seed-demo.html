@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LORE — Seed Demo</title>
+    <style>
+        :root {
+            --ember: #C4622D; --parchment: #F5F0EB; --surface: #FDF8F4;
+            --ink: #2C2416; --deep-ink: #1C1812; --warm-grey: #8C7B6A;
+            --sage: #3D8B6E; --error: #B83232; --border: rgba(44,36,22,0.15);
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--deep-ink); color: var(--ink); min-height: 100vh;
+            display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem;
+        }
+        .shell { width: 100%; max-width: 640px; }
+        .wordmark { font-size: 1.25rem; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--parchment); margin-bottom: 0.25rem; }
+        .subtitle { font-size: 0.8rem; color: var(--warm-grey); margin-bottom: 2rem; letter-spacing: 0.06em; text-transform: uppercase; }
+        .card { background: var(--surface); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+        h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; }
+        label { display: block; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; color: var(--warm-grey); margin-bottom: 0.35rem; }
+        input { width: 100%; padding: 0.6rem 0.85rem; border: 1px solid var(--border); border-radius: 8px; background: var(--parchment); color: var(--ink); font-size: 0.875rem; font-family: inherit; margin-bottom: 0.75rem; }
+        input:focus { outline: none; border-color: var(--ember); }
+        .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.6rem 1.25rem; border-radius: 8px; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; font-family: inherit; }
+        .btn-primary { background: var(--ember); color: white; }
+        .btn-danger { background: transparent; color: var(--error); border: 1px solid rgba(184,50,50,0.3); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-full { width: 100%; margin-top: 0.5rem; }
+        .status { font-size: 0.8rem; margin-top: 0.5rem; padding: 0.5rem 0.75rem; border-radius: 6px; display: none; }
+        .status.ok  { background: rgba(61,139,110,0.1);  color: var(--sage);  display: block; }
+        .status.err { background: rgba(184,50,50,0.08); color: var(--error); display: block; }
+        .log {
+            background: var(--deep-ink); color: #a8c4a2; font-family: monospace;
+            font-size: 0.75rem; padding: 1rem; border-radius: 8px; margin-top: 1rem;
+            max-height: 320px; overflow-y: auto; line-height: 1.8; display: none;
+        }
+        .log .err { color: #e88; }
+        .log .ok  { color: var(--sage); }
+        .progress-bar-track { height: 6px; background: rgba(44,36,22,0.1); border-radius: 100px; overflow: hidden; margin-top: 0.75rem; }
+        .progress-bar-fill  { height: 100%; background: var(--ember); border-radius: 100px; transition: width 300ms ease; width: 0%; }
+        .spinner {
+            width: 18px; height: 18px; border: 2px solid rgba(196,98,45,0.2);
+            border-top-color: var(--ember); border-radius: 50%;
+            animation: spin 700ms linear infinite; display: inline-block; vertical-align: middle; margin-right: 0.5rem;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <p class="wordmark">LORE</p>
+    <p class="subtitle">Platform admin — seed demo</p>
+
+    <!-- Auth gate -->
+    <div id="gate" class="card">
+        <h2>Sign in to continue</h2>
+        <div style="margin-bottom:0.75rem;">
+            <label for="gate-email">Email</label>
+            <input type="email" id="gate-email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <div style="margin-bottom:0.75rem;">
+            <label for="gate-password">Password</label>
+            <input type="password" id="gate-password" placeholder="••••••••" autocomplete="current-password">
+        </div>
+        <div class="status" id="gate-status"></div>
+        <button class="btn btn-primary btn-full" id="gate-submit">Sign in</button>
+    </div>
+
+    <!-- Main seeder UI -->
+    <div id="app" style="display:none;">
+
+        <div class="card">
+            <h2>Demo data seeder</h2>
+            <p style="font-size:0.8rem; color:var(--warm-grey); line-height:1.6; margin-bottom:1rem;">
+                Seeds the <strong>lore-demo</strong> organisation with a complete fictional dataset:
+                25 recipes across 5 domains, 75 scenarios, 8 employees with 12 weeks of training history,
+                and 3 Reviewer contributions. Takes approximately 60–90 seconds.
+            </p>
+            <p style="font-size:0.8rem; color:var(--warm-grey); line-height:1.6; margin-bottom:1rem;">
+                <strong>Before running:</strong> provision the demo Manager account in the provision tool
+                (org ID: <code style="background:var(--parchment);padding:0.1rem 0.3rem;border-radius:4px;">lore-demo</code>).
+                Running this more than once will add duplicate data — use Reset first if needed.
+            </p>
+
+            <div class="progress-bar-track" id="progress-track" style="display:none;">
+                <div class="progress-bar-fill" id="progress-fill"></div>
+            </div>
+
+            <div class="status" id="seed-status"></div>
+
+            <div style="display:flex; gap:0.75rem; margin-top:0.75rem; flex-wrap:wrap;">
+                <button class="btn btn-primary" id="seed-btn" style="flex:1;">Seed demo data</button>
+                <button class="btn btn-danger"  id="reset-btn" style="flex:1;">Reset demo data</button>
+            </div>
+
+            <div class="log" id="seed-log"></div>
+        </div>
+
+    </div>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import {
+    getAuth, signInWithEmailAndPassword, onAuthStateChanged,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import {
+    getFirestore,
+    doc, setDoc, addDoc, getDoc, collection, getDocs, deleteDoc,
+    serverTimestamp, Timestamp,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ← Change to your platform owner email
+const ADMIN_EMAIL = 'osioke@yourcompany.com';
+const ORG_ID      = 'lore-demo';
+
+const firebaseConfig = {
+    apiKey:            "AIzaSyBW_PE2RiIs-4_tAoOtKdQLXijh9-WNv7Q",
+    authDomain:        "lore-platform-hu247.firebaseapp.com",
+    projectId:         "lore-platform-hu247",
+    storageBucket:     "lore-platform-hu247.firebasestorage.app",
+    messagingSenderId: "805876457264",
+    appId:             "1:805876457264:web:8fbed6dd7209a3677132f5",
+};
+
+const app  = initializeApp(firebaseConfig, 'seed-tool');
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// Auth state
+onAuthStateChanged(auth, user => {
+    if (user && user.email === ADMIN_EMAIL) {
+        document.getElementById('gate').style.display = 'none';
+        document.getElementById('app').style.display  = 'block';
+    }
+});
+
+document.getElementById('gate-submit').addEventListener('click', async () => {
+    const email    = document.getElementById('gate-email').value.trim();
+    const password = document.getElementById('gate-password').value;
+    const statusEl = document.getElementById('gate-status');
+    const btn      = document.getElementById('gate-submit');
+
+    if (!email || !password) {
+        statusEl.textContent = 'Please enter your credentials.';
+        statusEl.className   = 'status err';
+        return;
+    }
+    btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        if (cred.user.email !== ADMIN_EMAIL) {
+            statusEl.textContent = 'This account does not have admin access.';
+            statusEl.className   = 'status err';
+            btn.disabled = false; btn.textContent = 'Sign in';
+        }
+    } catch {
+        statusEl.textContent = 'Sign-in failed.';
+        statusEl.className   = 'status err';
+        btn.disabled = false; btn.textContent = 'Sign in';
+    }
+});
+
+document.getElementById('gate-password').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('gate-submit').click();
+});
+
+// ---------------------------------------------------------------------------
+// Logging helpers
+// ---------------------------------------------------------------------------
+let _logEl, _progressEl, _total, _done;
+
+function initProgress(total) {
+    _total    = total; _done = 0;
+    _logEl    = document.getElementById('seed-log');
+    _progressEl = document.getElementById('progress-fill');
+    _logEl.style.display = 'block';
+    _logEl.innerHTML     = '';
+    document.getElementById('progress-track').style.display = 'block';
+    _progressEl.style.width = '0%';
+}
+
+function log(msg, type = '') {
+    const line = document.createElement('div');
+    line.className   = type;
+    line.textContent = msg;
+    _logEl.appendChild(line);
+    _logEl.scrollTop = _logEl.scrollHeight;
+}
+
+function tick(msg) {
+    _done++;
+    const pct = Math.round((_done / _total) * 100);
+    _progressEl.style.width = pct + '%';
+    log('✓ ' + msg, 'ok');
+}
+
+// ---------------------------------------------------------------------------
+// Data definitions (same as seed-demo.js — consolidated here)
+// ---------------------------------------------------------------------------
+
+const DOMAINS = [
+    { name: 'Design Practice',      description: 'How we approach and deliver design work' },
+    { name: 'Business Development', description: 'Growing client relationships and winning work' },
+    { name: 'Market Intelligence',  description: 'Reading markets and competitive dynamics' },
+    { name: 'User Insight',          description: 'Understanding and working with user research' },
+    { name: 'Project Delivery',     description: 'Managing delivery and client expectations' },
+];
+
+const RECIPES = [
+    { domain: 'Design Practice',      skillName: 'Framing the design brief',                  trigger: 'A client presents a brief that describes a solution rather than a problem.',                                                              actionSequence: '1. Reflect the brief back in problem language. 2. Ask what outcome the client needs for end users. 3. Reframe scope together before accepting.',                                                            expectedOutcome: 'The team works on the right problem, not the client\'s assumed solution.',                                              flawPattern: 'Accepting the solution-as-brief and designing within it.' },
+    { domain: 'Design Practice',      skillName: 'Calibrating fidelity to phase',              trigger: 'A team member proposes high-fidelity output at a discovery or early-concept phase.',                                                     actionSequence: '1. Name the current phase and its decision purpose. 2. Identify minimum fidelity to answer the phase question. 3. Redirect effort to that fidelity level.',                                                   expectedOutcome: 'Resources stay proportionate to the certainty level — no expensive rework from premature commitment.',                  flawPattern: 'Polishing early-stage concepts to impress the client before the right direction is known.' },
+    { domain: 'Design Practice',      skillName: 'Managing subjective client feedback',        trigger: 'A client gives feedback that expresses personal preference without a design rationale.',                                                  actionSequence: '1. Acknowledge the reaction without conceding the design. 2. Ask what specifically the feedback is responding to. 3. Surface the design principle behind the choice. 4. Offer to explore an alternative.',  expectedOutcome: 'Feedback gets absorbed without destroying the design intent.',                                                          flawPattern: 'Immediately redesigning to match the preference, producing work with no defensible rationale.' },
+    { domain: 'Design Practice',      skillName: 'Separating signal from noise in research',   trigger: 'A research session produces contradictory findings across participants.',                                                                 actionSequence: '1. Separate frequency from intensity. 2. Look for the underlying need behind each contradictory position. 3. Check whether contradiction is about solution or problem. 4. Present findings as a tension.',  expectedOutcome: 'Decision-makers work from an accurate picture of user complexity.',                                                     flawPattern: 'Averaging contradictory findings into a single user view.' },
+    { domain: 'Design Practice',      skillName: 'Structuring a design critique',              trigger: 'A design review session risks becoming a preference-sharing exercise.',                                                                   actionSequence: '1. Establish criteria before showing work. 2. Separate observation from interpretation from recommendation. 3. Track decisions made and their rationale.',                                                    expectedOutcome: 'The critique produces clear decisions with recorded reasoning.',                                                        flawPattern: 'Opening the floor to general feedback without criteria.' },
+    { domain: 'Design Practice',      skillName: 'Recognising scope creep in design requests', trigger: 'A client adds new design requirements mid-project framed as small additions.',                                                          actionSequence: '1. Acknowledge without committing. 2. Assess impact on scope and cost. 3. Bring to project lead. 4. Respond with a clear choice: include with adjustment, or defer.',                                       expectedOutcome: 'Scope remains controlled and the team does not absorb uncosted work.',                                                 flawPattern: 'Agreeing to small additions each time, letting scope grow without acknowledgement.' },
+    { domain: 'Business Development', skillName: 'Reading client readiness to buy',            trigger: 'A client is engaging with the work but not moving toward commitment.',                                                                   actionSequence: '1. Distinguish intellectual interest from commercial readiness. 2. Ask directly about decision timeline and who is involved. 3. Identify the obstacle. 4. Address the specific obstacle.',                    expectedOutcome: 'Energy goes toward real opportunities, not indefinite exploratory conversations.',                                      flawPattern: 'Treating continued engagement as a positive signal without testing commercial intent.' },
+    { domain: 'Business Development', skillName: 'Pricing conversations without discounting',  trigger: 'A client pushes back on price during a proposal conversation.',                                                                          actionSequence: '1. Do not immediately offer a discount. 2. Ask what specifically concerns them. 3. Reframe around value of the outcome. 4. If budget is real, reduce scope rather than margin.',                             expectedOutcome: 'Price integrity holds.',                                                                                                flawPattern: 'Offering a discount as a first response.' },
+    { domain: 'Business Development', skillName: 'Qualifying the right contact',               trigger: 'A lead is enthusiastic but does not appear to have decision-making authority.',                                                          actionSequence: '1. Identify whether this person controls budget, recommends, or influences. 2. Ask who else is involved before investing heavily. 3. Work with the contact to get access to the decision-maker.',           expectedOutcome: 'Proposals reach the right people.',                                                                                    flawPattern: 'Building a relationship with an enthusiast who cannot buy.' },
+    { domain: 'Business Development', skillName: 'Writing a proposal that answers the real question', trigger: 'A proposal brief asks for methodology but the real question is "can I trust these people?"',                                     actionSequence: '1. Identify the real question behind the formal brief. 2. Lead with the outcome you are committing to. 3. Use case evidence that mirrors their specific situation. 4. Save methodology for an appendix.', expectedOutcome: 'The proposal addresses the decision-maker\'s actual concern.',                                                         flawPattern: 'Writing a thorough methodology document that misses the emotional evaluation.' },
+    { domain: 'Business Development', skillName: 'Turning a lost bid into a relationship',     trigger: 'A proposal is rejected and the client gives vague feedback.',                                                                            actionSequence: '1. Request a debrief call. 2. Ask specifically what won it for the winner. 3. Close with a gracious note that keeps the door open. 4. Record what you learned.',                                            expectedOutcome: 'You learn something real and the client remembers you well.',                                                           flawPattern: 'Accepting vague rejection feedback and moving on.' },
+    { domain: 'Business Development', skillName: 'Protecting the relationship during difficult delivery', trigger: 'A project is running into difficulty and there is pressure to avoid telling the client.',                                    actionSequence: '1. Raise the issue before they notice it. 2. Come with a proposed response plan. 3. Acknowledge what went wrong. 4. Confirm what happens next.',                                                            expectedOutcome: 'Trust survives the difficulty.',                                                                                        flawPattern: 'Delaying disclosure until the client discovers the problem themselves.' },
+    { domain: 'Market Intelligence',  skillName: 'Distinguishing trend from noise',            trigger: 'A single data point is presented as evidence of a market shift.',                                                                        actionSequence: '1. Ask for the time span and sample. 2. Look for corroborating signals. 3. Identify what would have to be true for this to be a trend vs a fluctuation.',                                                   expectedOutcome: 'Decisions are based on pattern, not anecdote.',                                                                        flawPattern: 'Accepting a single data point as evidence of a trend.' },
+    { domain: 'Market Intelligence',  skillName: 'Reading a competitive move accurately',      trigger: 'A competitor makes a public announcement that appears to threaten the firm\'s position.',                                               actionSequence: '1. Separate the announcement from the capability behind it. 2. Ask: do they have the resources to execute? 3. Identify what client behaviour change would need to happen. 4. Decide whether to respond.',  expectedOutcome: 'The firm responds to real threats and ignores PR moves.',                                                               flawPattern: 'Treating every competitor announcement as a genuine threat.' },
+    { domain: 'Market Intelligence',  skillName: 'Synthesising client intelligence across the portfolio', trigger: 'Multiple client conversations in a week surface similar concerns.',                                                          actionSequence: '1. Note the pattern without assuming it is universal. 2. Test whether it is broad or sector-specific. 3. Bring it to leadership framed as a pattern.',                                                       expectedOutcome: 'Intelligence from client relationships compounds into strategic awareness.',                                            flawPattern: 'Treating each client conversation as isolated.' },
+    { domain: 'Market Intelligence',  skillName: 'Presenting market uncertainty honestly',     trigger: 'A client asks for a clear forecast in a genuinely uncertain environment.',                                                               actionSequence: '1. Resist the pressure to give false certainty. 2. Present a range of scenarios with conditions. 3. Identify what the client can and cannot control. 4. Recommend the most robust decision.',              expectedOutcome: 'The client makes a better decision and trusts the firm for not pretending to know.',                                   flawPattern: 'Producing a confident-sounding forecast to satisfy the client\'s desire for certainty.' },
+    { domain: 'Market Intelligence',  skillName: 'Identifying the real unit of competition',   trigger: 'A firm is defining their competitive set too narrowly.',                                                                                 actionSequence: '1. Ask what decision the end customer is actually making. 2. Map the real alternatives including doing nothing. 3. Reframe the competitive set around those alternatives.',                                 expectedOutcome: 'Strategy addresses the actual competitive threat.',                                                                    flawPattern: 'Defining competitors as direct category peers only.' },
+    { domain: 'User Insight',          skillName: 'Designing research for a decision',          trigger: 'A research brief asks to "understand the user" without specifying what decision the insight will inform.',                               actionSequence: '1. Ask what decision this research will be used to make. 2. Identify what the team needs to know to make that decision. 3. Design the research to produce that specific knowledge.',                        expectedOutcome: 'Research produces insight that changes or confirms a decision.',                                                       flawPattern: 'Running broad discovery that produces interesting findings but does not resolve the decision.' },
+    { domain: 'User Insight',          skillName: 'Handling the leading interview question',    trigger: 'A team member proposes interview questions that contain the answer they are looking for.',                                               actionSequence: '1. Identify the assumption embedded in the question. 2. Rewrite to ask about behaviour without suggesting the expected answer. 3. Pilot before the interview.',                                            expectedOutcome: 'Research reveals what users actually think, not what the team hoped to find.',                                         flawPattern: 'Running interviews with leading questions and finding false confirmation.' },
+    { domain: 'User Insight',          skillName: 'Distinguishing what users say from what they do', trigger: 'Research findings show a gap between stated user preference and observed behaviour.',                                             actionSequence: '1. Flag the gap explicitly — do not smooth over it. 2. Weight behaviour over stated preference. 3. Investigate the gap itself — it often contains the most useful insight.',                              expectedOutcome: 'Decisions are made on what users actually do.',                                                                        flawPattern: 'Averaging stated preferences and observed behaviour into a single finding.' },
+    { domain: 'User Insight',          skillName: 'Recruiting the right research participants', trigger: 'There is pressure to use convenient participants rather than actual target users.',                                                      actionSequence: '1. Name the difference between convenient participants and target users. 2. Estimate the cost of wrong-participant findings. 3. Push for proper recruitment or scope explicitly as a proxy with caveats.', expectedOutcome: 'Research findings reflect the target audience — or the team knows clearly that they do not.',                         flawPattern: 'Running research with convenient participants and presenting findings as representative.' },
+    { domain: 'User Insight',          skillName: 'Making research actionable for a non-research audience', trigger: 'A research presentation is falling flat with a client who does not engage with quotes and themes.',                        actionSequence: '1. Lead with the decision implication, not the finding. 2. Translate themes into "this means you should" language. 3. Offer a recommended direction.',                                                      expectedOutcome: 'Stakeholders engage with findings and make decisions from them.',                                                      flawPattern: 'Presenting themes and quotes without explicit implications.' },
+    { domain: 'Project Delivery',     skillName: 'Setting expectations at project kickoff',    trigger: 'A project is starting with vague success criteria or unclear roles.',                                                                    actionSequence: '1. Establish what success looks like specifically. 2. Agree who makes decisions and at what stages. 3. Put both in writing before any work begins.',                                                        expectedOutcome: 'The project has a clear finish line and decision-making structure.',                                                   flawPattern: 'Starting work before success is defined.' },
+    { domain: 'Project Delivery',     skillName: 'Managing a missed deadline without damaging trust', trigger: 'The team will not meet a committed delivery date.',                                                                             actionSequence: '1. Tell the client before the deadline, not after. 2. Explain the cause specifically. 3. Give a revised date you are confident in. 4. Describe what will be different.',                                    expectedOutcome: 'Trust takes a smaller hit than a surprise miss.',                                                                      flawPattern: 'Saying nothing until the deadline passes.' },
+    { domain: 'Project Delivery',     skillName: 'Closing a project cleanly',                  trigger: 'A project is technically finished but the client keeps raising small new requests.',                                                     actionSequence: '1. Call the project closure explicitly. 2. Document what was delivered. 3. Acknowledge open items and route them to a new brief.',                                                                           expectedOutcome: 'The firm does not absorb unbounded post-project work.',                                                                flawPattern: 'Treating the project as still running because the client is still contacting you.' },
+];
+
+const EMPLOYEES = [
+    { uid: 'demo-emp-001', displayName: 'Adaeze Okafor',  email: 'adaeze@meridian-demo.co', roleTitle: 'Senior Consultant', seniority: 'mid',    sessionsTotal: 48, xp: 1720, streak: 5,  profile: 'strong',            lastActiveDaysAgo: 0  },
+    { uid: 'demo-emp-002', displayName: 'Kofi Asante',    email: 'kofi@meridian-demo.co',   roleTitle: 'Consultant',        seniority: 'junior', sessionsTotal: 31, xp: 890,  streak: 3,  profile: 'fast-bd',           lastActiveDaysAgo: 1  },
+    { uid: 'demo-emp-003', displayName: 'Priya Menon',    email: 'priya@meridian-demo.co',  roleTitle: 'Associate',         seniority: 'junior', sessionsTotal: 27, xp: 620,  streak: 0,  profile: 'blind-spot-design', lastActiveDaysAgo: 4  },
+    { uid: 'demo-emp-004', displayName: 'Tom Whitfield',  email: 'tom@meridian-demo.co',    roleTitle: 'Senior Consultant', seniority: 'mid',    sessionsTotal: 52, xp: 1340, streak: 2,  profile: 'steady',            lastActiveDaysAgo: 1  },
+    { uid: 'demo-emp-005', displayName: 'Yemi Adeyemi',   email: 'yemi@meridian-demo.co',   roleTitle: 'Consultant',        seniority: 'mid',    sessionsTotal: 39, xp: 1150, streak: 7,  profile: 'strong-user',       lastActiveDaysAgo: 0  },
+    { uid: 'demo-emp-006', displayName: 'Clara Birch',    email: 'clara@meridian-demo.co',  roleTitle: 'Associate',         seniority: 'junior', sessionsTotal: 22, xp: 480,  streak: 4,  profile: 'early',             lastActiveDaysAgo: 2  },
+    { uid: 'demo-emp-007', displayName: 'Remi Osei',      email: 'remi@meridian-demo.co',   roleTitle: 'Senior Consultant', seniority: 'senior', sessionsTotal: 87, xp: 3200, streak: 14, profile: 'high-performer',    lastActiveDaysAgo: 0  },
+    { uid: 'demo-emp-008', displayName: 'Nadia Volkov',   email: 'nadia@meridian-demo.co',  roleTitle: 'Consultant',        seniority: 'mid',    sessionsTotal: 18, xp: 390,  streak: 0,  profile: 'stalled',           lastActiveDaysAgo: 10 },
+];
+
+const VERDICTWEIGHTS = {
+    'strong':             [0.65, 0.25, 0.10],
+    'fast-bd':            [0.58, 0.28, 0.14],
+    'blind-spot-design':  [0.55, 0.28, 0.17],
+    'steady':             [0.52, 0.30, 0.18],
+    'strong-user':        [0.62, 0.25, 0.13],
+    'early':              [0.48, 0.32, 0.20],
+    'high-performer':     [0.78, 0.16, 0.06],
+    'stalled':            [0.45, 0.32, 0.23],
+};
+
+function simulateMastery(profile) {
+    const domains = ['Design Practice', 'Business Development', 'Market Intelligence', 'User Insight', 'Project Delivery'];
+    const rates   = {
+        'strong':             { base: 0.72, variance: 0.10 },
+        'fast-bd':            { base: 0.58, variance: 0.18, 'Business Development': 0.82 },
+        'blind-spot-design':  { base: 0.62, variance: 0.08, 'Design Practice': 0.28 },
+        'steady':             { base: 0.55, variance: 0.06 },
+        'strong-user':        { base: 0.60, variance: 0.12, 'User Insight': 0.84 },
+        'early':              { base: 0.50, variance: 0.15 },
+        'high-performer':     { base: 0.81, variance: 0.07 },
+        'stalled':            { base: 0.48, variance: 0.12 },
+    }[profile] ?? { base: 0.55, variance: 0.10 };
+
+    const mastery = {};
+    domains.forEach(d => {
+        const rate    = rates[d] ?? (rates.base + (Math.random() - 0.5) * rates.variance);
+        const played  = Math.floor(5 + Math.random() * 20);
+        const correct = Math.floor(played * Math.min(1, Math.max(0, rate)));
+        mastery[d]    = { played, correct };
+    });
+    return mastery;
+}
+
+function simulateSignals(emp) {
+    const domains   = ['Design Practice', 'Business Development', 'Market Intelligence', 'User Insight', 'Project Delivery'];
+    const types     = ['judgement', 'recognition', 'reflection'];
+    const weights   = VERDICTWEIGHTS[emp.profile] ?? [0.55, 0.28, 0.17];
+    const twelveWeeksAgo = Date.now() - (12 * 7 * 24 * 60 * 60 * 1000);
+    const signals   = [];
+    const baseSpeed = emp.profile === 'high-performer' ? 80 : emp.profile === 'stalled' ? 155 : 115;
+
+    for (let i = 0; i < emp.sessionsTotal; i++) {
+        const domain  = domains[i % domains.length];
+        const type    = types [i % types.length];
+        const rng     = Math.random();
+        let verdict   = rng < weights[0] ? 'correct' : rng < weights[0] + weights[1] ? 'partial' : 'missed';
+        if (emp.profile === 'blind-spot-design' && domain === 'Design Practice' && Math.random() < 0.6) verdict = 'missed';
+        const signalMs     = twelveWeeksAgo + (i / emp.sessionsTotal) * 12 * 7 * 24 * 60 * 60 * 1000;
+        const secondsTaken = Math.max(20, Math.min(240, Math.floor(baseSpeed + (Math.random() - 0.5) * 60)));
+        signals.push({ domain, scenarioType: type, verdict, responseLength: Math.floor(80 + Math.random() * 300), secondsTaken, createdAt: Timestamp.fromMillis(signalMs) });
+    }
+    return signals;
+}
+
+function generateScenarios(recipe, recipeId) {
+    return [
+        { recipeId, domain: recipe.domain, text: `You are working on a ${recipe.domain.toLowerCase()} challenge with a client. ${recipe.trigger} The team is looking to you for direction.`, questionPrompt: 'What do you notice, and what would you do?', scenarioType: 'judgement',   difficulty: 'mid', approved: true },
+        { recipeId, domain: recipe.domain, text: `Your colleague has shared an update that may — or may not — call for ${recipe.skillName.toLowerCase()}. The details are still emerging.`,        questionPrompt: 'Does this situation call for this approach? Why or why not?', scenarioType: 'recognition', difficulty: 'mid', approved: true },
+        { recipeId, domain: recipe.domain, text: `A recent project concluded well. Looking back, the key move was: ${recipe.actionSequence.split('.')[0].replace(/^1\. /, '')}. The client noticed.`, questionPrompt: 'What principle does this outcome reflect?', scenarioType: 'reflection',  difficulty: 'mid', approved: true },
+    ];
+}
+
+const REVIEWER_CONTRIBUTIONS = [
+    { sourceType: 'scenario_review', rawContent: 'The scenario uses procurement language our clients never use. They say "does this feel right?" not "please validate the scope parameters." It reads as a government tender, not an advisory relationship.', contextNote: 'Scenario review — Business Development domain', draft: { hasRecipe: true, skillName: 'Reading register in client communication', trigger: 'A client\'s language signals a formality mismatch.', actionSequence: '1. Notice the register mismatch. 2. Match the client\'s register. 3. Signal that informal conversation is available.', expectedOutcome: 'Client feels the relationship fits their context.', flawPattern: 'Responding in a formal register that reinforces a transactional tone.', confidence: 'high' } },
+    { sourceType: 'mentorship_note', rawContent: 'What they missed is that the client wasn\'t asking for a recommendation — they were asking to be heard. You have to slow down, reflect it back, and let them talk for another two minutes before you introduce any ideas.', contextNote: 'Mentorship note — senior client expressing doubt about project direction', draft: { hasRecipe: true, skillName: 'Responding to expressed client doubt', trigger: 'A senior client signals concern mid-engagement.', actionSequence: '1. Acknowledge the concern before the content. 2. Ask to let them say more. 3. Reflect back before introducing ideas.', expectedOutcome: 'Client feels understood — the precondition for accepting advice.', flawPattern: 'Moving immediately to problem-solving mode.', confidence: 'high' } },
+    { sourceType: 'document', rawContent: 'The retrospective noted that on three occasions the team absorbed contradictions from research without raising them. Each time they didn\'t want to "derail the project" — but each contradiction was a signal the direction wasn\'t serving real user behaviour.', contextNote: 'Q3 Project Retrospective — Westbridge engagement', draft: { hasRecipe: true, skillName: 'Surfacing contradictions from research', trigger: 'Research produces findings that contradict the brief.', actionSequence: '1. Document the contradiction. 2. Raise it with the project lead. 3. Present it as a decision point, not a problem.', expectedOutcome: 'Contradictions are surfaced at the right level at the right time.', flawPattern: 'Absorbing contradictions silently to avoid derailing the project.', confidence: 'high' } },
+];
+
+// ---------------------------------------------------------------------------
+// Seed function
+// ---------------------------------------------------------------------------
+async function runSeed() {
+    const btn      = document.getElementById('seed-btn');
+    const statusEl = document.getElementById('seed-status');
+
+    btn.disabled    = true;
+    btn.textContent = 'Seeding…';
+
+    // Total steps: org + 5 domains + 25 recipes (+75 scenarios counted within) + 8 employees + 3 contributions + reviewer
+    const TOTAL_STEPS = 1 + DOMAINS.length + RECIPES.length + EMPLOYEES.length + REVIEWER_CONTRIBUTIONS.length + 1;
+    initProgress(TOTAL_STEPS);
+
+    try {
+        // Check for existing data
+        const existing = await getDocs(collection(db, 'organisations', ORG_ID, 'recipes'));
+        if (!existing.empty) {
+            const proceed = confirm(`"${ORG_ID}" already has ${existing.size} recipes. Add more anyway?\n\nCancel and use Reset first for a clean seed.`);
+            if (!proceed) { btn.disabled = false; btn.textContent = 'Seed demo data'; return; }
+        }
+
+        // Org profile
+        log('Writing org profile…');
+        await setDoc(doc(db, 'organisations', ORG_ID, 'profile'), { orgName: 'Meridian Advisory', industry: 'Consulting', seededAt: serverTimestamp() }, { merge: true });
+        tick('Org profile written');
+
+        // Domains
+        log('Writing domains…');
+        for (const domain of DOMAINS) {
+            await addDoc(collection(db, 'organisations', ORG_ID, 'domains'), { name: domain.name, description: domain.description, recipeIds: [], reviewerIds: [], provisional: false, confirmedAt: serverTimestamp() });
+            tick(`Domain: ${domain.name}`);
+        }
+
+        // Recipes + scenarios
+        log('Writing recipes and scenarios…');
+        for (let i = 0; i < RECIPES.length; i++) {
+            const recipe    = RECIPES[i];
+            const recipeRef = await addDoc(collection(db, 'organisations', ORG_ID, 'recipes'), { skillName: recipe.skillName, trigger: recipe.trigger, actionSequence: recipe.actionSequence, expectedOutcome: recipe.expectedOutcome, flawPattern: recipe.flawPattern ?? null, domain: recipe.domain, sourceType: 'demo', approved: true, approvedAt: serverTimestamp() });
+            const scenarios = generateScenarios(recipe, recipeRef.id);
+            for (const s of scenarios) await addDoc(collection(db, 'organisations', ORG_ID, 'scenarios'), { ...s, generatedAt: serverTimestamp() });
+            tick(`Recipe ${i + 1}/${RECIPES.length}: ${recipe.skillName}`);
+        }
+
+        // Employees
+        log('Writing employees and training history…');
+        for (const emp of EMPLOYEES) {
+            const mastery  = simulateMastery(emp.profile);
+            const signals  = simulateSignals(emp);
+            const lastMs   = Date.now() - emp.lastActiveDaysAgo * 24 * 60 * 60 * 1000;
+            await setDoc(doc(db, 'organisations', ORG_ID, 'users', emp.uid), { displayName: emp.displayName, email: emp.email, role: 'employee', roleTitle: emp.roleTitle, seniority: emp.seniority, orgId: ORG_ID, xp: emp.xp, streak: emp.streak, sessionsTotal: emp.sessionsTotal, domainMastery: mastery, lastTrainedAt: Timestamp.fromMillis(lastMs), createdAt: Timestamp.fromMillis(Date.now() - 12 * 7 * 24 * 60 * 60 * 1000), isDemo: true });
+            for (const signal of signals) await addDoc(collection(db, 'organisations', ORG_ID, 'users', emp.uid, 'patternSignals'), signal);
+            tick(`Employee: ${emp.displayName} (${signals.length} signals)`);
+        }
+
+        // Reviewer contributions
+        log('Writing Reviewer contributions…');
+        for (const c of REVIEWER_CONTRIBUTIONS) {
+            await addDoc(collection(db, 'organisations', ORG_ID, 'extractions'), { sourceType: c.sourceType, rawContent: c.rawContent, contextNote: c.contextNote, status: 'processed', draft: c.draft, reviewerId: 'demo-reviewer-001', createdAt: Timestamp.fromMillis(Date.now() - 3 * 24 * 60 * 60 * 1000), processedAt: Timestamp.fromMillis(Date.now() - 2 * 24 * 60 * 60 * 1000) });
+            tick(`Contribution: ${c.sourceType}`);
+        }
+
+        // Reviewer user
+        log('Writing Reviewer user…');
+        await setDoc(doc(db, 'organisations', ORG_ID, 'users', 'demo-reviewer-001'), { displayName: 'Marcus Obi', email: 'marcus@meridian-demo.co', role: 'reviewer', roleTitle: 'Director of Client Services', seniority: 'senior', orgId: ORG_ID, createdAt: serverTimestamp(), isDemo: true });
+        tick('Reviewer: Marcus Obi');
+
+        statusEl.textContent = '✓ Demo data seeded successfully. Sign in with the demo Manager account to see the populated dashboard.';
+        statusEl.className   = 'status ok';
+        log('✓ Seed complete.', 'ok');
+
+    } catch (err) {
+        log('✗ Error: ' + err.message, 'err');
+        statusEl.textContent = 'Seeding failed: ' + (err.message ?? 'See log above.');
+        statusEl.className   = 'status err';
+        console.error('LORE seeder:', err);
+    } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Seed demo data';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reset — deletes all data for lore-demo org
+// ---------------------------------------------------------------------------
+async function runReset() {
+    if (!confirm('Delete ALL data for the lore-demo org? This cannot be undone.')) return;
+
+    const btn = document.getElementById('reset-btn');
+    btn.disabled = true; btn.textContent = 'Resetting…';
+
+    const subCollections = ['users', 'recipes', 'scenarios', 'extractions', 'domains'];
+    const logEl = document.getElementById('seed-log');
+    logEl.style.display = 'block'; logEl.innerHTML = '';
+
+    for (const sub of subCollections) {
+        try {
+            const snap = await getDocs(collection(db, 'organisations', ORG_ID, sub));
+            // For users, also delete sub-collections
+            if (sub === 'users') {
+                for (const d of snap.docs) {
+                    for (const userSub of ['patternSignals', 'recipeLibrary', 'tasks']) {
+                        try {
+                            const subSnap = await getDocs(collection(db, 'organisations', ORG_ID, 'users', d.id, userSub));
+                            for (const sd of subSnap.docs) await deleteDoc(sd.ref);
+                        } catch {}
+                    }
+                    await deleteDoc(d.ref);
+                }
+            } else {
+                for (const d of snap.docs) await deleteDoc(d.ref);
+            }
+            log(`Deleted: ${sub} (${snap.size} docs)`, 'ok');
+        } catch (err) { log(`Error deleting ${sub}: ${err.message}`, 'err'); }
+    }
+
+    try { await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile')); log('Deleted: profile', 'ok'); } catch {}
+
+    const statusEl = document.getElementById('seed-status');
+    statusEl.textContent = 'Demo data reset. Run Seed to repopulate.';
+    statusEl.className   = 'status ok';
+    btn.disabled    = false;
+    btn.textContent = 'Reset demo data';
+}
+
+document.getElementById('seed-btn').addEventListener('click', runSeed);
+document.getElementById('reset-btn').addEventListener('click', runReset);
+</script>
+</body>
+</html>
