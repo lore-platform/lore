@@ -16,7 +16,7 @@
 //   scenario for a Reviewer's quality check session.
 // =============================================================================
 
-import { db } from './firebase.js';
+import { db } from '../firebase.js';
 import {
     collection,
     doc,

@@ -33,13 +33,22 @@
 
                 <div class="auth-field">
                     <label class="label" for="auth-password">Password</label>
-                    <input
-                        class="input"
-                        id="auth-password"
-                        type="password"
-                        placeholder="••••••••"
-                        autocomplete="current-password"
-                    >
+                    <div style="position: relative;">
+                        <input
+                            class="input"
+                            id="auth-password"
+                            type="password"
+                            placeholder="••••••••"
+                            autocomplete="current-password"
+                            style="padding-right: 2.8rem;"
+                        >
+                        <button
+                            type="button"
+                            id="auth-pw-toggle"
+                            aria-label="Show password"
+                            style="position:absolute;right:var(--space-3);top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:var(--warm-grey);font-size:var(--text-sm);line-height:1;"
+                        >Show</button>
+                    </div>
                 </div>
 
                 <button class="btn btn-primary btn-full" id="auth-submit">

@@ -15,11 +15,10 @@
 // writes (confirming, renaming, merging clusters), and triggering the
 // clustering job when the recipe count crosses a useful threshold.
 //
-// Import paths: this file imports firebase.js from the repo root directly.
-// This is correct for the flat repo structure — engine/ files use ./firebase.js.
+// Import paths: engine/ files import firebase.js from the repo root using ../firebase.js.
 // =============================================================================
 
-import { db } from './firebase.js';
+import { db } from '../firebase.js';
 import {
     collection,
     doc,

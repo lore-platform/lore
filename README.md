@@ -297,7 +297,7 @@ Every admin action (provision, delete, seed, reset) is written to Firestore at `
 
 LORE uses vanilla JavaScript throughout. If you are adding a feature:
 
-- Engine files (`engine/`) import Firebase directly using `./firebase.js`
+- Engine files (`engine/`) import Firebase directly using `../firebase.js`
 - View files (`views/`) import engine files using `../engine/[file].js` and Firebase using `../firebase.js`
 - Admin files (`admin/`) import Firebase using `../firebase.js`
 - No npm packages in the frontend — everything runs natively in the browser

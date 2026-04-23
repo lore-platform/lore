@@ -15,7 +15,7 @@
 // Import paths: engine/ files import firebase.js using ./firebase.js (repo root).
 // =============================================================================
 
-import { db } from './firebase.js';
+import { db } from '../firebase.js';
 import {
     doc,
     getDoc,

@@ -146,6 +146,33 @@ async function initAuth() {
         // On success, onAuthStateChanged fires and routes the user
     });
 
+    // Enter key on email or password fields submits the sign-in form
+    document.getElementById('auth-email')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('auth-submit')?.click();
+    });
+    document.getElementById('auth-password')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('auth-submit')?.click();
+    });
+
+    // Password visibility toggle
+    document.getElementById('auth-pw-toggle')?.addEventListener('click', () => {
+        const input  = document.getElementById('auth-password');
+        const toggle = document.getElementById('auth-pw-toggle');
+        if (!input) return;
+        const isHidden = input.type === 'password';
+        input.type       = isHidden ? 'text' : 'password';
+        toggle.textContent = isHidden ? 'Hide' : 'Show';
+        toggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+    });
+
+    // Enter key on invite fields submits the invite form
+    document.getElementById('invite-name')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
+    });
+    document.getElementById('invite-password')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
+    });
+
     // Invite redemption form
     document.getElementById('invite-submit')?.addEventListener('click', async () => {
         const name     = document.getElementById('invite-name')?.value?.trim();

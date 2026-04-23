@@ -784,9 +784,10 @@ async function runDemoSeedFlow() {
         });
         demoTick('Manager profile written');
 
-        // Show login details before seeding so they are not lost if seed errors
+        // Show login details now — before seeding — so they are not lost if a later
+        // seed step fails. The status bar will be updated again when seeding completes.
         showDemoStatus(
-            `✓ Manager account ready. Email: ${DEMO.managerEmail} · Password: ${tempPassword} · Login: https://lore-platform.github.io/lore/`,
+            `Manager account ready — seeding data now… Email: ${DEMO.managerEmail} · Password: ${tempPassword}`,
             'ok'
         );
 
@@ -899,6 +900,7 @@ async function runDemoSeedFlow() {
             errorMsg: null,
         });
 
+        demoLog('✓ All done — demo fully seeded.', 'ok');
         showDemoStatus(
             `✓ Demo seeded. Sign in at https://lore-platform.github.io/lore/ · Email: ${DEMO.managerEmail} · Password: ${tempPassword}`,
             'ok'
