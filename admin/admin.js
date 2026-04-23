@@ -61,8 +61,6 @@ import {
 const ADMIN_EMAIL = 'osiokeitseuwa@gmail.com';
 const WORKER_URL  = 'https://lore-worker.slop-runner.workers.dev';
 
-const FIREBASE_API_KEY = 'AIzaSyBW_PE2RiIs-4_tAoOtKdQLXijh9-WNv7Q';
-
 // Demo org constants — single source of truth, used by both seed and provision
 const DEMO = {
     orgId:       'lore-demo',
@@ -375,43 +373,39 @@ async function deleteOrg(orgId, orgData, manager) {
 }
 
 // ---------------------------------------------------------------------------
-// Delete a Firebase Auth user via the REST API.
-// The Admin SDK is not available client-side — this uses the accounts:delete
-// endpoint with the Firebase API key. This only works when the currently
-// signed-in user is the admin — Firestore rules protect the data side.
+// Delete a Firebase Auth user via the Cloudflare Worker.
+// The Worker uses its service account credentials which have full admin
+// authority — unlike the client-side REST API which can only delete the
+// currently signed-in user, not arbitrary accounts.
+// Treats USER_NOT_FOUND as success — the goal state is achieved either way.
 // ---------------------------------------------------------------------------
 async function deleteFirebaseAuthUser(uid) {
-    const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${FIREBASE_API_KEY}`,
-        {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ localId: uid }),
-        }
-    );
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error?.message ?? `HTTP ${res.status}`);
+    const res = await fetch(WORKER_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode: 'deleteAuthUser', uid, adminSecret: _adminSecret }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Look up a Firebase Auth UID by email address via the REST API.
-// Used by Reset to find and delete orphaned Auth accounts that were created
-// before a failed seed (i.e. no Firestore user doc exists for them yet).
+// Look up a Firebase Auth UID by email address via the Cloudflare Worker.
+// The Worker uses its service account credentials (Admin REST API) rather
+// than the client-side accounts:lookup endpoint, which requires a scoped
+// ID token that does not grant cross-account lookup authority.
 // Returns the UID string, or null if no account exists for that email.
 // ---------------------------------------------------------------------------
 async function lookupUidByEmail(email) {
-    const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
-        {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ email: [email] }),
-        }
-    );
-    const data = await res.json();
-    return data.users?.[0]?.localId ?? null;
+    const res = await fetch(WORKER_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ mode: 'lookupUidByEmail', email, adminSecret: _adminSecret }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return data.uid ?? null;
 }
 
 // =============================================================================
@@ -585,24 +579,76 @@ async function createFirebaseAuthUser(email, password) {
 }
 
 // ---------------------------------------------------------------------------
+// Ping the Worker to wake it before a real call.
+// Cloudflare Workers cold-start in ~200–500 ms. Sending a cheap ping first
+// ensures the Worker is warm before setClaims is attempted, preventing the
+// first real call from timing out on a cold container.
+// Does not throw — if ping fails the setClaims call will still be attempted
+// and will surface its own error if the Worker is genuinely unreachable.
+// ---------------------------------------------------------------------------
+async function pingWorker() {
+    try {
+        await fetch(WORKER_URL, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ mode: 'ping' }),
+        });
+    } catch {
+        // Non-fatal — proceed with setClaims regardless
+        console.warn('LORE admin.js: Worker ping failed — proceeding anyway.');
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Set custom claims on a Firebase Auth user via the Cloudflare Worker.
+// Pings the Worker first to avoid cold-start timeouts.
+// Retries once on 503 (Worker not yet ready) with a 2-second backoff.
 // Throws if claims cannot be set — callers must treat this as fatal.
 // ---------------------------------------------------------------------------
 async function setClaims(uid, orgId, role) {
-    let data;
-    try {
+    // Wake the Worker before the real call
+    await pingWorker();
+
+    const attempt = async () => {
         const res = await fetch(WORKER_URL, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ mode: 'setClaims', uid, orgId, role, adminSecret: _adminSecret }),
         });
-        data = await res.json();
+        return res;
+    };
+
+    let res;
+    try {
+        res = await attempt();
     } catch (fetchErr) {
         throw new Error(
             `Could not reach the Worker to set claims. Check the Worker is deployed. ` +
             `Set claims manually in Firebase Console: uid=${uid}, orgId=${orgId}, role=${role}.`
         );
     }
+
+    // On 503, wait 2 seconds and retry once — Worker may still be starting
+    if (res.status === 503) {
+        console.warn('LORE admin.js: Worker returned 503 on setClaims — retrying after 2 s.');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        try {
+            res = await attempt();
+        } catch (fetchErr) {
+            throw new Error(
+                `Worker returned 503 and retry also failed. ` +
+                `Set claims manually: uid=${uid}, orgId=${orgId}, role=${role}.`
+            );
+        }
+    }
+
+    let data;
+    try {
+        data = await res.json();
+    } catch {
+        throw new Error(`Worker returned an unparseable response (HTTP ${res.status}). Set claims manually: uid=${uid}, orgId=${orgId}, role=${role}.`);
+    }
+
     if (!data.ok) {
         throw new Error(
             `Worker rejected claims request: ${data.error ?? 'unknown error'}. ` +

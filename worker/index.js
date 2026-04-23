@@ -77,6 +77,36 @@ export default {
         }
 
         // ---------------------------------------------------------------------------
+        // Route: ping — lightweight wake call used before setClaims to avoid
+        // cold-start timeouts. Returns immediately with { ok: true }.
+        // ---------------------------------------------------------------------------
+        if (mode === 'ping') {
+            return json({ ok: true }, 200, corsHeaders);
+        }
+
+        // ---------------------------------------------------------------------------
+        // Route: deleteAuthUser
+        // Deletes a Firebase Auth user by UID using the Admin REST API.
+        // Requires ADMIN_SECRET — prevents arbitrary account deletion.
+        // Used by the admin Reset flow so that the Worker's service account
+        // credentials handle the deletion rather than the client-side API key,
+        // which cannot look up or delete accounts it did not create.
+        // ---------------------------------------------------------------------------
+        if (mode === 'deleteAuthUser') {
+            return handleDeleteAuthUser(body, env, corsHeaders);
+        }
+
+        // ---------------------------------------------------------------------------
+        // Route: lookupUidByEmail
+        // Returns the Firebase Auth UID for an email address using the Admin REST API.
+        // Requires ADMIN_SECRET. Used by the admin Reset flow to find orphaned
+        // Auth accounts that have no matching Firestore user document.
+        // ---------------------------------------------------------------------------
+        if (mode === 'lookupUidByEmail') {
+            return handleLookupUidByEmail(body, env, corsHeaders);
+        }
+
+        // ---------------------------------------------------------------------------
         // Routes: classify and generate — AI proxy
         // ---------------------------------------------------------------------------
         if (mode === 'classify' || mode === 'generate') {
@@ -88,6 +118,92 @@ export default {
         });
     }
 };
+
+// =============================================================================
+// deleteAuthUser handler
+// Deletes a Firebase Auth user by UID using the Admin REST API.
+// The service account token gives the Worker the authority to delete any account
+// in the project — this is intentionally gated behind ADMIN_SECRET.
+// =============================================================================
+async function handleDeleteAuthUser(body, env, corsHeaders) {
+    const { uid, adminSecret } = body;
+
+    if (!adminSecret || adminSecret !== env.ADMIN_SECRET) {
+        return json({ error: 'Unauthorised' }, 403, corsHeaders);
+    }
+    if (!uid) {
+        return json({ error: 'uid is required' }, 400, corsHeaders);
+    }
+
+    try {
+        const accessToken = await getServiceAccountToken(env);
+        const url = `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:delete`;
+
+        const res = await fetch(url, {
+            method:  'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type':  'application/json',
+            },
+            body: JSON.stringify({ localId: uid }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            // USER_NOT_FOUND is not a real error for a delete — the goal state is achieved
+            if (err.error?.message === 'USER_NOT_FOUND') {
+                return json({ ok: true, uid, notFound: true }, 200, corsHeaders);
+            }
+            console.error('LORE Worker: deleteAuthUser failed:', err);
+            return json({ error: 'Failed to delete user', detail: err }, 500, corsHeaders);
+        }
+
+        return json({ ok: true, uid }, 200, corsHeaders);
+
+    } catch (err) {
+        console.error('LORE Worker: deleteAuthUser error:', err.message);
+        return json({ error: err.message }, 500, corsHeaders);
+    }
+}
+
+// =============================================================================
+// lookupUidByEmail handler
+// Returns the Firebase Auth UID for a given email using the Admin REST API.
+// Returns { ok: true, uid } if found, { ok: true, uid: null } if not found.
+// Used by the admin Reset flow to find orphaned Auth accounts.
+// =============================================================================
+async function handleLookupUidByEmail(body, env, corsHeaders) {
+    const { email, adminSecret } = body;
+
+    if (!adminSecret || adminSecret !== env.ADMIN_SECRET) {
+        return json({ error: 'Unauthorised' }, 403, corsHeaders);
+    }
+    if (!email) {
+        return json({ error: 'email is required' }, 400, corsHeaders);
+    }
+
+    try {
+        const accessToken = await getServiceAccountToken(env);
+        const url = `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:lookup`;
+
+        const res = await fetch(url, {
+            method:  'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type':  'application/json',
+            },
+            body: JSON.stringify({ email: [email] }),
+        });
+
+        const data = await res.json();
+        const uid  = data.users?.[0]?.localId ?? null;
+        return json({ ok: true, uid }, 200, corsHeaders);
+
+    } catch (err) {
+        console.error('LORE Worker: lookupUidByEmail error:', err.message);
+        return json({ error: err.message }, 500, corsHeaders);
+    }
+}
 
 // =============================================================================
 // setClaims handler
