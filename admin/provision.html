@@ -388,7 +388,7 @@ document.getElementById('provision-submit').addEventListener('click', async () =
 
     try {
         // Check org does not already exist
-        const existingProfile = await getDoc(doc(db, 'organisations', orgId, 'profile'));
+        const existingProfile = await getDoc(doc(db, 'organisations', orgId, 'profile', 'data'));
         if (existingProfile.exists()) {
             throw new Error(`Org ID "${orgId}" is already taken. Choose a different one.`);
         }
@@ -436,7 +436,7 @@ document.getElementById('provision-submit').addEventListener('click', async () =
 
         // Create org profile document
         setStatus('provision-status', 'Creating org profile…', 'ok');
-        await setDoc(doc(db, 'organisations', orgId, 'profile'), {
+        await setDoc(doc(db, 'organisations', orgId, 'profile', 'data'), {
             orgName,
             industry,
             createdAt:     serverTimestamp(),
@@ -506,7 +506,7 @@ async function loadOrgList() {
         const orgs = await Promise.all(orgsSnap.docs.map(async orgDoc => {
             const orgId = orgDoc.id;
             try {
-                const profile = await getDoc(doc(db, 'organisations', orgId, 'profile'));
+                const profile = await getDoc(doc(db, 'organisations', orgId, 'profile', 'data'));
                 return { orgId, ...(profile.exists() ? profile.data() : {}) };
             } catch { return { orgId }; }
         }));
@@ -549,7 +549,7 @@ async function deleteOrg(orgId) {
             for (const d of snap.docs) await deleteDoc(d.ref);
         } catch (err) { console.warn('LORE provision: delete sub-collection error:', sub, err); }
     }
-    try { await deleteDoc(doc(db, 'organisations', orgId, 'profile')); } catch {}
+    try { await deleteDoc(doc(db, 'organisations', orgId, 'profile', 'data')); } catch {}
     console.log('LORE provision: Org deleted:', orgId);
 }
 </script>

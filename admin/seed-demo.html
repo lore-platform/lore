@@ -342,7 +342,7 @@ async function runSeed() {
 
         // Org profile
         log('Writing org profile…');
-        await setDoc(doc(db, 'organisations', ORG_ID, 'profile'), { orgName: 'Meridian Advisory', industry: 'Consulting', seededAt: serverTimestamp() }, { merge: true });
+        await setDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data'), { orgName: 'Meridian Advisory', industry: 'Consulting', seededAt: serverTimestamp() }, { merge: true });
         tick('Org profile written');
 
         // Domains
@@ -434,7 +434,7 @@ async function runReset() {
         } catch (err) { log(`Error deleting ${sub}: ${err.message}`, 'err'); }
     }
 
-    try { await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile')); log('Deleted: profile', 'ok'); } catch {}
+    try { await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data')); log('Deleted: profile', 'ok'); } catch {}
 
     const statusEl = document.getElementById('seed-status');
     statusEl.textContent = 'Demo data reset. Run Seed to repopulate.';

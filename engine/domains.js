@@ -145,7 +145,7 @@ export async function deleteDomain(orgId, domainId) {
 // ---------------------------------------------------------------------------
 export async function getPendingClusters(orgId) {
     try {
-        const snap = await getDoc(doc(db, 'organisations', orgId, 'profile'));
+        const snap = await getDoc(doc(db, 'organisations', orgId, 'profile', 'data'));
         if (!snap.exists()) return [];
         return snap.data().proposedClusters ?? [];
     } catch (err) {
@@ -160,7 +160,7 @@ export async function getPendingClusters(orgId) {
 // ---------------------------------------------------------------------------
 export async function clearPendingClusters(orgId) {
     try {
-        await updateDoc(doc(db, 'organisations', orgId, 'profile'), {
+        await updateDoc(doc(db, 'organisations', orgId, 'profile', 'data'), {
             proposedClusters:      [],
             lastClusterReviewedAt: serverTimestamp(),
         });
@@ -221,7 +221,7 @@ Return a JSON array of cluster objects.`;
 
     // Store the proposed clusters in the org profile for Manager review
     try {
-        await updateDoc(doc(db, 'organisations', orgId, 'profile'), {
+        await updateDoc(doc(db, 'organisations', orgId, 'profile', 'data'), {
             proposedClusters: clusters,
             lastClusteredAt:  serverTimestamp(),
         });

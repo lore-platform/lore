@@ -103,7 +103,7 @@ async function _loadOrgProfile() {
         'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
     try {
-        const snap = await getDoc(doc(db, 'organisations', _orgId, 'profile'));
+        const snap = await getDoc(doc(db, 'organisations', _orgId, 'profile', 'data'));
         if (snap.exists()) {
             _orgName  = snap.data().orgName  ?? '';
             _industry = snap.data().industry ?? null;
@@ -231,7 +231,7 @@ async function _saveIndustryAndProceed(container, industry, domainSeeds) {
     // from showing on subsequent sign-ins.
     try {
         await setDoc(
-            doc(db, 'organisations', _orgId, 'profile'),
+            doc(db, 'organisations', _orgId, 'profile', 'data'),
             { industry, updatedAt: serverTimestamp() },
             { merge: true }
         );
