@@ -225,23 +225,54 @@ onAuthChange(async (user) => {
     const claims = await getClaims();
 
     if (!claims) {
-        // Claims not yet set (can happen immediately after invite redemption
-        // before the Cloud Function has run). Show a brief loading state
-        // and retry after a delay.
+        // Claims not yet set — can happen immediately after invite redemption
+        // before the Worker has set them, or if setClaims failed during provisioning.
+        // Retry up to 3 times with a 4-second gap. After that, show an error
+        // with a sign-out button so the user is never stuck in a permanent loop.
+        const retryKey = 'lore_claims_retries';
+        const retries  = parseInt(sessionStorage.getItem(retryKey) ?? '0', 10);
+
         showView('view-auth');
         hideNav();
-        document.getElementById('view-auth').innerHTML = `
-            <div class="auth-screen">
-                <p class="auth-wordmark">LORE</p>
-                <p style="color: var(--warm-grey); margin-top: 1rem;">Setting up your account…</p>
-                <div class="spinner" style="margin-top: 1rem;"></div>
-            </div>
-        `;
-        setTimeout(async () => {
-            // Force token refresh and try again
-            await user.getIdToken(true);
-            window.location.reload();
-        }, 3000);
+
+        if (retries < 3) {
+            sessionStorage.setItem(retryKey, String(retries + 1));
+            document.getElementById('view-auth').innerHTML = `
+                <div class="auth-screen">
+                    <p class="auth-wordmark">LORE</p>
+                    <p style="color: var(--warm-grey); margin-top: 1rem;">Setting up your account…</p>
+                    <div class="spinner" style="margin-top: 1rem;"></div>
+                    <p style="color: var(--warm-grey); font-size: var(--text-xs); margin-top: 1rem;">Attempt ${retries + 1} of 3</p>
+                </div>
+            `;
+            setTimeout(async () => {
+                await user.getIdToken(true);
+                window.location.reload();
+            }, 4000);
+        } else {
+            // All retries exhausted — claims genuinely missing, not just slow.
+            // Sign the user out and show a clear error so they can contact support.
+            sessionStorage.removeItem(retryKey);
+            document.getElementById('view-auth').innerHTML = `
+                <div class="auth-screen">
+                    <p class="auth-wordmark">LORE</p>
+                    <div class="auth-card" style="margin-top: var(--space-8);">
+                        <p style="font-weight: 600; margin-bottom: var(--space-3);">Account not set up yet</p>
+                        <p style="color: var(--warm-grey); font-size: var(--text-sm); line-height: 1.6;">
+                            Your account exists but your access hasn't been configured.
+                            Please contact your administrator and ask them to check your account setup.
+                        </p>
+                        <button class="btn btn-secondary btn-full" style="margin-top: var(--space-6);" id="claims-signout">
+                            Sign out
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.getElementById('claims-signout')?.addEventListener('click', async () => {
+                const { signOut } = await import('./engine/auth.js');
+                await signOut();
+            });
+        }
         return;
     }
 
