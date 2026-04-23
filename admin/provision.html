@@ -443,8 +443,16 @@ document.getElementById('provision-submit').addEventListener('click', async () =
             );
         }
 
-        // Create org profile document
+        // Create org documents.
+        // The top-level organisations/{orgId} doc must exist for getDocs() to list it.
+        // Profile data lives at organisations/{orgId}/profile/data (sub-collection pattern).
         setStatus('provision-status', 'Creating org profile…', 'ok');
+        await setDoc(doc(db, 'organisations', orgId), {
+            orgName,
+            industry,
+            createdAt:     serverTimestamp(),
+            provisionedBy: 'admin-tool',
+        });
         await setDoc(doc(db, 'organisations', orgId, 'profile', 'data'), {
             orgName,
             industry,
@@ -560,6 +568,7 @@ async function deleteOrg(orgId) {
         } catch (err) { console.warn('LORE provision: delete sub-collection error:', sub, err); }
     }
     try { await deleteDoc(doc(db, 'organisations', orgId, 'profile', 'data')); } catch {}
+    try { await deleteDoc(doc(db, 'organisations', orgId)); } catch {}
     console.log('LORE provision: Org deleted:', orgId);
 }
 </script>

@@ -340,8 +340,10 @@ async function runSeed() {
             if (!proceed) { btn.disabled = false; btn.textContent = 'Seed demo data'; return; }
         }
 
-        // Org profile
+        // Org profile — write both the top-level doc (required for getDocs listing)
+        // and the profile/data sub-document (read by dashboard and domains engine).
         log('Writing org profile…');
+        await setDoc(doc(db, 'organisations', ORG_ID), { orgName: 'Meridian Advisory', industry: 'Consulting', seededAt: serverTimestamp() }, { merge: true });
         await setDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data'), { orgName: 'Meridian Advisory', industry: 'Consulting', seededAt: serverTimestamp() }, { merge: true });
         tick('Org profile written');
 
@@ -442,7 +444,8 @@ async function runReset() {
 
     try {
         await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data'));
-        tick('Deleted: profile');
+        await deleteDoc(doc(db, 'organisations', ORG_ID));
+        tick('Deleted: profile and org root');
     } catch (err) {
         log(`Error deleting profile: ${err.message}`, 'err');
         tick('profile — error (see above)');
