@@ -172,6 +172,7 @@ function showApp() {
     document.getElementById('admin-email-display').textContent = _adminEmail ?? '';
     loadOrgList();
     loadActivityLog();
+    loadDemoCreds();
 }
 
 function showGateError(msg) {
@@ -901,10 +902,24 @@ async function runDemoSeedFlow() {
         });
 
         demoLog('✓ All done — demo fully seeded.', 'ok');
+        // Write the demo credentials into the org profile document so they are
+        // retrievable from any machine via the admin page. The password is a
+        // generated throwaway for a demo account — not a real user credential.
+        await updateDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'), {
+            demoCredentials: {
+                email:    DEMO.managerEmail,
+                password: tempPassword,
+                url:      'https://lore-platform.github.io/lore/',
+                seededAt: serverTimestamp(),
+            },
+        });
+
+        demoLog('✓ All done — demo fully seeded.');
         showDemoStatus(
             `✓ Demo seeded. Sign in at https://lore-platform.github.io/lore/ · Email: ${DEMO.managerEmail} · Password: ${tempPassword}`,
             'ok'
         );
+        await loadDemoCreds();
         loadOrgList();
         loadActivityLog();
 
@@ -1024,6 +1039,7 @@ async function runDemoReset() {
     });
 
     showDemoStatus('Demo data reset. Run "Provision + Seed demo" to repopulate.', 'ok');
+    await loadDemoCreds();
     loadOrgList();
     loadActivityLog();
 
@@ -1056,6 +1072,54 @@ function demoTick(msg) {
 }
 
 function demoLog(msg, type = '') { appendLog('demo-log', msg, type); }
+
+// ---------------------------------------------------------------------------
+// Load and render the demo credentials panel from Firestore.
+// Reads from organisations/lore-demo/profile/data.demoCredentials.
+// Works from any machine — no localStorage involved.
+// Shows nothing if the field is absent (i.e. before first seed or after reset).
+// ---------------------------------------------------------------------------
+async function loadDemoCreds() {
+    const container = document.getElementById('demo-creds-panel');
+    if (!container) return;
+
+    try {
+        const snap = await getDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'));
+        const creds = snap.exists() ? (snap.data().demoCredentials ?? null) : null;
+
+        if (!creds) {
+            container.innerHTML = '';
+            return;
+        }
+
+        const seededAt = creds.seededAt?.toDate
+            ? creds.seededAt.toDate().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+            : 'recently';
+
+        container.innerHTML = `
+            <div style="margin-top: var(--space-4); padding: var(--space-4); background: var(--surface-2, #f5f0eb); border-radius: var(--radius-md, 8px); border: 1px solid var(--border, rgba(0,0,0,0.08));">
+                <p class="label" style="margin-bottom: var(--space-3); font-size: var(--text-sm);">Demo sign-in details</p>
+                <p class="text-sm" style="margin-bottom: var(--space-2);">
+                    <span style="color: var(--warm-grey);">URL</span>&ensp;
+                    <a href="${creds.url}" target="_blank" style="color: var(--ember);">${creds.url}</a>
+                </p>
+                <p class="text-sm" style="margin-bottom: var(--space-2);">
+                    <span style="color: var(--warm-grey);">Email</span>&ensp;
+                    <code style="user-select: all; font-size: var(--text-sm);">${creds.email}</code>
+                </p>
+                <p class="text-sm" style="margin-bottom: var(--space-3);">
+                    <span style="color: var(--warm-grey);">Password</span>&ensp;
+                    <code style="user-select: all; font-size: var(--text-sm);">${creds.password}</code>
+                </p>
+                <p class="text-xs" style="color: var(--warm-grey);">Seeded ${seededAt}. Cleared automatically on Reset.</p>
+            </div>
+        `;
+    } catch (err) {
+        // Non-fatal — credentials panel simply stays empty
+        console.warn('LORE admin.js: Could not load demo credentials.', err);
+        container.innerHTML = '';
+    }
+}
 
 function showDemoStatus(msg, type) {
     const el = document.getElementById('demo-status');
