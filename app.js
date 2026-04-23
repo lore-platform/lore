@@ -271,6 +271,11 @@ onAuthChange(async (user) => {
             document.getElementById('claims-signout')?.addEventListener('click', async () => {
                 const { signOut } = await import('./engine/auth.js');
                 await signOut();
+                // Reload the page cleanly so the full auth HTML is restored.
+                // onAuthChange firing alone is not enough here because the
+                // escape hatch replaced the view-auth innerHTML — a reload
+                // is the safest way to get back to a known good state.
+                window.location.reload();
             });
         }
         return;
