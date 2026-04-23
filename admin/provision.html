@@ -411,26 +411,35 @@ document.getElementById('provision-submit').addEventListener('click', async () =
         }
         const uid = signUpData.localId;
 
-        // Set custom claims via Worker
-        setStatus('provision-status', 'Setting custom claims…', 'ok');
-        const claimsRes = await fetch(WORKER_URL, {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
-                mode:        'setClaims',
-                uid,
-                orgId,
-                role:        'manager',
-                adminSecret: _adminSecret,
-            }),
-        });
-        const claimsData = await claimsRes.json();
+        // Set custom claims via Worker — this is required for the Manager to sign in.
+        // If it fails, the account exists in Firebase Auth but cannot be used.
+        // We surface a clear error and stop — the admin must retry or set claims manually.
+        setStatus('provision-status', 'Setting role and org access (this can take a few seconds)…', 'ok');
+        let claimsData;
+        try {
+            const claimsRes = await fetch(WORKER_URL, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({
+                    mode:        'setClaims',
+                    uid,
+                    orgId,
+                    role:        'manager',
+                    adminSecret: _adminSecret,
+                }),
+            });
+            claimsData = await claimsRes.json();
+        } catch (fetchErr) {
+            throw new Error(
+                `Auth account created (UID: ${uid}) but could not reach the Worker to set role access. ` +
+                `Check that the Worker is deployed and the URL is correct, then set claims manually in Firebase Console: orgId=${orgId}, role=manager.`
+            );
+        }
         if (!claimsData.ok) {
-            // Non-fatal — log and continue. Claims can be set manually.
             console.warn('LORE provision: Claims failed:', claimsData);
-            setStatus('provision-status',
-                `Account created (uid: ${uid}) but claims failed — set them manually in Firebase Console. orgId: ${orgId}, role: manager`,
-                'err'
+            throw new Error(
+                `Auth account created (UID: ${uid}) but setting role access failed — Worker returned: ${claimsData.error ?? 'unknown error'}. ` +
+                `Set claims manually in Firebase Console: orgId=${orgId}, role=manager.`
             );
         }
 
@@ -453,7 +462,7 @@ document.getElementById('provision-submit').addEventListener('click', async () =
             createdAt: serverTimestamp(),
         });
 
-        setStatus('provision-status', 'Manager provisioned successfully.', 'ok');
+        setStatus('provision-status', '✓ Manager account ready — see login details below.', 'ok');
 
         resultEl.style.display = 'block';
         resultEl.innerHTML = `
@@ -481,7 +490,8 @@ document.getElementById('provision-submit').addEventListener('click', async () =
         loadOrgList();
 
     } catch (err) {
-        setStatus('provision-status', err.message ?? 'Something went wrong. Check the console.', 'err');
+        const msg = err.message ?? 'Something went wrong. Check the browser console for details.';
+        setStatus('provision-status', `✗ ${msg}`, 'err');
         console.error('LORE provision:', err);
     } finally {
         btn.disabled    = false;
