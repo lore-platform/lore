@@ -406,17 +406,20 @@ async function runSeed() {
 async function runReset() {
     if (!confirm('Delete ALL data for the lore-demo org? This cannot be undone.')) return;
 
-    const btn = document.getElementById('reset-btn');
+    const btn      = document.getElementById('reset-btn');
+    const statusEl = document.getElementById('seed-status');
     btn.disabled = true; btn.textContent = 'Resetting…';
 
+    // subCollections + 1 for profile document
     const subCollections = ['users', 'recipes', 'scenarios', 'extractions', 'domains'];
-    const logEl = document.getElementById('seed-log');
-    logEl.style.display = 'block'; logEl.innerHTML = '';
+    initProgress(subCollections.length + 1);
+
+    log('Starting reset for org: ' + ORG_ID);
 
     for (const sub of subCollections) {
         try {
             const snap = await getDocs(collection(db, 'organisations', ORG_ID, sub));
-            // For users, also delete sub-collections
+            // For users, also delete user sub-collections before the user doc itself
             if (sub === 'users') {
                 for (const d of snap.docs) {
                     for (const userSub of ['patternSignals', 'recipeLibrary', 'tasks']) {
@@ -430,13 +433,21 @@ async function runReset() {
             } else {
                 for (const d of snap.docs) await deleteDoc(d.ref);
             }
-            log(`Deleted: ${sub} (${snap.size} docs)`, 'ok');
-        } catch (err) { log(`Error deleting ${sub}: ${err.message}`, 'err'); }
+            tick(`Deleted: ${sub} (${snap.size} docs)`);
+        } catch (err) {
+            log(`Error deleting ${sub}: ${err.message}`, 'err');
+            tick(`${sub} — error (see above)`);
+        }
     }
 
-    try { await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data')); log('Deleted: profile', 'ok'); } catch {}
+    try {
+        await deleteDoc(doc(db, 'organisations', ORG_ID, 'profile', 'data'));
+        tick('Deleted: profile');
+    } catch (err) {
+        log(`Error deleting profile: ${err.message}`, 'err');
+        tick('profile — error (see above)');
+    }
 
-    const statusEl = document.getElementById('seed-status');
     statusEl.textContent = 'Demo data reset. Run Seed to repopulate.';
     statusEl.className   = 'status ok';
     btn.disabled    = false;
