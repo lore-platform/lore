@@ -98,7 +98,7 @@ export async function initDashboard(orgId, uid) {
 let _industry = null;
 
 async function _loadOrgProfile() {
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const { doc, getDoc } = await import(
         'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
@@ -218,7 +218,7 @@ function renderOnboarding(container) {
 // Then proceed to the main dashboard.
 // ---------------------------------------------------------------------------
 async function _saveIndustryAndProceed(container, industry, domainSeeds) {
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const {
         doc,
         setDoc,
@@ -562,7 +562,7 @@ function renderKnowledgeBase(el) {
             const statusEl         = document.getElementById(`review-status-${r.id}`);
 
             // Load Reviewers
-            const { db: firestoreDb } = await import('../engine/../firebase.js');
+            const { db: firestoreDb } = await import('../firebase.js');
             const { collection: col, query: q, where: wh, getDocs: gd } =
                 await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 
@@ -1293,7 +1293,7 @@ function _attachInviteFormHandlers() {
 }
 
 async function _loadTeamList() {
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const {
         collection,
         getDocs
@@ -1344,7 +1344,7 @@ async function _loadTeamList() {
 async function renderTeamProgress(el) {
     el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading team progress…</p></div>`;
 
-    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { db: firestoreDb } = await import('../firebase.js');
     const { collection: col, getDocs: gd } =
         await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 
@@ -1475,7 +1475,7 @@ async function renderTeamProgress(el) {
 async function renderTimeToReadiness(el) {
     el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
 
-    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { db: firestoreDb } = await import('../firebase.js');
     const { collection: col, getDocs: gd } =
         await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 
@@ -1585,7 +1585,7 @@ Write the progress narrative.`;
 async function renderReviewerActivity(el) {
     el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
 
-    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { db: firestoreDb } = await import('../firebase.js');
     const {
         collection: col,
         query: q,
@@ -1719,7 +1719,7 @@ function renderLoading(container, message) {
 // selectIds: array of element IDs to populate.
 // ---------------------------------------------------------------------------
 async function _loadReviewersForSelects(selectIds) {
-    const { db: firestoreDb } = await import('../engine/../firebase.js');
+    const { db: firestoreDb } = await import('../firebase.js');
     const { collection: col, query: q, where: wh, getDocs: gd } =
         await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 

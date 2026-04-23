@@ -93,30 +93,44 @@ lore/
     wrangler.toml     — Worker configuration.
 
   admin/
-    provision.html    — Platform owner tool: create Manager accounts, manage orgs.
-    seed-demo.html    — One-click demo data seeder (for demo environments only).
+    index.html        — Unified platform admin dashboard shell.
+    admin.js          — All admin logic: provision, seed, reset, activity log.
 ```
 
 ---
 
 ## How the data is structured
 
-All data is org-scoped. Nothing leaks between organisations.
+All customer data is org-scoped. Nothing leaks between organisations. The platform operator has a dedicated namespace separate from customer data.
 
 ```
-organisations/{orgId}/
-  profile/                  — Org name, industry, proposed domain clusters
-  users/{userId}/           — Profile, XP, streak, mastery, seniority, role
-    tasks/{taskId}/         — Reviewer prompts (pending/completed)
-    recipeLibrary/          — Recipes an Employee has saved after unlocking
-    patternSignals/         — Manager-only cognitive pattern data (never shown to Employee)
-  recipes/{recipeId}/       — Approved Career Recipes (the knowledge base)
-  scenarios/{scenarioId}/   — Generated training scenarios
-  extractions/{extractionId}/ — Staging area: raw → processed → approved/rejected
-  domains/{domainId}/       — Confirmed skill areas (may be provisional from industry seed)
+platform/
+  lore-platform/                — Platform operator singleton document
+                                  (product name, owner email, initialised flag)
+    adminLogs/{logId}/          — Every admin action: provision, delete, seed, reset.
+                                  Fields: action, orgId, orgName, detail, outcome,
+                                  errorMsg, performedBy, createdAt.
 
-invites/{inviteId}/         — Invite tokens for new team members
+organisations/{orgId}/          — Top-level org document (required for listing)
+                                  Fields: orgName, industry, createdAt, provisionedBy
+  profile/data                  — Org profile sub-document read by dashboard and
+                                  domains engine. Fields: orgName, industry,
+                                  proposedClusters, lastClusteredAt.
+  users/{userId}/               — Profile, XP, streak, mastery, seniority, role
+    tasks/{taskId}/             — Reviewer prompts (pending/completed)
+    recipeLibrary/              — Recipes an Employee has saved after unlocking
+    patternSignals/             — Manager-only cognitive pattern data
+  recipes/{recipeId}/           — Approved Career Recipes (the knowledge base)
+  scenarios/{scenarioId}/       — Generated training scenarios
+  extractions/{extractionId}/   — Staging area: raw → processed → approved/rejected
+  domains/{domainId}/           — Confirmed skill areas
+
+invites/{inviteId}/             — Invite tokens for new team members
 ```
+
+**Why `organisations/{orgId}` exists as a document:** Firestore's `getDocs()` on a collection only returns documents that have been explicitly written at that path. Sub-documents alone (like `profile/data`) do not cause the parent to appear in collection queries. The top-level org document is written by the admin tool on every provision and seed operation.
+
+**Why `platform/` is separate:** The platform operator (LORE HQ) is a real entity in the system with its own concerns — admin activity logs, platform config. Putting these at the Firestore root alongside `organisations/` would mix operator and customer concerns. The `platform/` namespace is admin-only by Firestore rules; no org member can read or write it.
 
 ---
 
@@ -177,58 +191,78 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isAdminEmail() {
-      return request.auth != null && request.auth.token.email == 'YOUR_ADMIN_EMAIL';
+    function isAdmin() {
+      return request.auth != null
+          && request.auth.token.email == 'YOUR_ADMIN_EMAIL';
     }
 
     function hasOrgAccess(orgId) {
-      return request.auth != null && request.auth.token.orgId == orgId;
+      return request.auth != null
+          && request.auth.token.orgId == orgId;
     }
 
+    function isManager(orgId) {
+      return hasOrgAccess(orgId) && request.auth.token.role == 'manager';
+    }
+
+    function isEmployee(orgId) {
+      return hasOrgAccess(orgId) && request.auth.token.role == 'employee';
+    }
+
+    function isReviewer(orgId) {
+      return hasOrgAccess(orgId) && request.auth.token.role == 'reviewer';
+    }
+
+    // Platform operator namespace — admin only
+    match /platform/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    // Customer orgs — top-level document
     match /organisations/{orgId} {
-      allow read, write: if isAdminEmail() || hasOrgAccess(orgId);
+      allow read:  if isAdmin() || hasOrgAccess(orgId);
+      allow write: if isAdmin() || isManager(orgId);
     }
 
+    // All org sub-collections
     match /organisations/{orgId}/{document=**} {
-      allow read, write: if isAdminEmail() || hasOrgAccess(orgId);
+      allow read:  if isAdmin() || hasOrgAccess(orgId);
+      allow write: if isAdmin() || isManager(orgId) || isEmployee(orgId) || isReviewer(orgId);
     }
 
+    // Invite tokens
     match /invites/{inviteId} {
-      allow read: if request.auth != null;
-      allow write: if isAdminEmail() || (request.auth != null && request.auth.token.role == 'manager');
+      allow read:  if request.auth != null;
+      allow write: if isAdmin()
+                   || (request.auth != null && request.auth.token.role == 'manager');
     }
   }
 }
 ```
 
-Replace `YOUR_ADMIN_EMAIL` with the email address you use for the platform admin account.
+Replace `YOUR_ADMIN_EMAIL` with your platform owner email address.
 
 ---
 
-## Provisioning the first Manager for an organisation
+## Using the admin dashboard
 
-The app has no self-registration. Every account is created by the platform owner through the admin tool.
+The admin dashboard at `https://lore-platform.github.io/lore/admin/` is the single tool for all platform management. It replaces the old `provision.html` and `seed-demo.html` pages.
 
-1. Go to `https://lore-platform.github.io/lore/admin/provision.html`
-2. Sign in with your platform owner Firebase account (email/password — must be created in Firebase Console → Authentication → Users → Add user)
-3. Enter your `ADMIN_SECRET` (the value you set with `wrangler secret put ADMIN_SECRET`)
-4. Fill in the organisation name, org ID, Manager's details, and industry
-5. Click Create — the tool creates the Firebase Auth account, sets the custom claims, creates the Firestore documents, and displays a temporary password to send to the Manager
+**Provisioning a Manager for an organisation:**
+1. Go to `https://lore-platform.github.io/lore/admin/`
+2. Sign in with your platform owner Firebase account
+3. Enter your `ADMIN_SECRET` when prompted
+4. Fill in the organisation details and Manager's information
+5. Click "Create Manager account" — the tool checks for duplicate emails and org IDs before writing anything, runs each step with a live progress log, and displays login details on success
 
-The Manager signs in at `https://lore-platform.github.io/lore/` with their email and the temporary password.
+**Seeding the demo environment:**
+The demo section is pre-filled with Meridian Advisory details. Click "Provision + Seed demo" to run the full flow in one step — it creates the Manager account and seeds all data sequentially with a unified progress log. Run Reset first if you have seeded before.
 
----
+**Provisioned organisations list:**
+Shows all orgs with Manager name, email, UID, industry, and creation date. Each row has a Delete button that removes the Firebase Auth account and all Firestore data in a single operation.
 
-## Seeding a demo environment
-
-The seeder populates a fictional organisation (Meridian Advisory) with a complete dataset for demonstration purposes.
-
-1. First, use the provision tool to create an org with the ID `lore-demo`
-2. Go to `https://lore-platform.github.io/lore/admin/seed-demo.html`
-3. Sign in with your platform owner account
-4. Click Seed demo data and wait approximately 60–90 seconds
-
-The seeder creates 25 recipes across 5 domains, 75 scenarios, 8 employees with 12 weeks of simulated training history, and 3 Reviewer contributions. The Reset button clears everything if you need a clean run.
+**Activity log:**
+Every admin action (provision, delete, seed, reset) is written to Firestore at `platform/lore-platform/adminLogs/` and displayed newest-first. Persists across devices and browser sessions.
 
 ---
 
@@ -253,10 +287,9 @@ The seeder creates 25 recipes across 5 domains, 75 scenarios, 8 employees with 1
 | GitHub org | lore-platform |
 | Repository | https://github.com/lore-platform/lore |
 | Live app | https://lore-platform.github.io/lore/ |
+| Admin dashboard | https://lore-platform.github.io/lore/admin/ |
 | Firebase project | lore-platform-hu247 |
 | Cloudflare Worker | https://lore-worker.slop-runner.workers.dev |
-| Admin provision | https://lore-platform.github.io/lore/admin/provision.html |
-| Demo seeder | https://lore-platform.github.io/lore/admin/seed-demo.html |
 
 ---
 
@@ -265,7 +298,8 @@ The seeder creates 25 recipes across 5 domains, 75 scenarios, 8 employees with 1
 LORE uses vanilla JavaScript throughout. If you are adding a feature:
 
 - Engine files (`engine/`) import Firebase directly using `./firebase.js`
-- View files (`views/`) import engine files using `../engine/[file].js`
+- View files (`views/`) import engine files using `../engine/[file].js` and Firebase using `../firebase.js`
+- Admin files (`admin/`) import Firebase using `../firebase.js`
 - No npm packages in the frontend — everything runs natively in the browser
 - Comments are part of the specification. Do not remove or shorten them.
 - Every function and non-obvious decision must be commented — readable by a non-technical person and by an AI reading cold

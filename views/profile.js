@@ -59,7 +59,7 @@ export async function initProfile(orgId, employeeId) {
 // Returns a combined data object or null on failure.
 // ---------------------------------------------------------------------------
 async function _loadEmployeeData(orgId, employeeId) {
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const {
         doc,
         getDoc,

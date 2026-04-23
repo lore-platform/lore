@@ -164,6 +164,14 @@ function showApp() {
     document.getElementById('gate-screen').style.display = 'none';
     document.getElementById('admin-app').style.display   = 'block';
     document.getElementById('admin-email-display').textContent = _adminEmail ?? '';
+    // Ensure the platform singleton document exists. Uses setDoc with merge:true
+    // so it is a no-op on every sign-in after the first — never overwrites.
+    // This is the platform owner record: Osioke/LORE HQ as a first-class entity.
+    setDoc(
+        doc(db, 'platform', 'lore-platform'),
+        { productName: 'LORE', ownerEmail: _adminEmail, initialised: true },
+        { merge: true }
+    ).catch(err => console.warn('LORE admin.js: Could not write platform doc.', err));
     loadOrgList();
     loadActivityLog();
 }

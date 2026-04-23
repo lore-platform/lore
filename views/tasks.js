@@ -68,7 +68,7 @@ export async function initTasks(orgId, uid, claims) {
 // ---------------------------------------------------------------------------
 async function _fetchPendingPrompts(orgId, uid) {
     // Import Firestore inline to avoid a top-level dependency
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const {
         collection,
         query,
@@ -99,7 +99,7 @@ async function _fetchPendingPrompts(orgId, uid) {
 // Called after the response is saved — non-blocking.
 // ---------------------------------------------------------------------------
 async function _markPromptComplete(orgId, uid, promptId) {
-    const { db } = await import('../engine/../firebase.js');
+    const { db } = await import('../firebase.js');
     const {
         doc,
         updateDoc,
