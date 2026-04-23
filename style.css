@@ -467,3 +467,235 @@ select.input {
         padding: var(--space-8);
     }
 }
+/* =============================================================================
+   Admin Dashboard — additional styles
+   These classes are only used by admin/index.html.
+   All brand tokens and shared components are inherited from above.
+   ============================================================================= */
+
+/* Gate screen re-uses .auth-screen layout */
+.admin-gate {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-6);
+    background: var(--deep-ink);
+}
+
+/* Main layout — wider than the app views, suits a data-dense admin tool */
+.admin-layout {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-8);
+}
+
+/* Section card */
+.admin-section {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    border: 1px solid rgba(44, 36, 22, 0.08);
+}
+
+.admin-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-4);
+}
+
+/* Form grid — two columns on wider screens */
+.admin-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+}
+
+@media (max-width: 600px) {
+    .admin-form-grid { grid-template-columns: 1fr; }
+}
+
+/* Org list rows */
+.admin-org-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.08);
+}
+
+.admin-org-row:last-child { border-bottom: none; }
+
+.admin-org-info { flex: 1; min-width: 0; }
+
+.admin-org-name {
+    font-weight: 600;
+    font-size: var(--text-base);
+    color: var(--ink);
+    margin-bottom: var(--space-1);
+}
+
+.admin-org-meta {
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+}
+
+/* Danger button — used for delete actions */
+.admin-btn-danger {
+    background: transparent;
+    color: var(--error);
+    border: 1px solid rgba(184, 50, 50, 0.3);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background var(--transition);
+    flex-shrink: 0;
+}
+
+.admin-btn-danger:hover:not(:disabled) {
+    background: rgba(184, 50, 50, 0.06);
+}
+
+.admin-btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Progress bar — used by demo seed/reset */
+.admin-progress-track {
+    height: 4px;
+    background: rgba(44, 36, 22, 0.1);
+    border-radius: 100px;
+    overflow: hidden;
+    margin-top: var(--space-4);
+}
+
+.admin-progress-fill {
+    height: 100%;
+    background: var(--ember);
+    border-radius: 100px;
+    transition: width 300ms ease;
+    width: 0%;
+}
+
+/* Log panel — scrollable terminal-style output */
+.admin-log {
+    background: var(--deep-ink);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    margin-top: var(--space-4);
+    max-height: 240px;
+    overflow-y: auto;
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: var(--text-xs);
+    line-height: 1.7;
+    color: var(--warm-grey);
+}
+
+.admin-log-ok  { color: #6dbf9e; }   /* muted sage for success lines */
+.admin-log-err { color: #e08080; }   /* muted red for error lines */
+
+/* Provision result — login details box */
+.admin-result {
+    background: rgba(61, 139, 110, 0.06);
+    border: 1px solid rgba(61, 139, 110, 0.2);
+    border-radius: var(--radius-md);
+    padding: var(--space-4) var(--space-5);
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+    line-height: 1.8;
+}
+
+.admin-copy-row {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+.admin-copy-row .input {
+    flex: 1;
+}
+
+/* Demo meta strip */
+.admin-demo-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: rgba(44, 36, 22, 0.04);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-4);
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+}
+
+/* Activity log rows */
+.admin-log-row {
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+}
+
+.admin-log-row:last-child { border-bottom: none; }
+
+.admin-log-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    align-items: center;
+    margin-bottom: var(--space-1);
+}
+
+.admin-log-action {
+    font-weight: 600;
+    font-size: var(--text-sm);
+    color: var(--ink);
+}
+
+.admin-log-org {
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+}
+
+.admin-log-outcome {
+    font-size: var(--text-xs);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.admin-log-time {
+    font-size: var(--text-xs);
+    color: var(--warm-grey);
+    margin-left: auto;
+}
+
+.admin-log-detail {
+    font-size: var(--text-sm);
+    color: var(--warm-grey);
+    line-height: 1.5;
+}
+
+.admin-log-error {
+    font-size: var(--text-xs);
+    color: var(--error);
+    margin-top: var(--space-1);
+}
+
+@media (min-width: 768px) {
+    .admin-layout {
+        padding: var(--space-12) var(--space-8);
+    }
+    .admin-section {
+        padding: var(--space-8);
+    }
+}

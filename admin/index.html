@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="LORE — Platform admin">
+    <title>LORE — Admin</title>
+    <link rel="stylesheet" href="../style.css">
+</head>
+<body class="admin-body">
+
+    <!-- -----------------------------------------------------------------------
+         Auth gate — shown until admin is signed in and secret is entered.
+         Two steps: Firebase sign-in, then ADMIN_SECRET entry.
+         Security: Firebase Auth confirms identity. ADMIN_SECRET gates the
+         Worker's setClaims endpoint so claims cannot be set by anyone who
+         finds the page but does not have the Wrangler secret.
+    ----------------------------------------------------------------------- -->
+    <div id="gate-screen" class="admin-gate">
+        <p class="auth-wordmark" style="margin-bottom: var(--space-2);">LORE</p>
+        <p class="auth-tagline">Platform admin</p>
+
+        <div class="auth-card" style="width:100%;max-width:400px;">
+            <div id="gate-error" class="auth-error"></div>
+
+            <div id="gate-signin">
+                <h2 style="margin-bottom: var(--space-6);">Sign in</h2>
+                <div class="auth-field">
+                    <label class="label" for="gate-email">Email</label>
+                    <input class="input" id="gate-email" type="email" placeholder="your@email.com" autocomplete="email">
+                </div>
+                <div class="auth-field">
+                    <label class="label" for="gate-password">Password</label>
+                    <input class="input" id="gate-password" type="password" placeholder="••••••••" autocomplete="current-password">
+                </div>
+                <button class="btn btn-primary btn-full" id="gate-submit">Sign in</button>
+            </div>
+
+            <div id="gate-secret" style="display:none;">
+                <h2 style="margin-bottom: var(--space-4);">Admin secret</h2>
+                <p class="text-secondary text-sm" style="margin-bottom: var(--space-4);">
+                    Enter the ADMIN_SECRET value from your Wrangler environment.
+                    Required each session — never stored.
+                </p>
+                <div class="auth-field">
+                    <label class="label" for="secret-input">Admin secret</label>
+                    <input class="input" id="secret-input" type="password" placeholder="Your ADMIN_SECRET value">
+                </div>
+                <button class="btn btn-primary btn-full" id="secret-submit">Continue</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- -----------------------------------------------------------------------
+         Main admin app — shown after auth + secret entry.
+    ----------------------------------------------------------------------- -->
+    <div id="admin-app" style="display:none;">
+
+        <!-- Nav -->
+        <nav class="nav">
+            <span class="lore-wordmark">LORE</span>
+            <div class="nav-right">
+                <span class="nav-stat" id="admin-email-display"></span>
+                <button class="btn btn-secondary" id="admin-signout"
+                    style="font-size:var(--text-xs);padding:var(--space-1) var(--space-3);color:var(--warm-grey);">
+                    Sign out
+                </button>
+            </div>
+        </nav>
+
+        <div class="admin-layout">
+
+            <!-- ---------------------------------------------------------------
+                 Section 1: Provisioned organisations
+                 Live list of all orgs with manager details and delete action.
+            --------------------------------------------------------------- -->
+            <section class="admin-section">
+                <div class="admin-section-header">
+                    <h2>Provisioned organisations</h2>
+                    <button class="btn btn-secondary" id="refresh-orgs" style="font-size:var(--text-sm);padding:var(--space-2) var(--space-4);">
+                        Refresh
+                    </button>
+                </div>
+                <div id="org-list">
+                    <p class="text-secondary text-sm">Loading…</p>
+                </div>
+            </section>
+
+            <!-- ---------------------------------------------------------------
+                 Section 2: Provision a Manager
+                 Creates Firebase Auth account, sets claims, writes both
+                 organisations/{orgId} and organisations/{orgId}/profile/data.
+            --------------------------------------------------------------- -->
+            <section class="admin-section">
+                <h2 style="margin-bottom:var(--space-2);">Provision a Manager</h2>
+                <p class="text-secondary text-sm" style="margin-bottom:var(--space-6);">
+                    Creates the Firebase Auth account, sets custom claims, and writes the org to Firestore.
+                    Email is checked for existence before any write is attempted.
+                </p>
+
+                <div class="admin-form-grid">
+                    <div class="auth-field">
+                        <label class="label" for="p-org-name">Organisation name</label>
+                        <input class="input" id="p-org-name" type="text" placeholder="Acme Consulting">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="p-org-id">Org ID (Firestore path)</label>
+                        <input class="input" id="p-org-id" type="text" placeholder="acme-consulting">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="p-display-name">Manager's full name</label>
+                        <input class="input" id="p-display-name" type="text" placeholder="Adaeze Okafor">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="p-email">Manager's email</label>
+                        <input class="input" id="p-email" type="email" placeholder="adaeze@acme.com">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="p-industry">Industry</label>
+                        <select class="input" id="p-industry">
+                            <option value="">Select…</option>
+                            <option>Consulting</option>
+                            <option>Financial Services</option>
+                            <option>Technology</option>
+                            <option>Healthcare</option>
+                            <option>Legal</option>
+                            <option>Education</option>
+                            <option>Retail &amp; Consumer</option>
+                            <option>Media &amp; Creative</option>
+                            <option>Non-profit</option>
+                            <option>Other</option>
+                        </select>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label" for="p-role-title">Manager's job title</label>
+                        <input class="input" id="p-role-title" type="text" placeholder="Head of L&amp;D">
+                    </div>
+                </div>
+
+                <div id="provision-status" class="auth-error" style="margin-top:var(--space-4);"></div>
+                <div id="provision-log" class="admin-log" style="display:none;"></div>
+
+                <button class="btn btn-primary" id="provision-submit" style="margin-top:var(--space-4);">
+                    Create Manager account
+                </button>
+
+                <div id="provision-result" class="admin-result" style="display:none;"></div>
+            </section>
+
+            <!-- ---------------------------------------------------------------
+                 Section 3: Demo data — Meridian Advisory
+                 Pre-filled. One button provisions + seeds in sequence.
+                 Separate reset button wipes all demo data cleanly.
+            --------------------------------------------------------------- -->
+            <section class="admin-section">
+                <h2 style="margin-bottom:var(--space-2);">Demo data — Meridian Advisory</h2>
+                <p class="text-secondary text-sm" style="margin-bottom:var(--space-4);">
+                    Seeds the <strong>lore-demo</strong> org with 25 recipes, 5 domains, 75 scenarios,
+                    8 employees with 12 weeks of history, and 3 Reviewer contributions.
+                    "Provision + Seed" creates the Manager account and all data in one flow.
+                    Run Reset first if re-seeding.
+                </p>
+
+                <div class="admin-demo-meta">
+                    <span class="text-sm"><strong>Org:</strong> Meridian Advisory</span>
+                    <span class="text-sm"><strong>Org ID:</strong> lore-demo</span>
+                    <span class="text-sm"><strong>Manager:</strong> Adaeze Okafor · adaeze@meridian.com</span>
+                </div>
+
+                <div id="demo-progress-track" class="admin-progress-track" style="display:none;">
+                    <div id="demo-progress-fill" class="admin-progress-fill"></div>
+                </div>
+
+                <div id="demo-status" class="auth-error" style="margin-top:var(--space-4);"></div>
+                <div id="demo-log" class="admin-log" style="display:none;"></div>
+
+                <div style="display:flex;gap:var(--space-3);margin-top:var(--space-4);flex-wrap:wrap;">
+                    <button class="btn btn-primary" id="demo-seed-btn" style="flex:1;">
+                        Provision + Seed demo
+                    </button>
+                    <button class="btn btn-secondary" id="demo-reset-btn" style="flex:1;color:var(--error);border-color:rgba(184,50,50,0.3);">
+                        Reset demo data
+                    </button>
+                </div>
+            </section>
+
+            <!-- ---------------------------------------------------------------
+                 Section 4: Activity log
+                 Loaded from Firestore adminLogs collection, newest first.
+                 Written after every admin action — persists across devices.
+            --------------------------------------------------------------- -->
+            <section class="admin-section">
+                <div class="admin-section-header">
+                    <h2>Activity log</h2>
+                    <button class="btn btn-secondary" id="refresh-logs" style="font-size:var(--text-sm);padding:var(--space-2) var(--space-4);">
+                        Refresh
+                    </button>
+                </div>
+                <div id="activity-log-list">
+                    <p class="text-secondary text-sm">Loading…</p>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <script type="module" src="../firebase.js"></script>
+    <script type="module" src="admin.js"></script>
+
+</body>
+</html>
