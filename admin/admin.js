@@ -164,14 +164,6 @@ function showApp() {
     document.getElementById('gate-screen').style.display = 'none';
     document.getElementById('admin-app').style.display   = 'block';
     document.getElementById('admin-email-display').textContent = _adminEmail ?? '';
-    // Ensure the platform singleton document exists. Uses setDoc with merge:true
-    // so it is a no-op on every sign-in after the first — never overwrites.
-    // This is the platform owner record: Osioke/LORE HQ as a first-class entity.
-    setDoc(
-        doc(db, 'platform', 'lore-platform'),
-        { productName: 'LORE', ownerEmail: _adminEmail, initialised: true },
-        { merge: true }
-    ).catch(err => console.warn('LORE admin.js: Could not write platform doc.', err));
     loadOrgList();
     loadActivityLog();
 }
@@ -401,6 +393,25 @@ async function deleteFirebaseAuthUser(uid) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error?.message ?? `HTTP ${res.status}`);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Look up a Firebase Auth UID by email address via the REST API.
+// Used by Reset to find and delete orphaned Auth accounts that were created
+// before a failed seed (i.e. no Firestore user doc exists for them yet).
+// Returns the UID string, or null if no account exists for that email.
+// ---------------------------------------------------------------------------
+async function lookupUidByEmail(email) {
+    const res = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`,
+        {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ email: [email] }),
+        }
+    );
+    const data = await res.json();
+    return data.users?.[0]?.localId ?? null;
 }
 
 // =============================================================================
@@ -877,13 +888,26 @@ async function runDemoReset() {
 
     demoLog('Starting reset for org: ' + DEMO.orgId);
 
-    // 1. Delete Firebase Auth account for the Manager
+    // 1. Delete Firebase Auth account for the Manager.
+    // Two-pass approach: first look in the Firestore users sub-collection (normal case),
+    // then fall back to email lookup (catches orphaned accounts from failed seed runs
+    // where the Auth account was created before the Firestore write happened).
     try {
+        let managerUid = null;
+
+        // Pass 1: find UID from Firestore user doc
         const usersSnap  = await getDocs(collection(db, 'organisations', DEMO.orgId, 'users'));
         const managerDoc = usersSnap.docs.find(d => d.data().role === 'manager');
-        if (managerDoc) {
-            await deleteFirebaseAuthUser(managerDoc.id);
-            demoTick('Deleted: Manager Firebase Auth account');
+        if (managerDoc) managerUid = managerDoc.id;
+
+        // Pass 2: if not in Firestore, look up by email directly in Firebase Auth
+        if (!managerUid) {
+            managerUid = await lookupUidByEmail(DEMO.managerEmail);
+        }
+
+        if (managerUid) {
+            await deleteFirebaseAuthUser(managerUid);
+            demoTick(`Deleted: Manager Firebase Auth account (UID: ${managerUid})`);
         } else {
             demoTick('No Manager Auth account found — skipped');
         }
