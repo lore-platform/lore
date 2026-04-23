@@ -61,6 +61,14 @@ import {
 const ADMIN_EMAIL = 'osiokeitseuwa@gmail.com';
 const WORKER_URL  = 'https://lore-worker.slop-runner.workers.dev';
 
+// Public Firebase API key — used client-side for checkEmailExists and
+// createFirebaseAuthUser only. These two calls use the key for its intended
+// purpose: checking email availability and creating new accounts via the
+// Firebase Auth REST API. They do NOT require admin authority.
+// Account deletion and lookup (which DO require admin authority) now go
+// through the Cloudflare Worker using a service account token instead.
+const FIREBASE_API_KEY = 'AIzaSyBW_PE2RiIs-4_tAoOtKdQLXijh9-WNv7Q';
+
 // Demo org constants — single source of truth, used by both seed and provision
 const DEMO = {
     orgId:       'lore-demo',
