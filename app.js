@@ -108,22 +108,88 @@ async function initAuth() {
 
     const inviteId = getInviteId();
 
-    // If there is an invite ID, load and show the invite section
     if (inviteId) {
-        const invite = await readInvite(inviteId);
-        if (invite) {
-            document.getElementById('invite-section').style.display = 'block';
-            document.getElementById('auth-submit').style.display = 'none';
+        // ---------------------------------------------------------------------------
+        // Invite flow — show loading state while we fetch the invite document,
+        // then render the appropriate screen based on what we find.
+        // ---------------------------------------------------------------------------
+        _showAuthScreen('screen-invite-loading');
 
-            const context = document.getElementById('invite-context');
-            if (context) {
-                // Copy framed as joining the team — no mention of knowledge capture
-                context.textContent = `You've been invited to join ${invite.orgName ?? 'your team'} on LORE.`;
-            }
+        const invite = await readInvite(inviteId);
+
+        if (!invite) {
+            // Invite not found, expired, or already redeemed
+            _showAuthScreen('screen-invite-invalid');
+            return;
         }
+
+        // Populate the invite screen with org and role context
+        const orgName  = invite.orgName  ?? 'your team';
+        const roleLine = invite.role === 'reviewer'
+            ? 'You\'ll be helping your team by reviewing training scenarios — it only takes a few minutes at a time.'
+            : 'You\'ll be joining your team\'s training programme on LORE.';
+
+        document.getElementById('invite-org-name').textContent    = orgName;
+        document.getElementById('invite-context').textContent     = `You've been invited to join ${orgName}.`;
+        document.getElementById('invite-role-line').textContent   = roleLine;
+        document.getElementById('invite-email-display').value     = invite.email ?? '';
+
+        _showAuthScreen('screen-invite');
+
+        // Password visibility toggle for invite form
+        document.getElementById('invite-pw-toggle')?.addEventListener('click', () => {
+            const input  = document.getElementById('invite-password');
+            const toggle = document.getElementById('invite-pw-toggle');
+            if (!input) return;
+            const isHidden = input.type === 'password';
+            input.type         = isHidden ? 'text' : 'password';
+            toggle.textContent = isHidden ? 'Hide' : 'Show';
+            toggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+        });
+
+        // Enter key support on invite fields
+        document.getElementById('invite-name')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
+        });
+        document.getElementById('invite-password')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
+        });
+
+        // Invite redemption
+        document.getElementById('invite-submit')?.addEventListener('click', async () => {
+            const name     = document.getElementById('invite-name')?.value?.trim();
+            const password = document.getElementById('invite-password')?.value;
+
+            if (!name) {
+                showAuthError('Please enter your full name.', 'invite');
+                return;
+            }
+            if (!password || password.length < 8) {
+                showAuthError('Your password needs to be at least 8 characters.', 'invite');
+                return;
+            }
+
+            const btn = document.getElementById('invite-submit');
+            btn.disabled    = true;
+            btn.textContent = 'Setting up your account…';
+
+            const result = await redeemInvite(inviteId, name, password);
+            if (!result.ok) {
+                btn.disabled    = false;
+                btn.textContent = 'Accept invite';
+                showAuthError(result.error, 'invite');
+            }
+            // On success, onAuthStateChanged fires and routes the user
+        });
+
+        return; // Do not wire sign-in listeners when on an invite link
     }
 
-    // Sign-in form
+    // ---------------------------------------------------------------------------
+    // Standard sign-in flow
+    // ---------------------------------------------------------------------------
+    _showAuthScreen('screen-signin');
+
     document.getElementById('auth-submit')?.addEventListener('click', async () => {
         const email    = document.getElementById('auth-email')?.value?.trim();
         const password = document.getElementById('auth-password')?.value;
@@ -134,19 +200,19 @@ async function initAuth() {
         }
 
         const btn = document.getElementById('auth-submit');
-        btn.disabled = true;
+        btn.disabled    = true;
         btn.textContent = 'Signing in…';
 
         const result = await signIn(email, password);
         if (!result.ok) {
-            btn.disabled = false;
+            btn.disabled    = false;
             btn.textContent = 'Sign in';
             showAuthError(result.error);
         }
         // On success, onAuthStateChanged fires and routes the user
     });
 
-    // Enter key on email or password fields submits the sign-in form
+    // Enter key on sign-in fields
     document.getElementById('auth-email')?.addEventListener('keydown', e => {
         if (e.key === 'Enter') document.getElementById('auth-submit')?.click();
     });
@@ -154,57 +220,45 @@ async function initAuth() {
         if (e.key === 'Enter') document.getElementById('auth-submit')?.click();
     });
 
-    // Password visibility toggle
+    // Password visibility toggle for sign-in form
     document.getElementById('auth-pw-toggle')?.addEventListener('click', () => {
         const input  = document.getElementById('auth-password');
         const toggle = document.getElementById('auth-pw-toggle');
         if (!input) return;
         const isHidden = input.type === 'password';
-        input.type       = isHidden ? 'text' : 'password';
+        input.type         = isHidden ? 'text' : 'password';
         toggle.textContent = isHidden ? 'Hide' : 'Show';
         toggle.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
     });
+}
 
-    // Enter key on invite fields submits the invite form
-    document.getElementById('invite-name')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
-    });
-    document.getElementById('invite-password')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter') document.getElementById('invite-submit')?.click();
-    });
-
-    // Invite redemption form
-    document.getElementById('invite-submit')?.addEventListener('click', async () => {
-        const name     = document.getElementById('invite-name')?.value?.trim();
-        const password = document.getElementById('invite-password')?.value;
-
-        if (!name || !password) {
-            showAuthError('Please enter your name and choose a password.');
-            return;
-        }
-        if (password.length < 8) {
-            showAuthError('Your password needs to be at least 8 characters.');
-            return;
-        }
-
-        const btn = document.getElementById('invite-submit');
-        btn.disabled = true;
-        btn.textContent = 'Setting up your account…';
-
-        const result = await redeemInvite(inviteId, name, password);
-        if (!result.ok) {
-            btn.disabled = false;
-            btn.textContent = 'Join the team';
-            showAuthError(result.error);
-        }
-        // On success, onAuthStateChanged fires and routes the user
+// ---------------------------------------------------------------------------
+// Show one of the named sub-screens within view-auth, hide the others.
+// ---------------------------------------------------------------------------
+function _showAuthScreen(id) {
+    const screens = [
+        'screen-signin',
+        'screen-invite',
+        'screen-invite-loading',
+        'screen-invite-invalid',
+    ];
+    screens.forEach(s => {
+        const el = document.getElementById(s);
+        if (el) el.style.display = s === id ? '' : 'none';
     });
 }
 
-function showAuthError(message) {
+// ---------------------------------------------------------------------------
+// Show an auth error. Pass context='invite' to target the invite screen's
+// error element, otherwise defaults to the sign-in screen's element.
+// ---------------------------------------------------------------------------
+function showAuthError(message, context = 'signin') {
+    // Both screens share the same error element ID — it's in whichever
+    // screen is currently visible. We can just find it by ID directly.
     const el = document.getElementById('auth-error');
     if (el) {
         el.textContent = message;
+        el.style.display = 'block';
         el.classList.add('visible');
     }
 }

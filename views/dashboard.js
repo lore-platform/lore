@@ -1190,6 +1190,11 @@ function renderInviteForm() {
             <h3 style="margin-bottom: var(--space-4);">Invite a team member</h3>
 
             <div class="auth-field">
+                <label class="label" for="inv-name">Their name</label>
+                <input class="input" id="inv-name" type="text" placeholder="First and last name">
+            </div>
+
+            <div class="auth-field mt-3">
                 <label class="label" for="inv-email">Email address</label>
                 <input class="input" id="inv-email" type="email" placeholder="their@email.com">
             </div>
@@ -1226,15 +1231,24 @@ function renderInviteForm() {
 
 function _attachInviteFormHandlers() {
     document.getElementById('generate-invite')?.addEventListener('click', async () => {
-        const email    = document.getElementById('inv-email')?.value?.trim();
-        const role     = document.getElementById('inv-role')?.value;
-        const title    = document.getElementById('inv-title')?.value?.trim();
+        const name      = document.getElementById('inv-name')?.value?.trim();
+        const email     = document.getElementById('inv-email')?.value?.trim();
+        const role      = document.getElementById('inv-role')?.value;
+        const title     = document.getElementById('inv-title')?.value?.trim();
         const seniority = document.getElementById('inv-seniority')?.value;
-        const errorEl  = document.getElementById('invite-error');
-        const resultEl = document.getElementById('invite-link-result');
+        const errorEl   = document.getElementById('invite-error');
+        const resultEl  = document.getElementById('invite-link-result');
 
-        if (!email) {
-            errorEl.textContent = 'Please enter an email address.';
+        // Basic email format validation — catches names typed into the email field
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (!name) {
+            errorEl.textContent = 'Please enter their name.';
+            errorEl.style.display = 'block';
+            return;
+        }
+        if (!email || !emailPattern.test(email)) {
+            errorEl.textContent = 'Please enter a valid email address.';
             errorEl.style.display = 'block';
             return;
         }
@@ -1249,9 +1263,10 @@ function _attachInviteFormHandlers() {
         const result = await generateInvite(_orgId, _uid, {
             email,
             role,
-            roleTitle: title,
+            roleTitle:   title,
             seniority,
-            orgName: _orgName,
+            orgName:     _orgName,
+            displayName: name,
         });
 
         btn.disabled    = false;
@@ -1267,7 +1282,7 @@ function _attachInviteFormHandlers() {
         resultEl.innerHTML = `
             <div class="card" style="border-left: 3px solid var(--sage);">
                 <p style="font-weight: 500; color: var(--sage); margin-bottom: var(--space-2);">Invite link ready</p>
-                <p class="text-secondary text-sm mb-3">Copy this link and send it to ${email}. It expires in 7 days.</p>
+                <p class="text-secondary text-sm mb-3">Copy this link and send it to ${name}. It expires in 7 days.</p>
                 <div style="display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;">
                     <input
                         class="input"

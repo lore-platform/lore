@@ -11,7 +11,9 @@
 
     <!-- Auth screen — shown when no user is signed in -->
     <div id="view-auth" class="active">
-        <div class="auth-screen">
+
+        <!-- Standard sign-in — shown when no invite param is present -->
+        <div id="screen-signin" class="auth-screen">
             <p class="auth-wordmark">LORE</p>
             <p class="auth-tagline">What your best people know</p>
 
@@ -54,37 +56,113 @@
                 <button class="btn btn-primary btn-full" id="auth-submit">
                     Sign in
                 </button>
+            </div>
+        </div>
 
-                <!-- Invite flow — shown when user arrives via invite link -->
-                <div id="invite-section" style="display: none; margin-top: var(--space-6);">
-                    <div class="divider"></div>
-                    <p id="invite-context" class="text-secondary text-sm mt-4"></p>
-                    <div class="auth-field mt-4">
-                        <label class="label" for="invite-name">Your name</label>
-                        <input
-                            class="input"
-                            id="invite-name"
-                            type="text"
-                            placeholder="First and last name"
-                            autocomplete="name"
-                        >
-                    </div>
-                    <div class="auth-field">
-                        <label class="label" for="invite-password">Choose a password</label>
+        <!-- Invite screen — shown when ?invite= is present in the URL -->
+        <!-- Populated by initAuth() once the invite document is read -->
+        <div id="screen-invite" class="auth-screen" style="display: none;">
+
+            <!-- Org identity bar — filled in by app.js with the org name -->
+            <div id="invite-org-bar" style="
+                text-align: center;
+                margin-bottom: var(--space-8);
+            ">
+                <p class="auth-wordmark" style="margin-bottom: var(--space-1);">LORE</p>
+                <p id="invite-org-name" class="auth-tagline" style="font-size: var(--text-base);"></p>
+            </div>
+
+            <div class="auth-card">
+                <div id="auth-error" class="auth-error" style="display:none;"></div>
+
+                <!-- Context line — e.g. "Judith, you've been invited to join Calloway & Partners" -->
+                <p id="invite-context" style="
+                    font-size: var(--text-base);
+                    font-weight: 600;
+                    margin-bottom: var(--space-2);
+                    line-height: 1.4;
+                "></p>
+                <p id="invite-role-line" style="
+                    color: var(--warm-grey);
+                    font-size: var(--text-sm);
+                    margin-bottom: var(--space-6);
+                    line-height: 1.5;
+                "></p>
+
+                <div class="auth-field">
+                    <label class="label" for="invite-name">Your full name</label>
+                    <input
+                        class="input"
+                        id="invite-name"
+                        type="text"
+                        placeholder="First and last name"
+                        autocomplete="name"
+                    >
+                </div>
+
+                <div class="auth-field">
+                    <label class="label" for="invite-email-display">Email</label>
+                    <input
+                        class="input"
+                        id="invite-email-display"
+                        type="email"
+                        disabled
+                        style="opacity: 0.6; cursor: not-allowed;"
+                    >
+                </div>
+
+                <div class="auth-field">
+                    <label class="label" for="invite-password">Choose a password</label>
+                    <div style="position: relative;">
                         <input
                             class="input"
                             id="invite-password"
                             type="password"
                             placeholder="At least 8 characters"
                             autocomplete="new-password"
+                            style="padding-right: 2.8rem;"
                         >
+                        <button
+                            type="button"
+                            id="invite-pw-toggle"
+                            aria-label="Show password"
+                            style="position:absolute;right:var(--space-3);top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:var(--warm-grey);font-size:var(--text-sm);line-height:1;"
+                        >Show</button>
                     </div>
-                    <button class="btn btn-primary btn-full" id="invite-submit">
-                        Join the team
-                    </button>
                 </div>
+
+                <button class="btn btn-primary btn-full" id="invite-submit" style="margin-top: var(--space-2);">
+                    Accept invite
+                </button>
+
+                <p style="
+                    text-align: center;
+                    font-size: var(--text-xs);
+                    color: var(--warm-grey);
+                    margin-top: var(--space-4);
+                    line-height: 1.5;
+                ">This invite expires in 7 days and can only be used once.</p>
             </div>
         </div>
+
+        <!-- Loading state — shown briefly while the invite document is fetched -->
+        <div id="screen-invite-loading" class="auth-screen" style="display: none;">
+            <p class="auth-wordmark">LORE</p>
+            <div class="spinner" style="margin-top: var(--space-8);"></div>
+        </div>
+
+        <!-- Invalid invite state — shown if the invite is not found, expired, or redeemed -->
+        <div id="screen-invite-invalid" class="auth-screen" style="display: none;">
+            <p class="auth-wordmark">LORE</p>
+            <div class="auth-card" style="margin-top: var(--space-8); text-align: center;">
+                <p style="font-weight: 600; margin-bottom: var(--space-3);">This invite isn't valid</p>
+                <p style="color: var(--warm-grey); font-size: var(--text-sm); line-height: 1.6;">
+                    It may have expired, already been used, or the link may be incomplete.
+                    Ask your manager to send you a new invite.
+                </p>
+            </div>
+        </div>
+
     </div>
 
     <!-- Shared navigation — shown for all authenticated views -->
