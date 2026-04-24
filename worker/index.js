@@ -107,6 +107,21 @@ export default {
         }
 
         // ---------------------------------------------------------------------------
+        // Route: redeemInviteClaims
+        // Called by auth.js immediately after a new user accepts an invite and their
+        // Firebase Auth account is created client-side. The Worker reads the invite
+        // document from Firestore using the service account token, validates orgId
+        // and role, then sets claims on the new account.
+        //
+        // No ADMIN_SECRET required — the invite document is the trust mechanism.
+        // The Worker verifies the invite exists and is not redeemed before setting
+        // anything. Body: { uid, inviteId }
+        // ---------------------------------------------------------------------------
+        if (mode === 'redeemInviteClaims') {
+            return handleRedeemInviteClaims(body, env, corsHeaders);
+        }
+
+        // ---------------------------------------------------------------------------
         // Routes: classify and generate — AI proxy
         // ---------------------------------------------------------------------------
         if (mode === 'classify' || mode === 'generate') {
@@ -211,6 +226,91 @@ async function handleLookupUidByEmail(body, env, corsHeaders) {
 // claims. The Worker does not use the Node Admin SDK — it uses the REST API
 // directly with a service account JWT, which works in any JS runtime.
 // =============================================================================
+// =============================================================================
+// redeemInviteClaims handler
+// Reads the invite document from Firestore server-side using the service
+// account token, extracts orgId and role, and sets claims on the new user.
+// This is the correct pattern for invite redemption — no admin secret is
+// needed because the invite document itself is the access control mechanism.
+// The Worker verifies the invite exists before setting anything.
+// =============================================================================
+async function handleRedeemInviteClaims(body, env, corsHeaders) {
+    const { uid, inviteId } = body;
+
+    if (!uid || !inviteId) {
+        return json({ error: 'uid and inviteId are required' }, 400, corsHeaders);
+    }
+
+    try {
+        const accessToken = await getServiceAccountToken(env);
+
+        // Step 1: Read the invite document from Firestore using the Admin REST API.
+        // The Firestore REST API returns fields in typed format, e.g.
+        // { "orgId": { "stringValue": "acme" }, "role": { "stringValue": "employee" } }
+        const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/invites/${inviteId}`;
+        const docRes = await fetch(firestoreUrl, {
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+        });
+
+        if (docRes.status === 404) {
+            return json({ error: 'Invite not found' }, 404, corsHeaders);
+        }
+        if (!docRes.ok) {
+            return json({ error: 'Could not read invite document' }, 500, corsHeaders);
+        }
+
+        const doc    = await docRes.json();
+        const fields = doc.fields;
+        if (!fields) {
+            return json({ error: 'Invite document is empty' }, 400, corsHeaders);
+        }
+
+        const orgId   = fields.orgId?.stringValue;
+        const role    = fields.role?.stringValue;
+        const redeemed = fields.redeemed?.booleanValue ?? false;
+
+        if (!orgId || !role) {
+            return json({ error: 'Invite missing orgId or role' }, 400, corsHeaders);
+        }
+        if (redeemed) {
+            return json({ error: 'Invite already redeemed' }, 409, corsHeaders);
+        }
+        if (!['employee', 'reviewer'].includes(role)) {
+            return json({ error: 'Invalid role on invite' }, 400, corsHeaders);
+        }
+
+        // Step 2: Set custom claims on the new Firebase Auth account.
+        // Uses the same pattern as handleSetClaims.
+        const claimsPayload = JSON.stringify({ [orgId]: true, orgId, role });
+        const claimsUrl = `https://identitytoolkit.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/accounts:update`;
+
+        const claimsRes = await fetch(claimsUrl, {
+            method:  'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type':  'application/json',
+            },
+            body: JSON.stringify({
+                localId:          uid,
+                customAttributes: claimsPayload,
+            }),
+        });
+
+        if (!claimsRes.ok) {
+            const err = await claimsRes.json().catch(() => ({}));
+            console.error('LORE Worker: redeemInviteClaims — claims update failed:', err);
+            return json({ error: 'Failed to set claims', detail: err }, 500, corsHeaders);
+        }
+
+        console.log('LORE Worker: redeemInviteClaims — claims set. uid:', uid, 'orgId:', orgId, 'role:', role);
+        return json({ ok: true, uid, orgId, role }, 200, corsHeaders);
+
+    } catch (err) {
+        console.error('LORE Worker: redeemInviteClaims error:', err.message);
+        return json({ error: err.message }, 500, corsHeaders);
+    }
+}
+
 async function handleSetClaims(body, env, corsHeaders) {
     const { uid, orgId, role, adminSecret } = body;
 

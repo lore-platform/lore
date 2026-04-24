@@ -74,8 +74,6 @@ export async function redeemInvite(inviteId, name, password) {
     }
 
     // 4. Create the Firebase Auth account.
-    // Note: custom claims (orgId, role) are set by a Cloud Function triggered
-    // on user creation. The invite document is the access control mechanism.
     let userCredential;
     try {
         userCredential = await createUserWithEmailAndPassword(auth, invite.email, password);
@@ -83,15 +81,46 @@ export async function redeemInvite(inviteId, name, password) {
         return { ok: false, error: friendlyAuthError(err.code) };
     }
 
-    // 5. Mark the invite as redeemed
+    const uid = userCredential.user.uid;
+
+    // 5. Set custom claims via the Cloudflare Worker's redeemInviteClaims route.
+    // The Worker reads the invite document server-side using its service account
+    // token, validates it, and sets orgId + role claims on the new account.
+    // No admin secret is needed — the invite document is the trust mechanism.
+    // There is no Cloud Function — claims must be set explicitly here.
+    // We ping first to avoid a cold-start timeout on the real call.
+    console.log('LORE auth.js: Setting claims for invited user uid:', uid);
+    try {
+        await fetch('https://lore-worker.slop-runner.workers.dev', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ mode: 'ping' }),
+        }).catch(() => {});
+
+        const claimsRes = await fetch('https://lore-worker.slop-runner.workers.dev', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ mode: 'redeemInviteClaims', uid, inviteId }),
+        });
+
+        const claimsData = await claimsRes.json().catch(() => ({}));
+        if (!claimsData.ok) {
+            console.warn('LORE auth.js: redeemInviteClaims failed:', claimsData.error);
+        } else {
+            console.log('LORE auth.js: Claims set successfully for uid:', uid);
+        }
+    } catch (err) {
+        console.warn('LORE auth.js: redeemInviteClaims fetch failed:', err.message);
+    }
+
+    // 6. Mark the invite as redeemed
     try {
         await updateDoc(inviteRef, {
             redeemed:    true,
             redeemedAt:  serverTimestamp(),
-            redeemedBy:  userCredential.user.uid
+            redeemedBy:  uid,
         });
     } catch {
-        // Non-fatal — invite may be marked redeemed on next sign-in check
         console.warn('LORE: Could not mark invite as redeemed.');
     }
 
