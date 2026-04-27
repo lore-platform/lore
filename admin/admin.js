@@ -71,12 +71,17 @@ const FIREBASE_API_KEY = 'AIzaSyBW_PE2RiIs-4_tAoOtKdQLXijh9-WNv7Q';
 
 // Demo org constants — single source of truth, used by both seed and provision
 const DEMO = {
-    orgId:       'lore-demo',
-    orgName:     'Meridian Advisory',
-    industry:    'Consulting',
-    managerName: 'Adaeze Okafor',
-    managerEmail:'adaeze@meridian.com',
-    roleTitle:   'Head of L&D',
+    orgId:         'lore-demo',
+    orgName:       'Meridian Advisory',
+    industry:      'Consulting',
+    managerName:   'Adaeze Okafor',
+    managerEmail:  'adaeze@meridian.com',
+    roleTitle:     'Head of L&D',
+    // Interactive demo accounts — real Firebase Auth accounts so anyone can sign in
+    employeeEmail: 'demo.employee@meridian-demo.co',
+    reviewerEmail: 'demo.reviewer@meridian-demo.co',
+    employeeName:  'Lena Marsh',
+    reviewerName:  'David Osei',
 };
 
 // Session-only — entered at runtime, never stored
@@ -734,7 +739,7 @@ async function runDemoSeedFlow() {
 
     // Total steps: provision (6) + 1 org profile + 5 domains + 25 recipes
     // (each with 3 scenarios counted within) + 8 employees + 3 contributions + 1 reviewer
-    const TOTAL = 6 + 1 + 5 + 25 + 8 + 3 + 1;
+    const TOTAL = 6 + 1 + 5 + 25 + 8 + 3 + 1 + 4; // +4: employee Auth+claims, reviewer Auth+claims
     initDemoProgress(TOTAL);
     clearDemoStatus();
 
@@ -878,8 +883,8 @@ async function runDemoSeedFlow() {
             demoTick(`Contribution: ${c.sourceType}`);
         }
 
-        // Reviewer user doc
-        demoLog('Writing Reviewer user…');
+        // Reviewer user doc (simulated, no Auth account — for dashboard data only)
+        demoLog('Writing simulated Reviewer user…');
         await setDoc(doc(db, 'organisations', DEMO.orgId, 'users', 'demo-reviewer-001'), {
             displayName: 'Marcus Obi',
             email:       'marcus@meridian-demo.co',
@@ -890,33 +895,115 @@ async function runDemoSeedFlow() {
             createdAt:   serverTimestamp(),
             isDemo:      true,
         });
-        demoTick('Reviewer: Marcus Obi');
+        demoTick('Simulated Reviewer: Marcus Obi');
+
+        // ---------------------------------------------------------------------------
+        // Interactive demo accounts — real Firebase Auth accounts so anyone can sign
+        // in and experience the Employee training view and Reviewer tasks view.
+        // Separate from the simulated employees above which exist only as data.
+        // ---------------------------------------------------------------------------
+        const demoPassword = 'MeridianDemo2026!';
+
+        // Employee interactive account
+        demoLog('Creating interactive Employee Auth account…');
+        let empUid;
+        try {
+            empUid = await createFirebaseAuthUser(DEMO.employeeEmail, demoPassword);
+            demoTick(`Employee Auth account created — UID: ${empUid}`);
+        } catch (err) {
+            throw new Error(`Could not create Employee Auth account: ${err.message}`);
+        }
+
+        demoLog('Setting Employee claims…');
+        await setClaims(empUid, DEMO.orgId, 'employee');
+        demoTick('Employee claims set');
+
+        await setDoc(doc(db, 'organisations', DEMO.orgId, 'users', empUid), {
+            displayName:   DEMO.employeeName,
+            email:         DEMO.employeeEmail,
+            role:          'employee',
+            roleTitle:     'Consultant',
+            seniority:     'junior',
+            orgId:         DEMO.orgId,
+            xp:            0,
+            streak:        0,
+            sessionsTotal: 0,
+            domainMastery: {},
+            lastTrainedAt: null,
+            createdAt:     serverTimestamp(),
+            isDemo:        true,
+            isInteractive: true,
+        });
+
+        // Reviewer interactive account
+        demoLog('Creating interactive Reviewer Auth account…');
+        let revUid;
+        try {
+            revUid = await createFirebaseAuthUser(DEMO.reviewerEmail, demoPassword);
+            demoTick(`Reviewer Auth account created — UID: ${revUid}`);
+        } catch (err) {
+            throw new Error(`Could not create Reviewer Auth account: ${err.message}`);
+        }
+
+        demoLog('Setting Reviewer claims…');
+        await setClaims(revUid, DEMO.orgId, 'reviewer');
+        demoTick('Reviewer claims set');
+
+        await setDoc(doc(db, 'organisations', DEMO.orgId, 'users', revUid), {
+            displayName:   DEMO.reviewerName,
+            email:         DEMO.reviewerEmail,
+            role:          'reviewer',
+            roleTitle:     'Senior Consultant',
+            seniority:     'senior',
+            orgId:         DEMO.orgId,
+            createdAt:     serverTimestamp(),
+            isDemo:        true,
+            isInteractive: true,
+        });
+
+        // Seed two pending tasks for the interactive Reviewer so they see prompts
+        // immediately on first sign-in rather than "You're all caught up".
+        await addDoc(collection(db, 'organisations', DEMO.orgId, 'users', revUid, 'tasks'), {
+            type:         'scenario_review',
+            status:       'pending',
+            scenarioText: `You are two weeks into an operational transformation engagement. In the first client meeting, the Operations Director brought six members of his team and spent the first 30 minutes describing everything the previous consultants had recommended that hadn't worked. The CFO asked several questions about what was and wasn't in scope. Does this feel like a situation your team actually encounters?`,
+            createdAt:    serverTimestamp(),
+        });
+        await addDoc(collection(db, 'organisations', DEMO.orgId, 'users', revUid, 'tasks'), {
+            type:             'mentorship_note',
+            status:           'pending',
+            scenarioText:     'A client sponsor has become harder to reach. Calls get rescheduled. Responses are slower than usual. What would be the right move at this point in the engagement?',
+            employeeResponse: 'I would send a detailed status update email to keep them informed and show we are making progress.',
+            createdAt:        serverTimestamp(),
+        });
 
         await writeLog({
             action:  'seed',
             orgId:   DEMO.orgId,
             orgName: DEMO.orgName,
-            detail:  `Demo data seeded. Manager UID: ${uid}. ${DEMO_RECIPES.length} recipes, ${DEMO_EMPLOYEES.length} employees.`,
+            detail:  `Demo data seeded. Manager UID: ${uid}. Employee UID: ${empUid}. Reviewer UID: ${revUid}. ${DEMO_RECIPES.length} recipes, ${DEMO_EMPLOYEES.length} simulated employees.`,
             outcome: 'success',
             errorMsg: null,
         });
 
         demoLog('✓ All done — demo fully seeded.', 'ok');
-        // Write the demo credentials into the org profile document so they are
-        // retrievable from any machine via the admin page. The password is a
-        // generated throwaway for a demo account — not a real user credential.
+        // Write all three sets of credentials into the org profile document so they are
+        // retrievable from any machine via the admin page.
         await updateDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'), {
             demoCredentials: {
-                email:    DEMO.managerEmail,
-                password: tempPassword,
-                url:      'https://lore-platform.github.io/lore/',
-                seededAt: serverTimestamp(),
+                url:             'https://lore-platform.github.io/lore/',
+                seededAt:        serverTimestamp(),
+                managerEmail:    DEMO.managerEmail,
+                managerPassword: tempPassword,
+                employeeEmail:   DEMO.employeeEmail,
+                reviewerEmail:   DEMO.reviewerEmail,
+                sharedPassword:  demoPassword,
             },
         });
 
         demoLog('✓ All done — demo fully seeded.');
         showDemoStatus(
-            `✓ Demo seeded. Sign in at https://lore-platform.github.io/lore/ · Email: ${DEMO.managerEmail} · Password: ${tempPassword}`,
+            `✓ Demo seeded. Manager: ${DEMO.managerEmail} · Employee: ${DEMO.employeeEmail} · Reviewer: ${DEMO.reviewerEmail} · Shared password (Employee & Reviewer): ${demoPassword}`,
             'ok'
         );
         await loadDemoCreds();
@@ -955,36 +1042,53 @@ async function runDemoReset() {
     clearDemoStatus();
 
     const subCollections = ['users', 'recipes', 'scenarios', 'extractions', 'domains'];
-    initDemoProgress(subCollections.length + 3); // subs + profile/data + top-level doc + auth
+    // Progress total: auth deletions (3) + sub-collections + profile/data + top-level doc
+    initDemoProgress(3 + subCollections.length + 2);
 
     demoLog('Starting reset for org: ' + DEMO.orgId);
 
-    // 1. Delete Firebase Auth account for the Manager.
-    // Two-pass approach: first look in the Firestore users sub-collection (normal case),
-    // then fall back to email lookup (catches orphaned accounts from failed seed runs
-    // where the Auth account was created before the Firestore write happened).
+    // 1. Delete Firebase Auth accounts for Manager, Employee, and Reviewer.
+    // Two-pass approach per account: Firestore user doc first, then email lookup
+    // as a fallback for orphaned accounts from partial seed runs.
+    const authAccounts = [
+        { label: 'Manager',  email: DEMO.managerEmail,  role: 'manager'  },
+        { label: 'Employee', email: DEMO.employeeEmail, role: 'employee' },
+        { label: 'Reviewer', email: DEMO.reviewerEmail, role: 'reviewer' },
+    ];
+
+    // Fetch users sub-collection once for all three lookups
+    let usersSnapForReset;
     try {
-        let managerUid = null;
+        usersSnapForReset = await getDocs(collection(db, 'organisations', DEMO.orgId, 'users'));
+    } catch {
+        usersSnapForReset = { docs: [] };
+    }
 
-        // Pass 1: find UID from Firestore user doc
-        const usersSnap  = await getDocs(collection(db, 'organisations', DEMO.orgId, 'users'));
-        const managerDoc = usersSnap.docs.find(d => d.data().role === 'manager');
-        if (managerDoc) managerUid = managerDoc.id;
+    for (const account of authAccounts) {
+        try {
+            let accountUid = null;
 
-        // Pass 2: if not in Firestore, look up by email directly in Firebase Auth
-        if (!managerUid) {
-            managerUid = await lookupUidByEmail(DEMO.managerEmail);
+            // Pass 1: find UID from Firestore user doc by role
+            const userDoc = usersSnapForReset.docs.find(d => d.data().role === account.role && !d.data().isDemo === false);
+            // For interactive accounts, also match by email to avoid picking simulated users
+            const exactDoc = usersSnapForReset.docs.find(d => d.data().email === account.email);
+            if (exactDoc) accountUid = exactDoc.id;
+
+            // Pass 2: if not in Firestore, look up by email directly in Firebase Auth
+            if (!accountUid) {
+                accountUid = await lookupUidByEmail(account.email);
+            }
+
+            if (accountUid) {
+                await deleteFirebaseAuthUser(accountUid);
+                demoTick(`Deleted: ${account.label} Firebase Auth account (UID: ${accountUid})`);
+            } else {
+                demoTick(`No ${account.label} Auth account found — skipped`);
+            }
+        } catch (err) {
+            demoLog(`Could not delete ${account.label} Auth account: ${err.message}`, 'err');
+            demoTick(`${account.label} Auth account — error (see above)`);
         }
-
-        if (managerUid) {
-            await deleteFirebaseAuthUser(managerUid);
-            demoTick(`Deleted: Manager Firebase Auth account (UID: ${managerUid})`);
-        } else {
-            demoTick('No Manager Auth account found — skipped');
-        }
-    } catch (err) {
-        demoLog(`Could not delete Manager Auth account: ${err.message}`, 'err');
-        demoTick('Auth account — error (see above)');
     }
 
     // 2. Delete sub-collections
@@ -1096,13 +1200,44 @@ async function loadDemoCreds() {
             ? creds.seededAt.toDate().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
             : 'recently';
 
+        // Support both old schema (single email/password) and new schema (three accounts)
+        const isNewSchema = !!(creds.managerEmail);
         container.innerHTML = `
             <div style="margin-top: var(--space-4); padding: var(--space-4); background: var(--surface-2, #f5f0eb); border-radius: var(--radius-md, 8px); border: 1px solid var(--border, rgba(0,0,0,0.08));">
                 <p class="label" style="margin-bottom: var(--space-3); font-size: var(--text-sm);">Demo sign-in details</p>
-                <p class="text-sm" style="margin-bottom: var(--space-2);">
+                <p class="text-sm" style="margin-bottom: var(--space-3);">
                     <span style="color: var(--warm-grey);">URL</span>&ensp;
                     <a href="${creds.url}" target="_blank" style="color: var(--ember);">${creds.url}</a>
                 </p>
+
+                ${isNewSchema ? `
+                <table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);margin-bottom:var(--space-3);">
+                    <thead>
+                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.08));">
+                            <th style="text-align:left;padding:var(--space-1) var(--space-2) var(--space-2) 0;color:var(--warm-grey);font-weight:500;">Role</th>
+                            <th style="text-align:left;padding:var(--space-1) var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Email</th>
+                            <th style="text-align:left;padding:var(--space-1) 0 var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Password</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.05));">
+                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Manager</td>
+                            <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.managerEmail}</code></td>
+                            <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.managerPassword}</code></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.05));">
+                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Employee</td>
+                            <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.employeeEmail}</code></td>
+                            <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.sharedPassword}</code></td>
+                        </tr>
+                        <tr>
+                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Reviewer</td>
+                            <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.reviewerEmail}</code></td>
+                            <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.sharedPassword}</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+                ` : `
                 <p class="text-sm" style="margin-bottom: var(--space-2);">
                     <span style="color: var(--warm-grey);">Email</span>&ensp;
                     <code style="user-select: all; font-size: var(--text-sm);">${creds.email}</code>
@@ -1111,6 +1246,8 @@ async function loadDemoCreds() {
                     <span style="color: var(--warm-grey);">Password</span>&ensp;
                     <code style="user-select: all; font-size: var(--text-sm);">${creds.password}</code>
                 </p>
+                `}
+
                 <p class="text-xs" style="color: var(--warm-grey);">Seeded ${seededAt}. Cleared automatically on Reset.</p>
             </div>
         `;
