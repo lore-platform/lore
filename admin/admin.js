@@ -47,10 +47,13 @@ import {
     getDocs,
     setDoc,
     addDoc,
+    updateDoc,
     deleteDoc,
     query,
+    where,
     orderBy,
     limit,
+    startAfter,
     serverTimestamp,
     Timestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
@@ -89,10 +92,79 @@ let _adminSecret  = null;
 let _adminEmail   = null;
 
 // Activity log pagination state
-let _logLastDoc   = null;   // last Firestore doc snapshot for cursor-based pagination
-let _logPage      = 1;
-let _logFilter    = '';     // ISO date string 'YYYY-MM-DD' or '' for no filter
+let _logLastDoc  = null;   // Firestore cursor doc for startAfter pagination
+let _logPage     = 1;
+let _logFilter   = '';     // ISO date 'YYYY-MM-DD' or '' for no filter
 const LOG_PAGE_SIZE = 10;
+
+// Activity log pagination state
+
+// =============================================================================
+// MODAL SYSTEM
+// Custom confirm/alert modals — replaces all browser confirm() and alert() calls.
+//
+// Usage:
+//   const confirmed = await showConfirm('Title', 'Body text.', { dangerConfirm: true });
+//   if (!confirmed) return;
+//   await showAlert('Title', 'Something to acknowledge.');
+// =============================================================================
+
+function _ensureModal() {
+    if (document.getElementById('lore-modal')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'lore-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;background:rgba(28,22,14,0.55);backdrop-filter:blur(2px);padding:var(--space-4);';
+    overlay.innerHTML = `
+        <div style="background:var(--surface-1,#faf7f4);border:1px solid rgba(44,36,22,0.12);border-radius:var(--radius-lg,12px);padding:var(--space-6);max-width:420px;width:100%;box-shadow:0 8px 32px rgba(28,22,14,0.18);">
+            <p id="lore-modal-title" style="font-size:var(--text-base);font-weight:600;margin-bottom:var(--space-3);line-height:1.4;"></p>
+            <p id="lore-modal-body"  style="font-size:var(--text-sm);color:var(--warm-grey);line-height:1.6;margin-bottom:var(--space-6);white-space:pre-line;"></p>
+            <div id="lore-modal-actions" style="display:flex;gap:var(--space-3);justify-content:flex-end;"></div>
+        </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => {
+        if (e.target === overlay && overlay.dataset.dismissible === 'true') { _closeModal(); overlay._resolve?.(); }
+    });
+}
+
+function showConfirm(title, body, { confirmLabel = 'Confirm', cancelLabel = 'Cancel', dangerConfirm = false } = {}) {
+    _ensureModal();
+    document.getElementById('lore-modal-title').textContent = title;
+    document.getElementById('lore-modal-body').textContent  = body;
+    const overlay = document.getElementById('lore-modal');
+    overlay.dataset.dismissible = 'false';
+    document.getElementById('lore-modal-actions').innerHTML = `
+        <button id="lore-modal-cancel"  class="btn btn-secondary" style="font-size:var(--text-sm);">${cancelLabel}</button>
+        <button id="lore-modal-confirm" class="btn ${dangerConfirm ? '' : 'btn-primary'}" style="font-size:var(--text-sm);${dangerConfirm ? 'background:var(--error,#b83232);color:#fff;border-color:var(--error,#b83232);' : ''}">${confirmLabel}</button>`;
+    overlay.style.display = 'flex';
+    requestAnimationFrame(() => document.getElementById('lore-modal-confirm')?.focus());
+    return new Promise(resolve => {
+        overlay._resolve = resolve;
+        document.getElementById('lore-modal-cancel').onclick  = () => { _closeModal(); resolve(false); };
+        document.getElementById('lore-modal-confirm').onclick = () => { _closeModal(); resolve(true);  };
+    });
+}
+
+function showAlert(title, body, { label = 'OK' } = {}) {
+    _ensureModal();
+    document.getElementById('lore-modal-title').textContent = title;
+    document.getElementById('lore-modal-body').textContent  = body;
+    const overlay = document.getElementById('lore-modal');
+    overlay.dataset.dismissible = 'true';
+    document.getElementById('lore-modal-actions').innerHTML = `
+        <button id="lore-modal-ok" class="btn btn-primary" style="font-size:var(--text-sm);">${label}</button>`;
+    overlay.style.display = 'flex';
+    requestAnimationFrame(() => document.getElementById('lore-modal-ok')?.focus());
+    return new Promise(resolve => {
+        overlay._resolve = resolve;
+        document.getElementById('lore-modal-ok').onclick = () => { _closeModal(); resolve(); };
+    });
+}
+
+function _closeModal() {
+    const el = document.getElementById('lore-modal');
+    if (el) el.style.display = 'none';
+}
+
 
 // ---------------------------------------------------------------------------
 // Auth gate
@@ -344,7 +416,12 @@ async function loadOrgList() {
             // Delete button — now shows inline progress log
             document.getElementById(`delete-org-${orgId}`)?.addEventListener('click', async () => {
                 const label = orgData.orgName ?? orgId;
-                if (!confirm(`Delete "${label}" and all its data? This removes the Firestore org and the Manager's Firebase Auth account. This cannot be undone.`)) return;
+                const confirmed = await showConfirm(
+                    `Delete "${label}"?`,
+                    `This removes the Firestore org, all sub-collections, and the Manager's Firebase Auth account. This cannot be undone.`,
+                    { confirmLabel: 'Delete', dangerConfirm: true }
+                );
+                if (!confirmed) return;
                 const btn    = document.getElementById(`delete-org-${orgId}`);
                 const logEl  = document.getElementById(`delete-log-${orgId}`);
                 btn.disabled = true; btn.textContent = 'Deleting…';
@@ -807,18 +884,22 @@ function provisionLog(msg, type = '') {
 // =============================================================================
 
 document.getElementById('demo-seed-btn').addEventListener('click', async () => {
-    if (!confirm(
-        'This will provision the Meridian Advisory demo Manager account and seed all demo data.\n\n' +
-        'Run Reset first if you have seeded before.'
-    )) return;
+    const seedOk = await showConfirm(
+        'Provision + Seed demo?',
+        'This will provision the Meridian Advisory demo Manager account and seed all demo data.\n\nRun Reset first if you have seeded before.',
+        { confirmLabel: 'Provision + Seed' }
+    );
+    if (!seedOk) return;
     await runDemoSeedFlow();
 });
 
 document.getElementById('demo-reset-btn').addEventListener('click', async () => {
-    if (!confirm(
-        'Delete ALL data for the lore-demo org?\n\n' +
-        'This removes all Firestore data and the Manager\'s Firebase Auth account. Cannot be undone.'
-    )) return;
+    const resetOk = await showConfirm(
+        'Reset demo data?',
+        'This deletes ALL data for the lore-demo org, including all Firestore data and the Manager, Employee, and Reviewer Auth accounts. Cannot be undone.',
+        { confirmLabel: 'Reset', dangerConfirm: true }
+    );
+    if (!resetOk) return;
     await runDemoReset();
 });
 
@@ -1550,7 +1631,12 @@ async function _loadLogPage(targetPage) {
 // Delete all log entries in the currently selected filter period (or all if no filter).
 async function deleteLogEntries() {
     const periodLabel = _logFilter ? `on ${_logFilter}` : 'all time';
-    if (!confirm(`Delete all activity log entries for ${periodLabel}? This cannot be undone.`)) return;
+    const deleteOk = await showConfirm(
+        'Delete log entries?',
+        `Delete all activity log entries for ${periodLabel}? This cannot be undone.`,
+        { confirmLabel: 'Delete entries', dangerConfirm: true }
+    );
+    if (!deleteOk) return;
 
     const listEl = document.getElementById('activity-log-list');
     listEl.innerHTML = '<p class="text-secondary text-sm">Deleting…</p>';
