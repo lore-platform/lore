@@ -51,6 +51,19 @@ let _clusters  = [];
 // Which section of the dashboard is currently active
 let _activeSection = 'overview';
 
+// Upload state — persisted across tab switches so an in-progress or completed
+// extraction is not lost when the Manager clicks to another tab and back.
+let _uploadState = {
+    inProgress: false,   // true while the AI call is running
+    docName:    '',      // last entered document name
+    docText:    '',      // last entered document content
+    result:     null,    // { ok, extractions } from processDocument(), or null
+    errorMsg:   '',      // error string if result failed
+};
+
+// First-run onboarding — shown once per session, skipped after dismissed.
+let _onboardingDismissed = false;
+
 // ---------------------------------------------------------------------------
 // Entry point — called by app.js after auth.
 // ---------------------------------------------------------------------------
@@ -323,6 +336,100 @@ function renderDashboard(container) {
     // Render the default section
     _setActiveTab(_activeSection);
     renderSection(_activeSection);
+
+    // Show first-run onboarding overlay on the very first load of the session.
+    // Once dismissed it stays dismissed for the session (not persisted — it is
+    // cheap to show once per login and the Manager may want to revisit it).
+    if (!_onboardingDismissed) {
+        _onboardingDismissed = true;
+        _showOnboarding();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// First-run onboarding overlay.
+// Plain language walkthrough of what LORE does and what each tab is for.
+// Shown once per session. Skippable. Does not block use of the dashboard.
+// ---------------------------------------------------------------------------
+function _showOnboarding() {
+    const steps = [
+        {
+            title: 'Welcome to your LORE dashboard',
+            body: 'LORE turns what your most experienced people know into training scenarios for the rest of your team. This quick guide explains what each part of the dashboard does. You can skip it at any time.',
+        },
+        {
+            title: 'Start with knowledge',
+            body: 'The ‘Add knowledge’ tab is where everything begins. Paste in any internal document — a retrospective, a playbook, a post-mortem — and LORE finds the decision-making moments inside it. Those moments become training material.',
+        },
+        {
+            title: 'Review what LORE extracts',
+            body: 'The ‘Review queue’ is your quality gate. Every time LORE processes a document, it drafts Career Recipes for you to approve. Read each one, edit the wording if needed, and decide what goes into the knowledge base.',
+        },
+        {
+            title: 'Confirm your skill areas',
+            body: 'The ‘Skill areas’ tab is where LORE groups your recipes into training domains. Once you have enough recipes, LORE will propose clusters — you confirm, rename, or adjust them. These become the areas your team trains in.',
+        },
+        {
+            title: 'Invite your team',
+            body: 'Use the ‘Team’ tab to invite Employees and Reviewers. Employees train through AI-generated scenarios. Reviewers — your senior people — receive occasional prompts that capture their instincts without taking them away from real work.',
+        },
+        {
+            title: 'Track development',
+            body: 'The ‘Team progress’ and ‘Time to readiness’ tabs show how each person is developing and when they are likely to reach a useful capability level. Use this to plan who is ready for more complex work.',
+        },
+    ];
+
+    let stepIndex = 0;
+
+    // Build overlay
+    const overlay = document.createElement('div');
+    overlay.id = 'lore-onboarding';
+    overlay.style.cssText = [
+        'position:fixed;inset:0;z-index:8888',
+        'display:flex;align-items:center;justify-content:center',
+        'background:rgba(28,22,14,0.45);backdrop-filter:blur(2px)',
+        'padding:var(--space-4)',
+    ].join(';');
+
+    function renderStep() {
+        const step = steps[stepIndex];
+        const isLast = stepIndex === steps.length - 1;
+        const dots = steps.map((_, i) =>
+            `<span style="width:6px;height:6px;border-radius:50%;background:${i === stepIndex ? 'var(--ember)' : 'rgba(44,36,22,0.2)'};display:inline-block;margin:0 3px;"></span>`
+        ).join('');
+
+        overlay.innerHTML = `
+            <div style="background:var(--surface-1,#faf7f4);border:1px solid rgba(44,36,22,0.1);border-radius:var(--radius-lg,12px);padding:var(--space-8);max-width:480px;width:100%;box-shadow:0 8px 40px rgba(28,22,14,0.2);">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-6);">
+                    <span style="font-size:var(--text-xs);color:var(--warm-grey);">${stepIndex + 1} of ${steps.length}</span>
+                    <button id="onb-skip" style="background:none;border:none;cursor:pointer;color:var(--warm-grey);font-size:var(--text-sm);padding:0;">Skip guide</button>
+                </div>
+                <h2 style="margin-bottom:var(--space-4);font-size:var(--text-xl);line-height:1.3;">${step.title}</h2>
+                <p style="color:var(--warm-grey);line-height:1.7;font-size:var(--text-sm);margin-bottom:var(--space-8);">${step.body}</p>
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <div>${dots}</div>
+                    <div style="display:flex;gap:var(--space-3);">
+                        ${stepIndex > 0 ? '<button id="onb-back" class="btn btn-secondary" style="font-size:var(--text-sm);">Back</button>' : ''}
+                        <button id="onb-next" class="btn btn-primary" style="font-size:var(--text-sm);">${isLast ? 'Get started' : 'Next'}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('onb-skip')?.addEventListener('click', () => overlay.remove());
+        document.getElementById('onb-next')?.addEventListener('click', () => {
+            if (isLast) { overlay.remove(); return; }
+            stepIndex++;
+            renderStep();
+        });
+        document.getElementById('onb-back')?.addEventListener('click', () => {
+            stepIndex--;
+            renderStep();
+        });
+    }
+
+    renderStep();
+    document.body.appendChild(overlay);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +482,20 @@ function renderSection(section, opts = {}) {
         case 'team':       renderTeam(el, opts);          break;
         default:           renderOverview(el);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Section header helper — every tab gets a title and a plain-language
+// description of what it does and why the Manager should care about it.
+// This replaces the pattern of each section managing its own h3/p header.
+// ---------------------------------------------------------------------------
+function _sectionHeader(title, description) {
+    return `
+        <div style="margin-bottom: var(--space-6);">
+            <h2 style="margin-bottom: var(--space-2);">${title}</h2>
+            <p class="text-secondary text-sm" style="max-width: 600px; line-height: 1.6;">${description}</p>
+        </div>
+    `;
 }
 
 // ---------------------------------------------------------------------------
@@ -501,8 +622,12 @@ function renderCoverageHeatMap(byDomain) {
 // All approved recipes listed by skill area.
 // ---------------------------------------------------------------------------
 function renderKnowledgeBase(el) {
+    const header = _sectionHeader(
+        'Knowledge base',
+        'These are the approved Career Recipes that power your team\'s training scenarios. Each recipe captures one specific skill — a decision, a behaviour, a judgement call — that your best people use in the field. The more recipes you have in a skill area, the more varied and realistic the training scenarios your team gets.'
+    );
     if (_recipes.length === 0) {
-        el.innerHTML = `
+        el.innerHTML = header + `
             <div class="empty-state">
                 <h3>No recipes yet</h3>
                 <p class="mt-2">Upload a document or invite a Reviewer to start building your knowledge base.</p>
@@ -524,6 +649,7 @@ function renderKnowledgeBase(el) {
     });
 
     el.innerHTML = `
+        ${header}
         <div>
             <p class="text-secondary text-sm mb-6">${_recipes.length} recipe${_recipes.length !== 1 ? 's' : ''} across ${Object.keys(byDomain).length} skill area${Object.keys(byDomain).length !== 1 ? 's' : ''}</p>
             ${Object.entries(byDomain).map(([domain, recipes]) => `
@@ -680,8 +806,13 @@ function renderRecipeCard(r) {
 // edit and approve, or reject. Each approved extraction becomes a live recipe.
 // ---------------------------------------------------------------------------
 function renderReviewQueue(el) {
+    const _rqHeader = _sectionHeader(
+        'Review queue',
+        'When LORE processes a document or a Reviewer contribution, it extracts draft Career Recipes for you to review. This is your quality gate — you decide what goes into the knowledge base and what gets discarded. Read each draft, edit the wording if needed, and either add it to the knowledge base or discard it.'
+    );
     if (_pending.length === 0) {
         el.innerHTML = `
+        ${_rqHeader}
             <div class="empty-state">
                 <h3>Nothing to review</h3>
                 <p class="mt-2">When Reviewers submit feedback or you upload a document, the extracted knowledge will appear here for your sign-off.</p>
@@ -876,94 +1007,146 @@ function _attachExtractionHandlers(ext, index, el) {
 // extraction, knowledge base, or recipes.
 // ---------------------------------------------------------------------------
 function renderUpload(el) {
+    // Section header — tells the Manager exactly what this tab is for
+    const sectionHeader = _sectionHeader(
+        'Add knowledge',
+        'Paste in any document that captures how your team works — a retrospective, a playbook, a post-mortem, a process note. LORE reads it and pulls out the decision-making moments that become training scenarios for your team.'
+    );
+
+    // If an extraction is currently in progress (Manager navigated away mid-run),
+    // show the in-progress state so they know it has not been lost.
+    if (_uploadState.inProgress) {
+        el.innerHTML = `
+            ${sectionHeader}
+            <div class="card mt-6">
+                <div class="empty-state">
+                    <div class="spinner"></div>
+                    <p class="text-secondary mt-4">Still reading <strong>${_uploadState.docName || 'your document'}</strong>…</p>
+                    <p class="text-secondary text-sm mt-2">This usually takes 10–20 seconds. You can keep using other tabs — the result will be waiting here when it is done.</p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    // If a completed result is stored, show it straight away without re-rendering the form
+    if (_uploadState.result) {
+        const result = _uploadState.result;
+        let resultHtml;
+        if (!result.ok) {
+            resultHtml = `<p class="text-secondary text-sm" style="color: var(--error);">${_uploadState.errorMsg || 'Could not process the document right now. Please try again.'}</p>`;
+        } else if (result.extractions.length === 0) {
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--ember);">
+                    <p style="font-weight: 500;">No clear training moments found</p>
+                    <p class="text-secondary text-sm mt-2">This document does not seem to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook that describes how your team made specific calls.</p>
+                </div>`;
+        } else {
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--sage);">
+                    <p style="font-weight: 500; color: var(--sage);">We found ${result.extractions.length} training moment${result.extractions.length !== 1 ? 's' : ''} in “${_uploadState.docName}”</p>
+                    <p class="text-secondary text-sm mt-2">They are in your review queue. Go through them and add the ones that feel right to your knowledge base.</p>
+                    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-4);">
+                        <button class="btn btn-primary" id="go-to-queue" style="font-size: var(--text-sm);">Open review queue</button>
+                        <button class="btn btn-secondary" id="upload-another" style="font-size: var(--text-sm);">Add another document</button>
+                    </div>
+                </div>`;
+        }
+
+        el.innerHTML = `${sectionHeader}<div style="margin-top: var(--space-6);">${resultHtml}</div>`;
+
+        document.getElementById('go-to-queue')?.addEventListener('click', () => {
+            _activeSection = 'queue'; _setActiveTab('queue'); renderSection('queue');
+        });
+        document.getElementById('upload-another')?.addEventListener('click', () => {
+            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '' };
+            renderUpload(el);
+        });
+        return;
+    }
+
+    // Default: empty form
     el.innerHTML = `
-        <div>
-            <h3 style="margin-bottom: var(--space-2);">Add knowledge from a document</h3>
-            <p class="text-secondary text-sm mb-6">Paste in a retrospective, post-mortem, playbook, or any internal document. LORE will find the training moments inside it.</p>
-
-            <div class="card">
-                <div class="auth-field">
-                    <label class="label" for="doc-name">Document name</label>
-                    <input
-                        class="input"
-                        id="doc-name"
-                        type="text"
-                        placeholder="e.g. Q3 Project Retrospective"
-                    >
-                </div>
-
-                <div class="auth-field mt-4">
-                    <label class="label" for="doc-text">Document content</label>
-                    <textarea
-                        class="input"
-                        id="doc-text"
-                        rows="12"
-                        placeholder="Paste the document text here…"
-                        style="resize: vertical;"
-                    ></textarea>
-                </div>
-
-                <p class="text-xs text-secondary mb-4">The first 6,000 characters will be processed. For longer documents, paste the most decision-rich sections.</p>
-
-                <button class="btn btn-primary" id="process-doc">
-                    Find training moments
-                </button>
+        ${sectionHeader}
+        <div class="card mt-6">
+            <div class="auth-field">
+                <label class="label" for="doc-name">Document name</label>
+                <input
+                    class="input"
+                    id="doc-name"
+                    type="text"
+                    placeholder="e.g. Q3 Project Retrospective"
+                    value="${_uploadState.docName}"
+                >
             </div>
 
-            <div id="upload-result" style="margin-top: var(--space-6);"></div>
+            <div class="auth-field mt-4">
+                <label class="label" for="doc-text">Document content</label>
+                <textarea
+                    class="input"
+                    id="doc-text"
+                    rows="12"
+                    placeholder="Paste the document text here…"
+                    style="resize: vertical;"
+                >${_uploadState.docText}</textarea>
+            </div>
+
+            <p class="text-xs text-secondary mb-4">The first 6,000 characters will be processed. For longer documents, paste the most decision-rich sections.</p>
+
+            <button class="btn btn-primary" id="process-doc">
+                Find training moments
+            </button>
         </div>
+
+        <div id="upload-result" style="margin-top: var(--space-6);"></div>
     `;
+
+    // Persist what the Manager types so it survives a tab switch mid-typing
+    document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
+    document.getElementById('doc-text')?.addEventListener('input', e => { _uploadState.docText = e.target.value; });
 
     document.getElementById('process-doc')?.addEventListener('click', async () => {
         const name = document.getElementById('doc-name')?.value?.trim();
         const text = document.getElementById('doc-text')?.value?.trim();
 
         if (!name || !text) {
-            document.getElementById('upload-result').innerHTML = `
-                <p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>
-            `;
+            document.getElementById('upload-result').innerHTML =
+                '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
             return;
         }
+
+        // Mark as in-progress so if the Manager switches tabs, they see the spinner
+        _uploadState.inProgress = true;
+        _uploadState.docName    = name;
+        _uploadState.docText    = text;
+        _uploadState.result     = null;
+        _uploadState.errorMsg   = '';
 
         const btn = document.getElementById('process-doc');
-        btn.disabled = true;
-        btn.textContent = 'Reading…';
+        if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
 
         const resultEl = document.getElementById('upload-result');
-        resultEl.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Reading your document…</p></div>`;
+        if (resultEl) {
+            resultEl.innerHTML = '<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Reading your document… You can switch tabs — the result will be here when it’s done.</p></div>';
+        }
 
+        // The AI call — may take 10-20 seconds
         const result = await processDocument(_orgId, text, name);
 
-        btn.disabled    = false;
-        btn.textContent = 'Find training moments';
+        // Store result in module state regardless of whether this tab is still active
+        _uploadState.inProgress = false;
+        _uploadState.result     = result;
+        if (!result.ok) _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
 
-        if (!result.ok) {
-            resultEl.innerHTML = `<p class="text-secondary text-sm" style="color: var(--error);">Could not process the document right now. Please try again shortly.</p>`;
-            return;
+        if (result.ok && result.extractions.length > 0) {
+            _pending = await getPendingExtractions(_orgId);
         }
 
-        if (result.extractions.length === 0) {
-            resultEl.innerHTML = `
-                <div class="card">
-                    <p style="font-weight: 500;">No clear training moments found</p>
-                    <p class="text-secondary text-sm mt-2">This document doesn't seem to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook that describes how your team made specific calls.</p>
-                </div>
-            `;
-            return;
-        }
+        // Only update the DOM if the upload tab is still the active section
+        if (_activeSection !== 'upload') return;
 
-        // Reload pending queue and switch to it
-        _pending = await getPendingExtractions(_orgId);
-        resultEl.innerHTML = `
-            <div class="card" style="border-left: 3px solid var(--sage);">
-                <p style="font-weight: 500; color: var(--sage);">We found ${result.extractions.length} training moment${result.extractions.length !== 1 ? 's' : ''}</p>
-                <p class="text-secondary text-sm mt-2">They're in your review queue. Go through them and add the ones that feel right to your knowledge base.</p>
-                <button class="btn btn-primary mt-4" id="go-to-queue" style="font-size: var(--text-sm);">Open review queue</button>
-            </div>
-        `;
-        document.getElementById('go-to-queue')?.addEventListener('click', () => {
-            _activeSection = 'queue'; _setActiveTab('queue'); renderSection('queue');
-        });
+        // Re-render upload tab with the stored result
+        renderUpload(el);
     });
 }
 
@@ -974,10 +1157,15 @@ function renderUpload(el) {
 // Also shows already-confirmed domains.
 // ---------------------------------------------------------------------------
 function renderSkillAreas(el) {
+    const _saHeader = _sectionHeader(
+        'Skill areas',
+        'Skill areas are the categories that organise your knowledge base and structure your team\'s training. LORE proposes them automatically by grouping your recipes into clusters — you confirm, rename, or adjust them. Once confirmed, each skill area becomes a domain your team can train in, and a space you can assign Reviewers to.'
+    );
     const hasProposed  = _clusters.length > 0;
     const hasConfirmed = _domains.length  > 0;
 
     el.innerHTML = `
+        ${_saHeader}
         <div>
             <h3 style="margin-bottom: var(--space-2);">Skill areas</h3>
             <p class="text-secondary text-sm mb-6">Skill areas are found in what your organisation knows — not set in advance. LORE proposes groupings; you confirm them.</p>
@@ -1155,7 +1343,12 @@ function renderNoAreas() {
 // All staff, their roles and statuses. Invite generation for new members.
 // ---------------------------------------------------------------------------
 function renderTeam(el, opts = {}) {
+    const _teamHeader = _sectionHeader(
+        'Team',
+        'Manage everyone on your LORE account. Invite new Employees and Reviewers, see who is active, and remove people who have left. Employees train through scenarios. Reviewers receive prompts that capture their expertise without pulling them away from client work.'
+    );
     el.innerHTML = `
+        ${_teamHeader}
         <div>
             <div class="flex-between mb-6">
                 <h3>Team</h3>
@@ -1357,7 +1550,12 @@ async function _loadTeamList() {
 // Clicking an Employee's row navigates to their full profile view.
 // ---------------------------------------------------------------------------
 async function renderTeamProgress(el) {
-    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading team progress…</p></div>`;
+    const _tpHeader = _sectionHeader(
+        'Team progress',
+        'See how each person on your team is developing across your skill areas. XP reflects how much they have trained. Mastery reflects how accurately they are responding. Use this to spot who is progressing well, who needs support, and which skill areas the whole team might be underdeveloped in.'
+    );
+    el.innerHTML = `<        ${_tpHeader}
+div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading team progress…</p></div>`;
 
     const { db: firestoreDb } = await import('../firebase.js');
     const { collection: col, getDocs: gd } =
@@ -1392,7 +1590,8 @@ async function renderTeamProgress(el) {
         if (!a.lastTrainedAt && !b.lastTrainedAt) return 0;
         if (!a.lastTrainedAt) return 1;
         if (!b.lastTrainedAt) return -1;
-        return new Date(b.lastTrainedAt) - new Date(a.lastTrainedAt);
+        const _ts = v => v?.toDate ? v.toDate() : new Date(v);
+        return _ts(b.lastTrainedAt) - _ts(a.lastTrainedAt);
     });
 
     const { getRankForXP } = await import('../engine/state.js');
@@ -1421,12 +1620,13 @@ async function renderTeamProgress(el) {
                     : mastery >= 40 ? '#8C5A0A'
                     : 'var(--error)';
 
-                const lastActive = emp.lastTrainedAt
-                    ? _relativeTime(new Date(emp.lastTrainedAt))
-                    : 'Never trained';
-
-                const isStale = emp.lastTrainedAt
-                    ? (Date.now() - new Date(emp.lastTrainedAt).getTime()) > 7 * 24 * 60 * 60 * 1000
+                // Firestore Timestamps have a .toDate() method. Plain strings/numbers
+                // work with new Date() directly. Handle both cases.
+                const _toDate = v => v?.toDate ? v.toDate() : (v ? new Date(v) : null);
+                const lastActiveDate = _toDate(emp.lastTrainedAt);
+                const lastActive = lastActiveDate ? _relativeTime(lastActiveDate) : 'Never trained';
+                const isStale = lastActiveDate
+                    ? (Date.now() - lastActiveDate.getTime()) > 7 * 24 * 60 * 60 * 1000
                     : true;
 
                 return `
@@ -1488,7 +1688,12 @@ async function renderTeamProgress(el) {
 // developing to mid-level in client management over 4 months."
 // ---------------------------------------------------------------------------
 async function renderTimeToReadiness(el) {
-    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+    const _ttrHeader = _sectionHeader(
+        'Time to readiness',
+        'Based on each person\'s current mastery and training pace, this estimates how long until they reach a useful level of capability in each skill area. It is a direction, not a guarantee — it helps you plan who will be ready for more complex work and when, so you can assign client work and responsibilities with more confidence.'
+    );
+    el.innerHTML = `<        ${_ttrHeader}
+div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
 
     const { db: firestoreDb } = await import('../firebase.js');
     const { collection: col, getDocs: gd } =
@@ -1598,7 +1803,12 @@ Write the progress narrative.`;
 // and from the tasks sub-collection completion counts.
 // ---------------------------------------------------------------------------
 async function renderReviewerActivity(el) {
-    el.innerHTML = `<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+    const _raHeader = _sectionHeader(
+        'Reviewer activity',
+        'Reviewers are your senior people — the ones whose instincts and experience LORE is trying to transfer to the rest of the team. This tab shows how actively they are contributing. When a Reviewer responds to a prompt, their answer gets processed into new training material. The more they contribute, the richer your team\'s training becomes.'
+    );
+    el.innerHTML = `<        ${_raHeader}
+div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
 
     const { db: firestoreDb } = await import('../firebase.js');
     const {

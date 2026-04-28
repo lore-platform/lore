@@ -270,6 +270,17 @@ onAuthChange(async (user) => {
     if (!user) {
         console.log('LORE app.js: Auth state — no user. Routing to auth screen.');
         clearState();
+        // Reset the sign-in form so credentials from the previous session are
+        // not still visible after sign-out. Without this the inputs stay populated
+        // and the button may still show "Signing in…" from the last attempt.
+        const emailInput    = document.getElementById('auth-email');
+        const passwordInput = document.getElementById('auth-password');
+        const submitBtn     = document.getElementById('auth-submit');
+        const authError     = document.getElementById('auth-error');
+        if (emailInput)    emailInput.value        = '';
+        if (passwordInput) passwordInput.value     = '';
+        if (submitBtn)     { submitBtn.disabled = false; submitBtn.textContent = 'Sign in'; }
+        if (authError)     { authError.textContent = ''; authError.style.display = 'none'; }
         initAuth();
         return;
     }

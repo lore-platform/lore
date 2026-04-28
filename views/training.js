@@ -87,25 +87,40 @@ function renderEmptyKnowledgeBase(container) {
 // ---------------------------------------------------------------------------
 function renderCalibrationIntro(container) {
     container.innerHTML = `
-        <div>
-            <h1>Before you start</h1>
-            <p class="text-secondary mt-2">Before your first training session, we'd like to understand where you're starting from. This helps us make your training as relevant as possible from day one.</p>
+        <div style="max-width: 520px;">
+            <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-3);">Welcome to LORE</p>
+            <h1 style="line-height: 1.2; margin-bottom: var(--space-4);">Training built around how your team actually works</h1>
+            <p class="text-secondary" style="line-height: 1.7; margin-bottom: var(--space-6);">
+                LORE trains you through real situations from your field — the kinds of calls your most experienced colleagues make without thinking twice. You respond the way you’d actually handle it, and LORE tells you what a more experienced read of that situation looks like.
+            </p>
 
-            <div class="card mt-6">
-                <h3>How it works</h3>
-                <p class="mt-2">You'll work through a short set of situations — the same kinds of things that come up in your role. There are no trick questions. Just respond the way you'd actually handle it.</p>
-                <p class="text-secondary text-sm mt-4">Takes about 10 to 15 minutes.</p>
+            <div class="card" style="margin-bottom: var(--space-4);">
+                <p style="font-weight: 500; margin-bottom: var(--space-3);">What to expect</p>
+                <div style="display: flex; flex-direction: column; gap: var(--space-3);">
+                    <div style="display: flex; gap: var(--space-3); align-items: flex-start;">
+                        <span style="color: var(--ember); font-weight: 600; flex-shrink: 0; margin-top: 1px;">1</span>
+                        <p class="text-secondary text-sm" style="line-height: 1.6;">Pick a skill area to work on. Each one covers a specific part of your role.</p>
+                    </div>
+                    <div style="display: flex; gap: var(--space-3); align-items: flex-start;">
+                        <span style="color: var(--ember); font-weight: 600; flex-shrink: 0; margin-top: 1px;">2</span>
+                        <p class="text-secondary text-sm" style="line-height: 1.6;">Read a workplace situation and write how you’d respond. There are no trick questions — just respond honestly.</p>
+                    </div>
+                    <div style="display: flex; gap: var(--space-3); align-items: flex-start;">
+                        <span style="color: var(--ember); font-weight: 600; flex-shrink: 0; margin-top: 1px;">3</span>
+                        <p class="text-secondary text-sm" style="line-height: 1.6;">Get immediate feedback on what you got right, what you missed, and what a senior person would have done differently.</p>
+                    </div>
+                </div>
             </div>
 
-            <button class="btn btn-primary btn-full mt-6" id="start-calibration">
-                Get started
+            <p class="text-xs text-secondary" style="margin-bottom: var(--space-6);">Your first session helps LORE calibrate to your current level. It takes about 10 to 15 minutes.</p>
+
+            <button class="btn btn-primary" id="start-calibration" style="width: 100%;">
+                Start training
             </button>
         </div>
     `;
 
     document.getElementById('start-calibration')?.addEventListener('click', () => {
-        // Calibration uses the same loop as regular training
-        // The "calibration" framing is only in this intro screen
         renderDomainSelect(container);
     });
 }
@@ -125,7 +140,7 @@ function renderDomainSelect(container) {
             <div class="flex-between mb-6">
                 <div>
                     <h1>Training</h1>
-                    <p class="text-secondary text-sm mt-2">Choose a skill area to work on.</p>
+                    <p class="text-secondary text-sm mt-2" style="max-width: 340px; line-height: 1.6;">Choose a skill area below to start a session. Each one is a different part of your role — pick whichever feels most relevant to what you’re working on right now.</p>
                 </div>
                 <div style="text-align: right;">
                     <p class="text-xs text-secondary">Your rank</p>
