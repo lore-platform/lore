@@ -691,6 +691,27 @@ select.input {
     margin-top: var(--space-1);
 }
 
+/* Inline delete progress log inside org row */
+.admin-org-delete-log {
+    font-size: var(--text-xs);
+    color: var(--warm-grey);
+    max-width: 220px;
+    text-align: right;
+    line-height: 1.6;
+}
+
+/* Log controls bar above the activity log list */
+#log-controls {
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid rgba(44, 36, 22, 0.06);
+}
+
+/* Pagination row below activity log */
+#log-pagination button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
 @media (min-width: 768px) {
     .admin-layout {
         padding: var(--space-12) var(--space-8);

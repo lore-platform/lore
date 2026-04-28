@@ -88,6 +88,12 @@ const DEMO = {
 let _adminSecret  = null;
 let _adminEmail   = null;
 
+// Activity log pagination state
+let _logLastDoc   = null;   // last Firestore doc snapshot for cursor-based pagination
+let _logPage      = 1;
+let _logFilter    = '';     // ISO date string 'YYYY-MM-DD' or '' for no filter
+const LOG_PAGE_SIZE = 10;
+
 // ---------------------------------------------------------------------------
 // Auth gate
 // ---------------------------------------------------------------------------
@@ -248,9 +254,6 @@ async function loadOrgList() {
     listEl.innerHTML = '<span class="spinner" style="width:18px;height:18px;"></span>';
 
     try {
-        // getDocs on the top-level organisations collection.
-        // Each org document must exist at organisations/{orgId} — not just its sub-documents.
-        // The provision and seed flows both write this top-level doc explicitly.
         const orgsSnap = await getDocs(collection(db, 'organisations'));
 
         if (orgsSnap.empty) {
@@ -258,24 +261,52 @@ async function loadOrgList() {
             return;
         }
 
-        // For each org, read the manager user doc. We find the manager by querying
-        // the users sub-collection for role === 'manager'.
+        // For each org, load manager details and saved credentials from profile/data
         const orgs = await Promise.all(orgsSnap.docs.map(async orgDoc => {
             const orgId   = orgDoc.id;
             const orgData = orgDoc.data();
 
-            // Read manager from users sub-collection
             let manager = null;
+            let creds   = null;
             try {
-                const usersSnap = await getDocs(collection(db, 'organisations', orgId, 'users'));
+                const [usersSnap, profileSnap] = await Promise.all([
+                    getDocs(collection(db, 'organisations', orgId, 'users')),
+                    getDoc(doc(db, 'organisations', orgId, 'profile', 'data')),
+                ]);
                 const managerDoc = usersSnap.docs.find(d => d.data().role === 'manager');
                 if (managerDoc) manager = { uid: managerDoc.id, ...managerDoc.data() };
-            } catch { /* non-fatal — show org without manager detail */ }
+                if (profileSnap.exists()) creds = profileSnap.data().orgCredentials ?? null;
+            } catch { /* non-fatal */ }
 
-            return { orgId, orgData, manager };
+            return { orgId, orgData, manager, creds };
         }));
 
-        listEl.innerHTML = orgs.map(({ orgId, orgData, manager }) => `
+        listEl.innerHTML = orgs.map(({ orgId, orgData, manager, creds }) => {
+            const created = orgData.createdAt
+                ? new Date(orgData.createdAt.toDate()).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+                : '—';
+
+            const credsHtml = creds ? `
+                <div class="admin-org-creds" id="creds-${orgId}" style="display:none;">
+                    <div style="margin-top:var(--space-3);padding:var(--space-3);background:rgba(44,36,22,0.04);border-radius:var(--radius-md);font-size:var(--text-sm);">
+                        <p class="label" style="font-size:var(--text-xs);margin-bottom:var(--space-2);">Sign-in credentials</p>
+                        <p style="margin-bottom:var(--space-1);">
+                            <span style="color:var(--warm-grey);min-width:80px;display:inline-block;">Email</span>
+                            <code style="user-select:all;">${creds.managerEmail ?? manager?.email ?? '—'}</code>
+                        </p>
+                        <p style="margin-bottom:var(--space-1);">
+                            <span style="color:var(--warm-grey);min-width:80px;display:inline-block;">Password</span>
+                            <code style="user-select:all;">${creds.managerPassword ?? '—'}</code>
+                        </p>
+                        <p>
+                            <span style="color:var(--warm-grey);min-width:80px;display:inline-block;">URL</span>
+                            <a href="https://lore-platform.github.io/lore/" target="_blank" style="color:var(--ember);font-size:var(--text-xs);">lore-platform.github.io/lore/</a>
+                        </p>
+                        ${creds.savedAt ? `<p style="color:var(--warm-grey);font-size:var(--text-xs);margin-top:var(--space-2);">Saved ${new Date(creds.savedAt.toDate()).toLocaleString('en-GB', { dateStyle:'medium', timeStyle:'short' })}</p>` : ''}
+                    </div>
+                </div>` : '';
+
+            return `
             <div class="admin-org-row" id="org-row-${orgId}">
                 <div class="admin-org-info">
                     <p class="admin-org-name">${orgData.orgName ?? orgId}</p>
@@ -283,24 +314,42 @@ async function loadOrgList() {
                         <span>${orgId}</span>
                         <span>·</span>
                         <span>${orgData.industry ?? '—'}</span>
-                        ${manager ? `<span>·</span><span>${manager.displayName} (${manager.email})</span>` : ''}
-                        ${manager ? `<span>·</span><span class="text-xs" style="color:var(--warm-grey);">UID: ${manager.uid}</span>` : '<span>· No manager found</span>'}
+                        ${manager ? `<span>·</span><span>${manager.displayName ?? '—'} (${manager.email ?? '—'})</span>` : '<span>· No manager found</span>'}
                     </p>
                     <p class="admin-org-meta" style="margin-top:2px;">
-                        Created: ${orgData.createdAt ? new Date(orgData.createdAt.toDate()).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' }) : '—'}
+                        <span>Created: ${created}</span>
+                        ${manager ? `<span>·</span><span class="text-xs" style="color:var(--warm-grey);">UID: ${manager.uid}</span>` : ''}
                     </p>
+                    ${creds ? `<button class="admin-org-creds-toggle text-xs" id="creds-toggle-${orgId}" style="margin-top:var(--space-2);background:none;border:none;cursor:pointer;color:var(--ember);padding:0;font-size:var(--text-xs);">Show credentials</button>` : '<p class="text-xs" style="color:var(--warm-grey);margin-top:var(--space-2);">No saved credentials</p>'}
+                    ${credsHtml}
                 </div>
-                <button class="btn admin-btn-danger" id="delete-org-${orgId}">Delete</button>
-            </div>
-        `).join('');
+                <div style="display:flex;flex-direction:column;gap:var(--space-2);align-items:flex-end;flex-shrink:0;">
+                    <button class="btn admin-btn-danger" id="delete-org-${orgId}">Delete</button>
+                    <div class="admin-org-delete-log" id="delete-log-${orgId}" style="display:none;"></div>
+                </div>
+            </div>`;
+        }).join('');
 
         orgs.forEach(({ orgId, orgData, manager }) => {
+            // Credentials toggle
+            document.getElementById(`creds-toggle-${orgId}`)?.addEventListener('click', () => {
+                const panel  = document.getElementById(`creds-${orgId}`);
+                const toggle = document.getElementById(`creds-toggle-${orgId}`);
+                if (!panel) return;
+                const isHidden = panel.style.display === 'none';
+                panel.style.display  = isHidden ? 'block' : 'none';
+                toggle.textContent   = isHidden ? 'Hide credentials' : 'Show credentials';
+            });
+
+            // Delete button — now shows inline progress log
             document.getElementById(`delete-org-${orgId}`)?.addEventListener('click', async () => {
                 const label = orgData.orgName ?? orgId;
-                if (!confirm(`Delete "${label}" and all its data? This removes the Firestore org, all sub-collections, and the Manager's Firebase Auth account. This cannot be undone.`)) return;
-                const btn = document.getElementById(`delete-org-${orgId}`);
+                if (!confirm(`Delete "${label}" and all its data? This removes the Firestore org and the Manager's Firebase Auth account. This cannot be undone.`)) return;
+                const btn    = document.getElementById(`delete-org-${orgId}`);
+                const logEl  = document.getElementById(`delete-log-${orgId}`);
                 btn.disabled = true; btn.textContent = 'Deleting…';
-                await deleteOrg(orgId, orgData, manager);
+                if (logEl) logEl.style.display = 'block';
+                await deleteOrg(orgId, orgData, manager, logEl);
                 document.getElementById(`org-row-${orgId}`)?.remove();
                 if (document.querySelectorAll('.admin-org-row').length === 0) {
                     listEl.innerHTML = '<p class="text-secondary text-sm">No organisations provisioned yet.</p>';
@@ -310,9 +359,7 @@ async function loadOrgList() {
 
     } catch (err) {
         console.error('LORE admin.js: loadOrgList error:', err);
-        listEl.innerHTML = `<p style="color:var(--error);font-size:var(--text-sm);">
-            Could not load organisations: ${err.message}
-        </p>`;
+        listEl.innerHTML = `<p style="color:var(--error);font-size:var(--text-sm);">Could not load organisations: ${err.message}</p>`;
     }
 }
 
@@ -320,19 +367,46 @@ async function loadOrgList() {
 // Delete an org — removes Firebase Auth account, all Firestore sub-collections,
 // the profile/data sub-document, and the top-level organisations/{orgId} document.
 // ---------------------------------------------------------------------------
-async function deleteOrg(orgId, orgData, manager) {
+// logEl is an optional DOM element for inline progress logging during deletion.
+// When provided, each step appends a line to it. Null is fine — silent mode.
+async function deleteOrg(orgId, orgData, manager, logEl = null) {
     console.log('LORE admin.js: Deleting org:', orgId);
-    let outcome = 'success';
+    let outcome  = 'success';
     let errorMsg = null;
 
-    // 1. Delete Firebase Auth account for the manager
-    if (manager?.uid) {
+    const _dlog = (msg, type = '') => {
+        console.log('LORE deleteOrg:', msg);
+        if (!logEl) return;
+        const line = document.createElement('p');
+        line.style.cssText = `margin:0;font-size:var(--text-xs);color:${type === 'err' ? 'var(--error)' : type === 'ok' ? 'var(--sage)' : 'var(--warm-grey)'};`;
+        line.textContent = msg;
+        logEl.appendChild(line);
+    };
+
+    // 1. Delete Firebase Auth account(s).
+    // First delete the manager. Then look for interactive demo accounts if this
+    // is the lore-demo org (they have email addresses stored on their user docs).
+    const authToDelete = [];
+    if (manager?.uid) authToDelete.push({ uid: manager.uid, label: 'Manager Auth' });
+
+    // For any org, also check for users with isInteractive flag (interactive demo accounts)
+    try {
+        const usersSnap = await getDocs(collection(db, 'organisations', orgId, 'users'));
+        usersSnap.docs.forEach(d => {
+            if (d.data().isInteractive && d.id !== manager?.uid) {
+                authToDelete.push({ uid: d.id, label: `${d.data().role ?? 'User'} Auth (${d.data().email ?? d.id})` });
+            }
+        });
+    } catch { /* non-fatal */ }
+
+    for (const account of authToDelete) {
         try {
-            await deleteFirebaseAuthUser(manager.uid);
+            await deleteFirebaseAuthUser(account.uid);
+            _dlog(`✓ Deleted: ${account.label} (UID: ${account.uid})`, 'ok');
         } catch (err) {
-            console.warn('LORE admin.js: Could not delete auth account for', manager.uid, err);
+            _dlog(`✗ ${account.label} deletion failed: ${err.message}`, 'err');
             outcome  = 'partial';
-            errorMsg = `Auth account deletion failed for UID ${manager.uid}: ${err.message}`;
+            errorMsg = (errorMsg ? errorMsg + ' | ' : '') + `${account.label} deletion failed: ${err.message}`;
         }
     }
 
@@ -340,7 +414,6 @@ async function deleteOrg(orgId, orgData, manager) {
     for (const sub of ['users', 'recipes', 'scenarios', 'extractions', 'domains']) {
         try {
             const snap = await getDocs(collection(db, 'organisations', orgId, sub));
-            // For users, also delete their sub-collections first
             if (sub === 'users') {
                 for (const userDoc of snap.docs) {
                     for (const userSub of ['patternSignals', 'recipeLibrary', 'tasks']) {
@@ -354,21 +427,24 @@ async function deleteOrg(orgId, orgData, manager) {
             } else {
                 for (const d of snap.docs) await deleteDoc(d.ref);
             }
+            _dlog(`✓ Deleted: ${sub} (${snap.size} docs)`, 'ok');
         } catch (err) {
-            console.warn('LORE admin.js: Could not delete sub-collection', sub, err);
+            _dlog(`✗ Error deleting ${sub}: ${err.message}`, 'err');
         }
     }
 
     // 3. Delete profile/data sub-document
     try {
         await deleteDoc(doc(db, 'organisations', orgId, 'profile', 'data'));
-    } catch { /* non-fatal if it doesn't exist */ }
+        _dlog('✓ Deleted: profile/data', 'ok');
+    } catch { /* non-fatal */ }
 
     // 4. Delete the top-level organisations/{orgId} document
     try {
         await deleteDoc(doc(db, 'organisations', orgId));
+        _dlog('✓ Deleted: org document', 'ok');
     } catch (err) {
-        console.warn('LORE admin.js: Could not delete top-level org doc:', err);
+        _dlog(`✗ Top-level org doc deletion failed: ${err.message}`, 'err');
         outcome  = 'partial';
         errorMsg = (errorMsg ? errorMsg + ' | ' : '') + `Top-level org doc deletion failed: ${err.message}`;
     }
@@ -383,6 +459,7 @@ async function deleteOrg(orgId, orgData, manager) {
         errorMsg,
     });
 
+    _dlog(`${outcome === 'success' ? '✓' : '⚠'} Done — ${outcome}`, outcome === 'success' ? 'ok' : 'err');
     console.log('LORE admin.js: Org deletion complete:', orgId, outcome);
 }
 
@@ -498,7 +575,26 @@ document.getElementById('provision-submit').addEventListener('click', async () =
         });
         provisionLog('✓ Manager profile written');
 
-        // Step 7: Write activity log
+        // Step 7: Persist credentials to profile/data so they are retrievable after
+        // a page refresh. Stored under orgCredentials — separate from demoCredentials
+        // which is only used by the lore-demo seed flow.
+        provisionLog('Saving credentials…');
+        try {
+            await updateDoc(doc(db, 'organisations', orgId, 'profile', 'data'), {
+                orgCredentials: {
+                    managerEmail:    email,
+                    managerPassword: tempPassword,
+                    savedAt:         serverTimestamp(),
+                },
+            });
+            provisionLog('✓ Credentials saved');
+        } catch (err) {
+            // Non-fatal — credentials panel will be empty but the account still works
+            console.warn('LORE admin.js: Could not save credentials to profile.', err);
+            provisionLog('Could not save credentials (non-fatal)', 'err');
+        }
+
+        // Step 8: Write activity log
         await writeLog({
             action:  'provision',
             orgId,
@@ -883,7 +979,7 @@ async function runDemoSeedFlow() {
             demoTick(`Contribution: ${c.sourceType}`);
         }
 
-        // Reviewer user doc (simulated, no Auth account — for dashboard data only)
+        // Simulated Reviewer doc — backs dashboard stats, no Auth account
         demoLog('Writing simulated Reviewer user…');
         await setDoc(doc(db, 'organisations', DEMO.orgId, 'users', 'demo-reviewer-001'), {
             displayName: 'Marcus Obi',
@@ -898,13 +994,11 @@ async function runDemoSeedFlow() {
         demoTick('Simulated Reviewer: Marcus Obi');
 
         // ---------------------------------------------------------------------------
-        // Interactive demo accounts — real Firebase Auth accounts so anyone can sign
-        // in and experience the Employee training view and Reviewer tasks view.
-        // Separate from the simulated employees above which exist only as data.
+        // Interactive demo accounts — real Firebase Auth accounts so anyone can
+        // sign in and experience the Employee and Reviewer views directly.
         // ---------------------------------------------------------------------------
         const demoPassword = 'MeridianDemo2026!';
 
-        // Employee interactive account
         demoLog('Creating interactive Employee Auth account…');
         let empUid;
         try {
@@ -935,7 +1029,6 @@ async function runDemoSeedFlow() {
             isInteractive: true,
         });
 
-        // Reviewer interactive account
         demoLog('Creating interactive Reviewer Auth account…');
         let revUid;
         try {
@@ -961,8 +1054,7 @@ async function runDemoSeedFlow() {
             isInteractive: true,
         });
 
-        // Seed two pending tasks for the interactive Reviewer so they see prompts
-        // immediately on first sign-in rather than "You're all caught up".
+        // Seed two pending tasks for the interactive Reviewer
         await addDoc(collection(db, 'organisations', DEMO.orgId, 'users', revUid, 'tasks'), {
             type:         'scenario_review',
             status:       'pending',
@@ -987,8 +1079,8 @@ async function runDemoSeedFlow() {
         });
 
         demoLog('✓ All done — demo fully seeded.', 'ok');
-        // Write all three sets of credentials into the org profile document so they are
-        // retrievable from any machine via the admin page.
+        // Write all credentials into profile/data — retrieved by loadDemoCreds() and
+        // shown in the org list creds panel via orgCredentials field.
         await updateDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'), {
             demoCredentials: {
                 url:             'https://lore-platform.github.io/lore/',
@@ -998,6 +1090,12 @@ async function runDemoSeedFlow() {
                 employeeEmail:   DEMO.employeeEmail,
                 reviewerEmail:   DEMO.reviewerEmail,
                 sharedPassword:  demoPassword,
+            },
+            // Also write orgCredentials so the org list panel shows Manager creds
+            orgCredentials: {
+                managerEmail:    DEMO.managerEmail,
+                managerPassword: tempPassword,
+                savedAt:         serverTimestamp(),
             },
         });
 
@@ -1042,18 +1140,17 @@ async function runDemoReset() {
     clearDemoStatus();
 
     const subCollections = ['users', 'recipes', 'scenarios', 'extractions', 'domains'];
-    // Progress total: auth deletions (3) + sub-collections + profile/data + top-level doc
+    // +3 = one per Auth account (Manager, Employee, Reviewer) + profile/data + top-level doc
     initDemoProgress(3 + subCollections.length + 2);
 
     demoLog('Starting reset for org: ' + DEMO.orgId);
 
     // 1. Delete Firebase Auth accounts for Manager, Employee, and Reviewer.
-    // Two-pass approach per account: Firestore user doc first, then email lookup
-    // as a fallback for orphaned accounts from partial seed runs.
+    // For each: look in Firestore first (by email), then fall back to Worker email lookup.
     const authAccounts = [
-        { label: 'Manager',  email: DEMO.managerEmail,  role: 'manager'  },
-        { label: 'Employee', email: DEMO.employeeEmail, role: 'employee' },
-        { label: 'Reviewer', email: DEMO.reviewerEmail, role: 'reviewer' },
+        { label: 'Manager',  email: DEMO.managerEmail  },
+        { label: 'Employee', email: DEMO.employeeEmail },
+        { label: 'Reviewer', email: DEMO.reviewerEmail },
     ];
 
     // Fetch users sub-collection once for all three lookups
@@ -1067,27 +1164,19 @@ async function runDemoReset() {
     for (const account of authAccounts) {
         try {
             let accountUid = null;
-
-            // Pass 1: find UID from Firestore user doc by role
-            const userDoc = usersSnapForReset.docs.find(d => d.data().role === account.role && !d.data().isDemo === false);
-            // For interactive accounts, also match by email to avoid picking simulated users
             const exactDoc = usersSnapForReset.docs.find(d => d.data().email === account.email);
             if (exactDoc) accountUid = exactDoc.id;
-
-            // Pass 2: if not in Firestore, look up by email directly in Firebase Auth
-            if (!accountUid) {
-                accountUid = await lookupUidByEmail(account.email);
-            }
+            if (!accountUid) accountUid = await lookupUidByEmail(account.email);
 
             if (accountUid) {
                 await deleteFirebaseAuthUser(accountUid);
-                demoTick(`Deleted: ${account.label} Firebase Auth account (UID: ${accountUid})`);
+                demoTick(`Deleted: ${account.label} Auth account (UID: ${accountUid})`);
             } else {
                 demoTick(`No ${account.label} Auth account found — skipped`);
             }
         } catch (err) {
             demoLog(`Could not delete ${account.label} Auth account: ${err.message}`, 'err');
-            demoTick(`${account.label} Auth account — error (see above)`);
+            demoTick(`${account.label} Auth — error (see above)`);
         }
     }
 
@@ -1188,44 +1277,39 @@ async function loadDemoCreds() {
     if (!container) return;
 
     try {
-        const snap = await getDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'));
+        const snap  = await getDoc(doc(db, 'organisations', DEMO.orgId, 'profile', 'data'));
         const creds = snap.exists() ? (snap.data().demoCredentials ?? null) : null;
 
-        if (!creds) {
-            container.innerHTML = '';
-            return;
-        }
+        if (!creds) { container.innerHTML = ''; return; }
 
         const seededAt = creds.seededAt?.toDate
             ? creds.seededAt.toDate().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
             : 'recently';
 
-        // Support both old schema (single email/password) and new schema (three accounts)
+        // Support both old schema (email/password) and new schema (three accounts)
         const isNewSchema = !!(creds.managerEmail);
-        container.innerHTML = `
-            <div style="margin-top: var(--space-4); padding: var(--space-4); background: var(--surface-2, #f5f0eb); border-radius: var(--radius-md, 8px); border: 1px solid var(--border, rgba(0,0,0,0.08));">
-                <p class="label" style="margin-bottom: var(--space-3); font-size: var(--text-sm);">Demo sign-in details</p>
-                <p class="text-sm" style="margin-bottom: var(--space-3);">
-                    <span style="color: var(--warm-grey);">URL</span>&ensp;
-                    <a href="${creds.url}" target="_blank" style="color: var(--ember);">${creds.url}</a>
-                </p>
 
+        container.innerHTML = `
+            <div style="margin-top:var(--space-4);padding:var(--space-4);background:var(--surface-2,#f5f0eb);border-radius:var(--radius-md,8px);border:1px solid var(--border,rgba(0,0,0,0.08));">
+                <p class="label" style="margin-bottom:var(--space-3);font-size:var(--text-sm);">Demo sign-in details</p>
+                <p class="text-sm" style="margin-bottom:var(--space-3);">
+                    <span style="color:var(--warm-grey);">URL</span>&ensp;
+                    <a href="${creds.url}" target="_blank" style="color:var(--ember);">${creds.url}</a>
+                </p>
                 ${isNewSchema ? `
                 <table style="width:100%;border-collapse:collapse;font-size:var(--text-sm);margin-bottom:var(--space-3);">
-                    <thead>
-                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.08));">
-                            <th style="text-align:left;padding:var(--space-1) var(--space-2) var(--space-2) 0;color:var(--warm-grey);font-weight:500;">Role</th>
-                            <th style="text-align:left;padding:var(--space-1) var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Email</th>
-                            <th style="text-align:left;padding:var(--space-1) 0 var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Password</th>
-                        </tr>
-                    </thead>
+                    <thead><tr style="border-bottom:1px solid rgba(44,36,22,0.1);">
+                        <th style="text-align:left;padding:2px var(--space-2) var(--space-2) 0;color:var(--warm-grey);font-weight:500;">Role</th>
+                        <th style="text-align:left;padding:2px var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Email</th>
+                        <th style="text-align:left;padding:2px 0 var(--space-2) var(--space-2);color:var(--warm-grey);font-weight:500;">Password</th>
+                    </tr></thead>
                     <tbody>
-                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.05));">
+                        <tr style="border-bottom:1px solid rgba(44,36,22,0.05);">
                             <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Manager</td>
                             <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.managerEmail}</code></td>
                             <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.managerPassword}</code></td>
                         </tr>
-                        <tr style="border-bottom:1px solid var(--border,rgba(0,0,0,0.05));">
+                        <tr style="border-bottom:1px solid rgba(44,36,22,0.05);">
                             <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Employee</td>
                             <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.employeeEmail}</code></td>
                             <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.sharedPassword}</code></td>
@@ -1238,21 +1322,16 @@ async function loadDemoCreds() {
                     </tbody>
                 </table>
                 ` : `
-                <p class="text-sm" style="margin-bottom: var(--space-2);">
-                    <span style="color: var(--warm-grey);">Email</span>&ensp;
-                    <code style="user-select: all; font-size: var(--text-sm);">${creds.email}</code>
+                <p class="text-sm" style="margin-bottom:var(--space-2);">
+                    <span style="color:var(--warm-grey);">Email</span>&ensp;<code style="user-select:all;">${creds.email}</code>
                 </p>
-                <p class="text-sm" style="margin-bottom: var(--space-3);">
-                    <span style="color: var(--warm-grey);">Password</span>&ensp;
-                    <code style="user-select: all; font-size: var(--text-sm);">${creds.password}</code>
-                </p>
-                `}
-
-                <p class="text-xs" style="color: var(--warm-grey);">Seeded ${seededAt}. Cleared automatically on Reset.</p>
+                <p class="text-sm" style="margin-bottom:var(--space-3);">
+                    <span style="color:var(--warm-grey);">Password</span>&ensp;<code style="user-select:all;">${creds.password}</code>
+                </p>`}
+                <p class="text-xs" style="color:var(--warm-grey);">Seeded ${seededAt}. Cleared automatically on Reset.</p>
             </div>
         `;
     } catch (err) {
-        // Non-fatal — credentials panel simply stays empty
         console.warn('LORE admin.js: Could not load demo credentials.', err);
         container.innerHTML = '';
     }
@@ -1274,23 +1353,111 @@ function clearDemoStatus() {
 }
 
 // =============================================================================
-// SECTION 4 — Activity log
+// SECTION 4 — Activity log (paginated, filterable by date, deleteable)
 // =============================================================================
 
-document.getElementById('refresh-logs').addEventListener('click', loadActivityLog);
+document.getElementById('refresh-logs').addEventListener('click', () => {
+    _logPage   = 1;
+    _logLastDoc = null;
+    loadActivityLog(true);
+});
 
-async function loadActivityLog() {
+// Render the log controls (filter + delete) above the list
+function renderLogControls() {
+    const section = document.getElementById('activity-log-list').parentElement;
+    let controls  = document.getElementById('log-controls');
+    if (controls) return; // already rendered
+
+    controls = document.createElement('div');
+    controls.id = 'log-controls';
+    controls.style.cssText = 'display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;margin-bottom:var(--space-4);';
+    controls.innerHTML = `
+        <div style="display:flex;gap:var(--space-2);align-items:center;">
+            <label class="label" style="margin:0;white-space:nowrap;">Filter by date</label>
+            <input type="date" id="log-date-filter" class="input" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-2);width:auto;">
+            <button class="btn btn-secondary" id="log-filter-apply" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-3);">Apply</button>
+            <button class="btn btn-secondary" id="log-filter-clear" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-3);color:var(--warm-grey);">Clear</button>
+        </div>
+        <div style="margin-left:auto;">
+            <button class="btn btn-secondary" id="log-delete-period" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-3);color:var(--error);border-color:rgba(184,50,50,0.3);">
+                Delete entries in filter period
+            </button>
+        </div>
+    `;
+
+    // Insert before the list
+    const listEl = document.getElementById('activity-log-list');
+    section.insertBefore(controls, listEl);
+
+    document.getElementById('log-filter-apply')?.addEventListener('click', () => {
+        _logFilter  = document.getElementById('log-date-filter')?.value ?? '';
+        _logPage    = 1;
+        _logLastDoc = null;
+        loadActivityLog(true);
+    });
+
+    document.getElementById('log-filter-clear')?.addEventListener('click', () => {
+        _logFilter  = '';
+        _logPage    = 1;
+        _logLastDoc = null;
+        const dateInput = document.getElementById('log-date-filter');
+        if (dateInput) dateInput.value = '';
+        loadActivityLog(true);
+    });
+
+    document.getElementById('log-delete-period')?.addEventListener('click', deleteLogEntries);
+}
+
+async function loadActivityLog(resetPagination = false) {
+    renderLogControls();
+
     const listEl = document.getElementById('activity-log-list');
     listEl.innerHTML = '<p class="text-secondary text-sm">Loading…</p>';
 
+    if (resetPagination) {
+        _logPage    = 1;
+        _logLastDoc = null;
+    }
+
     try {
-        const q    = query(collection(db, 'platform', 'lore-platform', 'adminLogs'), orderBy('createdAt', 'desc'), limit(50));
+        // Build the query. Firestore cursor pagination: use startAfter when on
+        // page > 1 and we have a cursor doc from the previous page load.
+        let constraints = [
+            orderBy('createdAt', 'desc'),
+        ];
+
+        // Date filter — converts the selected date to start/end of day timestamps
+        if (_logFilter) {
+            const dayStart = new Date(_logFilter + 'T00:00:00');
+            const dayEnd   = new Date(_logFilter + 'T23:59:59.999');
+            constraints.push(where('createdAt', '>=', Timestamp.fromDate(dayStart)));
+            constraints.push(where('createdAt', '<=', Timestamp.fromDate(dayEnd)));
+        }
+
+        if (_logLastDoc && _logPage > 1) {
+            constraints.push(startAfter(_logLastDoc));
+        }
+
+        constraints.push(limit(LOG_PAGE_SIZE));
+
+        const q    = query(collection(db, 'platform', 'lore-platform', 'adminLogs'), ...constraints);
         const snap = await getDocs(q);
 
-        if (snap.empty) {
-            listEl.innerHTML = '<p class="text-secondary text-sm">No activity yet.</p>';
+        if (snap.empty && _logPage === 1) {
+            listEl.innerHTML = '<p class="text-secondary text-sm">No activity yet' + (_logFilter ? ' for this date.' : '.') + '</p>';
+            _renderLogPagination(false, false);
             return;
         }
+
+        if (snap.empty) {
+            // Past end of results — step back
+            _logPage = Math.max(1, _logPage - 1);
+            listEl.innerHTML = '<p class="text-secondary text-sm">No more entries.</p>';
+            _renderLogPagination(true, false);
+            return;
+        }
+
+        _logLastDoc = snap.docs[snap.docs.length - 1];
 
         listEl.innerHTML = snap.docs.map(logDoc => {
             const d   = logDoc.data();
@@ -1315,9 +1482,102 @@ async function loadActivityLog() {
             `;
         }).join('');
 
+        const hasPrev = _logPage > 1;
+        const hasNext = snap.size === LOG_PAGE_SIZE;
+        _renderLogPagination(hasPrev, hasNext);
+
     } catch (err) {
         console.error('LORE admin.js: loadActivityLog error:', err);
         listEl.innerHTML = `<p style="color:var(--error);font-size:var(--text-sm);">Could not load activity log: ${err.message}</p>`;
+    }
+}
+
+function _renderLogPagination(hasPrev, hasNext) {
+    let pag = document.getElementById('log-pagination');
+    if (!pag) {
+        pag = document.createElement('div');
+        pag.id = 'log-pagination';
+        pag.style.cssText = 'display:flex;gap:var(--space-3);align-items:center;margin-top:var(--space-4);justify-content:space-between;';
+        document.getElementById('activity-log-list').after(pag);
+    }
+
+    pag.innerHTML = `
+        <button class="btn btn-secondary" id="log-prev" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-3);" ${hasPrev ? '' : 'disabled'}>← Previous</button>
+        <span class="text-xs text-secondary">Page ${_logPage}</span>
+        <button class="btn btn-secondary" id="log-next" style="font-size:var(--text-sm);padding:var(--space-1) var(--space-3);" ${hasNext ? '' : 'disabled'}>Next →</button>
+    `;
+
+    document.getElementById('log-prev')?.addEventListener('click', () => {
+        if (_logPage <= 1) return;
+        _logPage--;
+        _logLastDoc = null; // reset cursor — reload from start up to current page
+        // Simple approach: reload from page 1 and advance. For 10-per-page this is fast.
+        _loadLogPage(_logPage);
+    });
+
+    document.getElementById('log-next')?.addEventListener('click', () => {
+        _logPage++;
+        loadActivityLog(false);
+    });
+}
+
+// Load a specific page by re-fetching from the beginning (offset simulation).
+// Only used for Prev button — acceptable since we have small page counts.
+async function _loadLogPage(targetPage) {
+    _logPage    = 1;
+    _logLastDoc = null;
+    // Walk forward page by page until we reach the target
+    while (_logPage < targetPage) {
+        let constraints = [orderBy('createdAt', 'desc')];
+        if (_logFilter) {
+            const dayStart = new Date(_logFilter + 'T00:00:00');
+            const dayEnd   = new Date(_logFilter + 'T23:59:59.999');
+            constraints.push(where('createdAt', '>=', Timestamp.fromDate(dayStart)));
+            constraints.push(where('createdAt', '<=', Timestamp.fromDate(dayEnd)));
+        }
+        if (_logLastDoc) constraints.push(startAfter(_logLastDoc));
+        constraints.push(limit(LOG_PAGE_SIZE));
+        try {
+            const snap = await getDocs(query(collection(db, 'platform', 'lore-platform', 'adminLogs'), ...constraints));
+            if (snap.empty) break;
+            _logLastDoc = snap.docs[snap.docs.length - 1];
+            _logPage++;
+        } catch { break; }
+    }
+    loadActivityLog(false);
+}
+
+// Delete all log entries in the currently selected filter period (or all if no filter).
+async function deleteLogEntries() {
+    const periodLabel = _logFilter ? `on ${_logFilter}` : 'all time';
+    if (!confirm(`Delete all activity log entries for ${periodLabel}? This cannot be undone.`)) return;
+
+    const listEl = document.getElementById('activity-log-list');
+    listEl.innerHTML = '<p class="text-secondary text-sm">Deleting…</p>';
+
+    try {
+        // Fetch all matching docs (no pagination — we are deleting all of them)
+        let constraints = [orderBy('createdAt', 'desc')];
+        if (_logFilter) {
+            const dayStart = new Date(_logFilter + 'T00:00:00');
+            const dayEnd   = new Date(_logFilter + 'T23:59:59.999');
+            constraints.push(where('createdAt', '>=', Timestamp.fromDate(dayStart)));
+            constraints.push(where('createdAt', '<=', Timestamp.fromDate(dayEnd)));
+        }
+        // Firestore limit for safety — if someone somehow has 500+ logs, this handles it
+        constraints.push(limit(500));
+        const snap = await getDocs(query(collection(db, 'platform', 'lore-platform', 'adminLogs'), ...constraints));
+
+        for (const d of snap.docs) await deleteDoc(d.ref);
+
+        listEl.innerHTML = `<p class="text-secondary text-sm">${snap.size} entries deleted.</p>`;
+        _logPage    = 1;
+        _logLastDoc = null;
+        setTimeout(() => loadActivityLog(true), 1200);
+
+    } catch (err) {
+        console.error('LORE admin.js: deleteLogEntries error:', err);
+        listEl.innerHTML = `<p style="color:var(--error);font-size:var(--text-sm);">Could not delete entries: ${err.message}</p>`;
     }
 }
 

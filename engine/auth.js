@@ -26,6 +26,7 @@ import {
     updateDoc,
     serverTimestamp
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { friendlyAuthError } from './utils.js';
 
 // ---------------------------------------------------------------------------
 // Sign in with email and password.
@@ -234,22 +235,4 @@ export async function readInvite(inviteId) {
     } catch {
         return null;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Map Firebase Auth error codes to plain language messages.
-// The user should never see a raw Firebase error code.
-// ---------------------------------------------------------------------------
-function friendlyAuthError(code) {
-    const map = {
-        'auth/invalid-email':          'That email address doesn\'t look right.',
-        'auth/user-not-found':         'We couldn\'t find an account with that email.',
-        'auth/wrong-password':         'That password isn\'t correct.',
-        'auth/invalid-credential':     'Your email or password isn\'t correct.',
-        'auth/too-many-requests':      'Too many attempts. Please wait a moment and try again.',
-        'auth/email-already-in-use':   'An account with that email already exists.',
-        'auth/weak-password':          'Your password needs to be at least 8 characters.',
-        'auth/network-request-failed': 'Check your connection and try again.',
-    };
-    return map[code] || 'Something went wrong. Please try again.';
 }
