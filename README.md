@@ -1,66 +1,104 @@
 # LORE
 
-**Organisational knowledge transfer, built on game mechanics.**
-
-LORE captures what your best people know — how they think, what they notice, the judgements they make without thinking — and turns it into training that feels nothing like training.
-
-Senior practitioners contribute without knowing they are contributing. Junior and mid-level practitioners train against realistic scenarios drawn from their own organisation's senior experience. Managers see everything: who is learning, where the gaps are, what the knowledge base looks like.
+**Organisational knowledge transfer. Built for the moment experienced people leave.**
 
 ---
 
-## What problem does this solve?
+## The problem
 
-When experienced people leave an organisation, their pattern recognition leaves with them. It is the most valuable thing they had, and it is the hardest to transfer. Manuals do not capture it. Courses do not reproduce it. Mentorship is inconsistent and unscalable.
+When an experienced person leaves an organisation, the most valuable thing they had leaves with them. Not their contacts list. Not their files. Their judgement — how they read a room, what they noticed that others missed, the calls they made without being able to explain exactly why.
 
-LORE solves this by extracting that pattern recognition passively — through materials the organisation already produces — and turning it into structured training scenarios. The senior practitioner never knows it is happening. The junior practitioner experiences it as a game, not a lesson.
+Manuals do not capture this. Courses cannot reproduce it. Mentorship is inconsistent and does not scale.
 
----
+Organisations spend significant resources replacing experienced staff and then spend more helping new people reach the same level of capability. Most of that knowledge transfer is informal, accidental, or does not happen at all.
 
-## How it works
-
-There are three roles in LORE:
-
-**Manager** (the primary customer)
-Sets up the organisation, reviews and approves extracted knowledge, monitors team progress. Sees the knowledge base, the extraction pipeline, and detailed capability intelligence for every team member.
-
-**Reviewer** (the knowledge source)
-Senior practitioners who receive occasional prompts — framed as quality checks and coaching moments. They are never told their responses are being structured into training content. They see only a simple review interface, never the knowledge base.
-
-**Employee** (the learner)
-Junior and mid-level practitioners who train through scenarios. They respond to realistic workplace situations, receive AI-evaluated feedback, and earn XP and rank as they progress. They never see the recipes behind the scenarios.
+LORE is built to change this.
 
 ---
 
-## The knowledge pipeline
+## What LORE does
 
-```
-Senior practitioner responds to a prompt
-        ↓
-Raw response staged as an extraction in Firestore
-        ↓
-AI processes it into a structured Career Recipe draft
-        ↓
-Manager reviews and approves (or edits and approves)
-        ↓
-Recipe enters the knowledge base
-        ↓
-AI generates training scenarios from the recipe
-        ↓
-Employees train against scenarios drawn from senior experience
-        ↓
-Performance data flows back to the Manager's intelligence view
-```
+LORE captures expert judgement from the people who have it — without disrupting them or requiring them to teach — and makes it available to the people who need it, in a form they can actually absorb.
+
+The knowledge is structured into a private, growing knowledge base that belongs entirely to the organisation. When someone new joins — whether replacing a departing colleague or simply onboarding into a team — they can be placed on a structured path through that knowledge. They learn what the organisation's best people know, at the speed the organisation decides.
+
+The result: shorter time to competence, more consistent decision-making across the team, and less dependency on any one person's continued presence.
 
 ---
 
-## Technology
+## The three roles
 
-LORE is built with deliberately minimal dependencies.
+**Manager** — The primary user and decision-maker. Sees everything: the knowledge base, what is being extracted, who is learning what, where the gaps are. Sets up team members, reviews and approves extracted knowledge, and assigns each person their learning path. Has full visibility into every team member's capability development.
 
-- **Frontend:** Vanilla JavaScript, HTML, CSS. No framework, no bundler, no build step. ES modules run natively in the browser.
-- **Auth and database:** Firebase Auth (custom claims for role-based access) and Firestore (org-scoped data model).
-- **AI:** Gemini via a Cloudflare Worker proxy. Keys never touch the browser. Groq (Llama 3.3 70B) as a fallback.
-- **Hosting:** GitHub Pages, served from the repository root.
+**Reviewer** — A senior practitioner on the team. Receives occasional short prompts — framed as quality checks and coaching moments. Responds in a few sentences. That is all they see. Their contributions flow into the knowledge base without them ever knowing it is happening. No extra burden. No change to how they work.
+
+**Employee** — A junior or mid-level practitioner. Works through training scenarios drawn from the organisation's own knowledge. Responds to realistic situations from their actual field, receives feedback, and builds pattern recognition over time. Earns rank as they progress.
+
+---
+
+## How the knowledge flows
+
+A senior practitioner on the team responds to a prompt. Their words are captured and stored as a permanent raw record. The system processes that record — first to understand what knowledge it contains, then to structure it, then to use it as the basis for training material. A Manager reviews and approves before anything reaches the knowledge base. Once approved, the knowledge becomes available for training scenarios. Employees encounter those scenarios, respond, and receive feedback grounded in the organisation's own expertise.
+
+The same flow applies to documents the organisation already has. Playbooks, project retrospectives, client briefings, internal guides — any document can be uploaded and processed through the same pipeline. The system finds the expert decision logic inside it and extracts it.
+
+Every piece of extracted knowledge — from whatever source — is stored permanently in its original form. It can be re-processed as the system evolves. It can eventually power different kinds of access to the knowledge, beyond training scenarios. The raw record is the asset. Everything else is a derived view of it.
+
+---
+
+## For knowledge management and L&D professionals
+
+LORE sits at the intersection of knowledge management and learning design, and it makes a deliberate set of choices that are worth understanding.
+
+**On tacit knowledge.** Most knowledge management systems are designed for explicit knowledge — documented processes, policies, reference material. LORE is designed specifically for tacit knowledge: the expertise that exists only in practitioners' heads and resists being written down. The extraction mechanism is designed around how tacit knowledge actually surfaces — through responses to real situations, through corrections, through the judgements people make when they are prompted to make them — rather than through structured documentation exercises.
+
+**On learning transfer.** The gap between training and on-the-job performance is one of the most persistent problems in L&D. LORE addresses this by making the training content entirely specific to the organisation. Employees are not training on generic scenarios or industry best practice. They are training on their own organisation's patterns, drawn from their own senior colleagues' experience. The transfer problem is reduced because the training and the work are drawing from the same source.
+
+**On knowledge retention.** When an experienced person is leaving, LORE supports a structured handover — a curated path through that person's extracted knowledge, assigned to their replacement. This is distinct from a general training path. It is targeted, role-specific, and designed to close the specific gap left by a specific departure.
+
+**On contributor experience.** LORE takes the position that requiring experts to document their knowledge creates resistance and produces lower-quality outputs than capturing it in context. The Reviewer experience is designed to feel nothing like knowledge documentation. Contributors respond to prompts. The system does the structuring work.
+
+---
+
+## For designers and product contributors
+
+LORE is built on a set of principles that should guide any contribution to the product.
+
+The extraction is invisible. The Reviewer experience must never reveal what is actually happening to the knowledge they contribute. Every label, prompt, button, and confirmation message is written to feel like a quality review or coaching moment — never like knowledge capture. This is not deceptive in a harmful sense: the organisation has a legitimate interest in retaining its own expertise, and the Reviewer's contribution is the organisation's knowledge, not exclusively theirs. But the experience must be designed around the Reviewer's natural frame of reference, not the system's internal model.
+
+Learning should feel like nothing. The Employee experience must never announce itself as training. The scenario is the lesson. The feedback is the teaching. There is no preamble, no module structure, no "you are now being trained" framing. The product should feel more like a daily habit than a course.
+
+The Manager is the primary customer. When there is a design tension between what is useful for the Manager and what is convenient for another role, the Manager wins. They are the decision-maker, the buyer, and the person accountable for the organisation's capability.
+
+Simplicity is not a constraint — it is the product. LORE does one thing. It is not a general learning platform, a knowledge wiki, a course builder, or an HR system. Every feature should serve the core job: extract tacit knowledge, transfer it to people who need it.
+
+---
+
+## For data and systems contributors
+
+LORE's knowledge pipeline is the technical heart of the product. Understanding it is essential before contributing to it.
+
+All knowledge enters through one of two paths: a Reviewer responding to a prompt, or a Manager uploading a document. Either way, the first thing that happens is that the raw content is stored permanently as a complete record. It is never truncated, never overwritten, and never discarded. The source text and the metadata of how it was captured are part of the permanent record.
+
+Processing happens in stages. The first stage is code-based: cleaning, normalisation, deduplication by content hash, chunking of long documents into manageable segments with overlapping context windows. The second stage is AI-based: classification to identify whether the content contains expert decision logic, then extraction of a structured knowledge representation, then derivation of a recipe draft from that representation. Each stage produces its own stored output, layered on top of the raw record rather than replacing it.
+
+Human approval gates the knowledge base. No extraction reaches the knowledge base without a Manager reviewing and approving it. AI confidence scores inform the review but do not bypass it.
+
+The data model is org-scoped. Nothing leaks between organisations. The platform operator has a separate namespace from all customer data.
+
+---
+
+## Technical overview
+
+LORE is deliberately built with minimal dependencies.
+
+The frontend is vanilla JavaScript, HTML, and CSS. No framework, no build step, no bundler. ES modules run natively in the browser. This makes the codebase readable and modifiable without a development environment setup.
+
+Authentication and data storage use Firebase — Firebase Auth for identity with custom role claims, and Firestore for all application data organised by organisation.
+
+AI processing routes through a Cloudflare Worker proxy. API keys never touch the browser. The Worker handles both AI calls and Firebase Admin operations.
+
+The application is hosted on GitHub Pages, served directly from the repository.
 
 ---
 
@@ -69,214 +107,43 @@ LORE is built with deliberately minimal dependencies.
 ```
 lore/
   index.html          — App shell. All views live inside this single page.
-  style.css           — All brand colours, typography, and component styles.
+  style.css           — Brand system: colours, typography, component styles.
   app.js              — Auth listener and role-based router.
   firebase.js         — Firebase initialisation and exports.
-  404.html            — GitHub Pages SPA routing fallback.
 
   views/
-    training.js       — Employee training loop (domain select → scenario → result).
+    training.js       — Employee training loop.
     tasks.js          — Reviewer prompt interface.
-    dashboard.js      — Manager knowledge base, extraction queue, team intelligence.
-    profile.js        — Manager per-employee capability profile.
+    dashboard.js      — Manager knowledge base and team intelligence.
+    profile.js        — Manager per-employee capability view.
 
   engine/
     ai.js             — All AI calls. Never called directly from views.
-    auth.js           — Sign-in, invite redemption, invite generation, custom claims.
-    state.js          — XP, streak, rank, domain mastery. localStorage + Firestore sync.
-    scenarios.js      — Scenario fetch, generation, storage, evaluation, Reviewer task writing.
-    recipes.js        — Recipe and domain reads. Extraction pipeline writes.
-    domains.js        — Domain cluster reads, writes, and AI clustering trigger.
+    auth.js           — Sign-in, invite redemption, invite generation.
+    state.js          — XP, streak, rank, domain mastery.
+    scenarios.js      — Scenario generation, evaluation, and storage.
+    recipes.js        — Knowledge pipeline: extraction, processing, approval.
+    domains.js        — Skill area management and AI clustering.
+    ingest.js         — Code-only content cleaning, chunking, and deduplication.
 
   worker/
-    index.js          — Cloudflare Worker: AI proxy + Firebase Admin claims endpoint.
+    index.js          — Cloudflare Worker: AI proxy and admin claims endpoint.
     wrangler.toml     — Worker configuration.
 
   admin/
-    index.html        — Unified platform admin dashboard shell.
-    admin.js          — All admin logic: provision, seed, reset, activity log.
+    index.html        — Platform admin dashboard.
+    admin.js          — Provisioning, seeding, and activity logging.
 ```
-
----
-
-## How the data is structured
-
-All customer data is org-scoped. Nothing leaks between organisations. The platform operator has a dedicated namespace separate from customer data.
-
-```
-platform/
-  lore-platform/                — Platform operator singleton document
-                                  (product name, owner email, initialised flag)
-    adminLogs/{logId}/          — Every admin action: provision, delete, seed, reset.
-                                  Fields: action, orgId, orgName, detail, outcome,
-                                  errorMsg, performedBy, createdAt.
-
-organisations/{orgId}/          — Top-level org document (required for listing)
-                                  Fields: orgName, industry, createdAt, provisionedBy
-  profile/data                  — Org profile sub-document read by dashboard and
-                                  domains engine. Fields: orgName, industry,
-                                  proposedClusters, lastClusteredAt.
-  users/{userId}/               — Profile, XP, streak, mastery, seniority, role
-    tasks/{taskId}/             — Reviewer prompts (pending/completed)
-    recipeLibrary/              — Recipes an Employee has saved after unlocking
-    patternSignals/             — Manager-only cognitive pattern data
-  recipes/{recipeId}/           — Approved Career Recipes (the knowledge base)
-  scenarios/{scenarioId}/       — Generated training scenarios
-  extractions/{extractionId}/   — Staging area: raw → processed → approved/rejected
-  domains/{domainId}/           — Confirmed skill areas
-
-invites/{inviteId}/             — Invite tokens for new team members
-```
-
-**Why `organisations/{orgId}` exists as a document:** Firestore's `getDocs()` on a collection only returns documents that have been explicitly written at that path. Sub-documents alone (like `profile/data`) do not cause the parent to appear in collection queries. The top-level org document is written by the admin tool on every provision and seed operation.
-
-**Why `platform/` is separate:** The platform operator (LORE HQ) is a real entity in the system with its own concerns — admin activity logs, platform config. Putting these at the Firestore root alongside `organisations/` would mix operator and customer concerns. The `platform/` namespace is admin-only by Firestore rules; no org member can read or write it.
-
----
-
-## Roles and what they see
-
-| Role | What they see | What they never see |
-|---|---|---|
-| Manager | Everything — knowledge base, extraction queue, team progress, per-employee intelligence | Nothing is hidden |
-| Reviewer | Their own prompt queue (3–5 items, framed as quality checks) | Knowledge base, recipes, extractions, other users |
-| Employee | Their training scenarios, their own XP and rank, their saved recipes | Recipes behind scenarios, other users, pattern signals |
 
 ---
 
 ## Setting up for development
 
-The app runs directly in the browser with no build step.
+The application runs directly in the browser with no build step required.
 
-1. Clone the repository: `git clone https://github.com/lore-platform/lore.git`
-2. Serve it locally using any static server. VS Code Live Server works well. Or: `npx serve .` from the repo root.
-3. The app connects to the live Firebase project by default. For a development environment, create a separate Firebase project and update `firebase.js` with its config.
+Clone the repository and serve it with any static server. VS Code Live Server works well. The application connects to the live Firebase project by default. For a separate development environment, create a new Firebase project and update `firebase.js` with its configuration.
 
-**You do not need Node.js to run or develop the frontend.** Node is only needed if you want to deploy or modify the Cloudflare Worker.
-
----
-
-## Deploying the Worker
-
-The Cloudflare Worker proxies all AI calls and handles Firebase Admin operations (setting custom claims).
-
-```bash
-cd worker
-npm install -g wrangler
-wrangler login
-wrangler deploy
-```
-
-Set the required secrets — these are never stored in source code:
-
-```bash
-wrangler secret put GEMINI_API_KEY
-wrangler secret put GROQ_API_KEY
-wrangler secret put FIREBASE_PROJECT_ID
-wrangler secret put FIREBASE_CLIENT_EMAIL
-wrangler secret put FIREBASE_PRIVATE_KEY
-wrangler secret put ADMIN_SECRET
-```
-
-`FIREBASE_CLIENT_EMAIL` and `FIREBASE_PRIVATE_KEY` come from a Firebase service account JSON (Firebase Console → Project Settings → Service Accounts → Generate new private key). When setting `FIREBASE_PRIVATE_KEY`, paste the entire key including the `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` lines.
-
----
-
-## Firestore security rules
-
-Paste these rules in Firebase Console → Firestore → Rules:
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-
-    function isAdmin() {
-      return request.auth != null
-          && request.auth.token.email == 'YOUR_ADMIN_EMAIL';
-    }
-
-    function hasOrgAccess(orgId) {
-      return request.auth != null
-          && request.auth.token.orgId == orgId;
-    }
-
-    function isManager(orgId) {
-      return hasOrgAccess(orgId) && request.auth.token.role == 'manager';
-    }
-
-    function isEmployee(orgId) {
-      return hasOrgAccess(orgId) && request.auth.token.role == 'employee';
-    }
-
-    function isReviewer(orgId) {
-      return hasOrgAccess(orgId) && request.auth.token.role == 'reviewer';
-    }
-
-    // Platform operator namespace — admin only
-    match /platform/{document=**} {
-      allow read, write: if isAdmin();
-    }
-
-    // Customer orgs — top-level document
-    match /organisations/{orgId} {
-      allow read:  if isAdmin() || hasOrgAccess(orgId);
-      allow write: if isAdmin() || isManager(orgId);
-    }
-
-    // All org sub-collections
-    match /organisations/{orgId}/{document=**} {
-      allow read:  if isAdmin() || hasOrgAccess(orgId);
-      allow write: if isAdmin() || isManager(orgId) || isEmployee(orgId) || isReviewer(orgId);
-    }
-
-    // Invite tokens
-    match /invites/{inviteId} {
-      allow read:  if request.auth != null;
-      allow write: if isAdmin()
-                   || (request.auth != null && request.auth.token.role == 'manager');
-    }
-  }
-}
-```
-
-Replace `YOUR_ADMIN_EMAIL` with your platform owner email address.
-
----
-
-## Using the admin dashboard
-
-The admin dashboard at `https://lore-platform.github.io/lore/admin/` is the single tool for all platform management. It replaces the old `provision.html` and `seed-demo.html` pages.
-
-**Provisioning a Manager for an organisation:**
-1. Go to `https://lore-platform.github.io/lore/admin/`
-2. Sign in with your platform owner Firebase account
-3. Enter your `ADMIN_SECRET` when prompted
-4. Fill in the organisation details and Manager's information
-5. Click "Create Manager account" — the tool checks for duplicate emails and org IDs before writing anything, runs each step with a live progress log, and displays login details on success
-
-**Seeding the demo environment:**
-The demo section is pre-filled with Meridian Advisory details. Click "Provision + Seed demo" to run the full flow in one step — it creates the Manager account and seeds all data sequentially with a unified progress log. Run Reset first if you have seeded before.
-
-**Provisioned organisations list:**
-Shows all orgs with Manager name, email, UID, industry, and creation date. Each row has a Delete button that removes the Firebase Auth account and all Firestore data in a single operation.
-
-**Activity log:**
-Every admin action (provision, delete, seed, reset) is written to Firestore at `platform/lore-platform/adminLogs/` and displayed newest-first. Persists across devices and browser sessions.
-
----
-
-## Key design principles
-
-**Knowledge extraction is invisible.** Reviewers never know they are contributing to a knowledge base. Every prompt they receive is framed as reviewing, coaching, or quality-checking — never as knowledge capture.
-
-**Learning should feel like nothing.** The lesson is the experience, not a preamble. Employees see a scenario, respond, and get feedback. There is no explicit "you are now being trained" framing.
-
-**The org's knowledge belongs to the org.** Nothing is seeded from outside LORE's industry starting points. An empty knowledge base on day one is correct.
-
-**Domains emerge from knowledge.** Skill areas are not pre-set. They are proposed by AI after enough recipes accumulate, and confirmed by the Manager.
-
-**The Manager is the primary customer.** Full visibility, full intelligence. Every design decision serves the person making decisions about their organisation.
+Node.js is only required for deploying or modifying the Cloudflare Worker.
 
 ---
 
@@ -284,28 +151,31 @@ Every admin action (provision, delete, seed, reset) is written to Firestore at `
 
 | Component | Details |
 |---|---|
-| GitHub org | lore-platform |
 | Repository | https://github.com/lore-platform/lore |
-| Live app | https://lore-platform.github.io/lore/ |
+| Live application | https://lore-platform.github.io/lore/ |
 | Admin dashboard | https://lore-platform.github.io/lore/admin/ |
 | Firebase project | lore-platform-hu247 |
-| Cloudflare Worker | https://lore-worker.slop-runner.workers.dev |
 
 ---
 
 ## Contributing
 
-LORE uses vanilla JavaScript throughout. If you are adding a feature:
+Contributions to LORE are welcome across several dimensions — not only code.
 
-- Engine files (`engine/`) import Firebase directly using `../firebase.js`
-- View files (`views/`) import engine files using `../engine/[file].js` and Firebase using `../firebase.js`
-- Admin files (`admin/`) import Firebase using `../firebase.js`
-- No npm packages in the frontend — everything runs natively in the browser
-- Comments are part of the specification. Do not remove or shorten them.
-- Every function and non-obvious decision must be commented — readable by a non-technical person and by an AI reading cold
+**Knowledge management and L&D professionals:** The product's core decisions — how tacit knowledge is structured, what a useful training scenario looks like, how feedback should be framed for different learning outcomes — benefit from domain expertise. Contributions to the specification, design principles, and knowledge model are as valuable as code contributions.
+
+**Designers:** The three role experiences (Manager, Reviewer, Employee) each have distinct design requirements and constraints. See the design principles above. The brand system lives in `style.css`.
+
+**Data and systems contributors:** The knowledge pipeline and Firestore data model are documented in the codebase. See `engine/ingest.js`, `engine/recipes.js`, and the data model section above.
+
+**Code contributors:**
+- Vanilla JavaScript throughout — no frameworks, no npm packages in the frontend
+- Engine files import Firebase using `../firebase.js`
+- View files import engine files using `../engine/[file].js`
+- Comments are part of the specification — do not remove or shorten them
 - British English throughout
-- Gemini model strings are fixed: generation uses `gemini-2.5-flash`, classification uses `gemini-2.5-flash-lite`. Do not change these.
+- Every function must be commented clearly enough to be understood by a non-technical reader
 
 ---
 
-*LORE is built on the HOS framework — "From Knowledge to Judgement" (Itseuwa, 2025). Instructional Deconstruction, Open Thinking Frameworks, Execution Loop.*
+*LORE is the organisational implementation of the HOS framework — ["From Knowledge to Judgement" (Itseuwa, 2025)](https://osioke.github.io/from-knowledge-to-judgement/).*

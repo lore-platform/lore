@@ -1312,6 +1312,7 @@ async function runDemoReset() {
         errorMsg: null,
     });
 
+    demoLog('✓ Reset complete — all demo data cleared.', 'ok');
     showDemoStatus('Demo data reset. Run "Provision + Seed demo" to repopulate.', 'ok');
     await loadDemoCreds();
     loadOrgList();
