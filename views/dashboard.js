@@ -1,15 +1,18 @@
 // =============================================================================
 // LORE — Dashboard View (Manager)
 // The Manager's command surface. Full visibility into the knowledge base,
-// Reviewer extraction pipeline, domain clustering, and team progress.
+// extraction pipeline, domain management, and team progress.
 //
-// Sections rendered in this view:
-//   Overview         — recipe count, coverage summary, pending queue count
-//   Knowledge Base   — all approved recipes by skill area
-//   Review Queue     — pending extractions awaiting Manager approval
-//   Add Knowledge    — document upload for AI extraction
-//   Skill Areas      — domain confirmation UI (proposed clusters)
-//   Team             — all staff with role, status, and invite generation
+// Two tabs only:
+//   Knowledge Base — summary header, approved recipes, review queue,
+//                    document upload with chunking progress, corpus analysis
+//                    action (CORP-03), domains section (DOMAIN-02).
+//   Team           — employee list with track assignment (IA-02), team
+//                    progress, time to readiness, Reviewer activity.
+//
+// First-run state: new orgs (non-demo) land on a focused panel with only
+// the document upload and a brief value statement. Normal dashboard renders
+// once first content exists. Demo org always renders normally.
 //
 // This is the Manager's full intelligence surface. Every other role sees
 // a focused, single-purpose screen. The Manager sees everything.
@@ -24,6 +27,7 @@ import {
     approveRecipe,
     rejectExtraction,
     processDocument,
+    deriveFromCorpus,
 } from '../engine/recipes.js';
 import {
     getDomains,
@@ -36,33 +40,36 @@ import {
 } from '../engine/domains.js';
 import { generateInvite } from '../engine/auth.js';
 import { queueScenarioReview } from '../engine/scenarios.js';
+import { flagHighSignalResponses } from '../engine/analysis.js';
 
 // ---------------------------------------------------------------------------
 // Module-level state for this view.
 // ---------------------------------------------------------------------------
-let _orgId     = null;
-let _uid       = null;
-let _orgName   = '';
-let _recipes   = [];
-let _domains   = [];
-let _pending   = [];
-let _clusters  = [];
+let _orgId    = null;
+let _uid      = null;
+let _orgName  = '';
+let _recipes  = [];
+let _domains  = [];
+let _pending  = [];
+let _clusters = [];
 
-// Which section of the dashboard is currently active
-let _activeSection = 'overview';
+// Which top-level tab is active: 'knowledge' | 'team'
+let _activeTab = 'knowledge';
+
+// Which sub-section within each tab is active
+let _activeKnowledgeSection = 'recipes';
+let _activeTeamSection      = 'progress';
 
 // Upload state — persisted across tab switches so an in-progress or completed
 // extraction is not lost when the Manager clicks to another tab and back.
 let _uploadState = {
-    inProgress: false,   // true while the AI call is running
-    docName:    '',      // last entered document name
-    docText:    '',      // last entered document content
-    result:     null,    // { ok, extractions } from processDocument(), or null
-    errorMsg:   '',      // error string if result failed
+    inProgress:    false,
+    docName:       '',
+    docText:       '',
+    result:        null,
+    errorMsg:      '',
+    chunkProgress: null,   // { current: N, total: N } during chunked processing
 };
-
-// First-run onboarding — shown once per session, skipped after dismissed.
-let _onboardingDismissed = false;
 
 // ---------------------------------------------------------------------------
 // Entry point — called by app.js after auth.
@@ -74,13 +81,13 @@ export async function initDashboard(orgId, uid) {
     const container = document.getElementById('dashboard-content');
     if (!container) return;
 
-    console.log('LORE dashboard.js: initDashboard called — orgId:', orgId, 'uid:', uid);
-    renderLoading(container, 'Loading your knowledge base…');
+    console.log('LORE dashboard.js: initDashboard — orgId:', orgId, 'uid:', uid);
+    renderLoading(container, 'Loading your dashboard…');
 
-    // Load org profile for the org name
+    // Load org profile for org name
     await _loadOrgProfile();
 
-    // Load data in parallel — the dashboard needs all of this to render
+    // Load data in parallel
     const [recipes, domains, pending, clusters] = await Promise.all([
         getAllApprovedRecipes(orgId),
         getDomains(orgId),
@@ -93,23 +100,26 @@ export async function initDashboard(orgId, uid) {
     _pending  = pending;
     _clusters = clusters;
 
-    // If the org has not yet set their industry, show the onboarding gate first.
-    // The gate is a single question — once answered the Manager proceeds to the
-    // main dashboard. It does not block anything; it enriches the domain seed.
-    if (!_industry) {
-        renderOnboarding(container);
-    } else {
-        renderDashboard(container);
+    // ONBOARD-01 — First-run state.
+    // Check whether this org has any content (documents or extractions).
+    // If none exists and this is not the demo org, show the focused first-run panel.
+    // The demo org always renders the normal dashboard — it is always pre-seeded.
+    const isDemo = orgId === 'lore-demo';
+    if (!isDemo) {
+        const hasContent = await _checkOrgHasContent(orgId);
+        if (!hasContent) {
+            renderFirstRun(container);
+            return;
+        }
     }
+
+    renderDashboard(container);
 }
 
 // ---------------------------------------------------------------------------
-// Load the org profile to get the org name — used in invite generation.
+// Load the org profile to get the org name — used in invite generation
+// and in the dashboard header.
 // ---------------------------------------------------------------------------
-// Module-level — industry stored here after onboarding so the gate
-// does not re-appear on subsequent loads within the same session.
-let _industry = null;
-
 async function _loadOrgProfile() {
     const { db } = await import('../firebase.js');
     const { doc, getDoc } = await import(
@@ -118,173 +128,48 @@ async function _loadOrgProfile() {
     try {
         const snap = await getDoc(doc(db, 'organisations', _orgId, 'profile', 'data'));
         if (snap.exists()) {
-            _orgName  = snap.data().orgName  ?? '';
-            _industry = snap.data().industry ?? null;
+            _orgName = snap.data().orgName ?? '';
         }
-        console.log('LORE dashboard.js: Org profile loaded — orgName:', _orgName, 'industry:', _industry);
+        console.log('LORE dashboard.js: Org profile loaded — orgName:', _orgName);
     } catch (err) {
         console.warn('LORE dashboard.js: Could not load org profile.', err);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Onboarding gate — shown once, on first Manager sign-in, before the main
-// dashboard. Asks one question: what industry does the organisation operate in?
-// The answer seeds tentative domain name suggestions — clearly labelled as
-// starting points, not confirmed skill areas.
-//
-// Copy rule: never say "knowledge base", "training data", or "recipes" here.
-// Frame everything as helping LORE understand the organisation's context.
+// Check whether the org has any existing content — documents or extractions.
+// Used by the first-run gate. Returns true if any content exists, false if not.
+// Limit 1 on each query — we only need to know if anything exists at all.
 // ---------------------------------------------------------------------------
-function renderOnboarding(container) {
-    console.log('LORE dashboard.js: Rendering onboarding gate — no industry set yet.');
-
-    // Tentative domain seeds by broad industry category.
-    // These are displayed as dismissible chips after the Manager answers.
-    // [TUNING TARGET] Expand this list as LORE is used across more industries.
-    const seeds = {
-        'Consulting':        ['Client Engagement', 'Stakeholder Management', 'Proposal Development', 'Delivery Excellence', 'Commercial Judgement'],
-        'Financial Services':['Risk Assessment', 'Client Advisory', 'Regulatory Navigation', 'Portfolio Management', 'Deal Execution'],
-        'Technology':        ['Product Thinking', 'Technical Communication', 'Delivery Management', 'Stakeholder Alignment', 'Incident Response'],
-        'Healthcare':        ['Clinical Judgement', 'Patient Communication', 'Protocol Navigation', 'Team Coordination', 'Documentation'],
-        'Legal':             ['Client Counsel', 'Matter Management', 'Risk Identification', 'Negotiation', 'Document Drafting'],
-        'Education':         ['Learner Engagement', 'Curriculum Design', 'Assessment', 'Parent Communication', 'Classroom Management'],
-        'Retail & Consumer': ['Customer Experience', 'Merchandising', 'Supplier Management', 'Operations', 'Sales Execution'],
-        'Media & Creative':  ['Brief Interpretation', 'Client Management', 'Creative Direction', 'Production', 'Pitching'],
-        'Non-profit':        ['Programme Delivery', 'Funder Relations', 'Community Engagement', 'Impact Measurement', 'Partnerships'],
-        'Other':             ['Leadership', 'Communication', 'Problem Solving', 'Stakeholder Management', 'Decision Making'],
-    };
-
-    const industryOptions = Object.keys(seeds);
-
-    container.innerHTML = `
-        <div style="max-width: 520px; margin: var(--space-16) auto 0;">
-            <p class="auth-wordmark" style="color: var(--ink); margin-bottom: var(--space-2);">Welcome to LORE</p>
-            <p class="text-secondary mt-2 mb-8">One question before we start. What industry does your organisation operate in?</p>
-
-            <div class="card">
-                <div class="auth-field">
-                    <label class="label" for="industry-select">Industry</label>
-                    <select class="input" id="industry-select">
-                        <option value="">Choose one…</option>
-                        ${industryOptions.map(opt => `<option value="${opt}">${opt}</option>`).join('')}
-                    </select>
-                </div>
-
-                <!-- Seed chips — shown after an industry is chosen -->
-                <div id="seed-preview" style="display: none; margin-top: var(--space-4);">
-                    <p class="label mb-3">Starting points</p>
-                    <p class="text-secondary text-sm mb-3">These are tentative skill areas based on your industry. LORE will replace them with your organisation's own as knowledge is added — they are not permanent.</p>
-                    <div id="seed-chips" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4);"></div>
-                </div>
-
-                <p id="onboarding-error" style="color: var(--error); font-size: var(--text-sm); display: none; margin-bottom: var(--space-3);"></p>
-
-                <button class="btn btn-primary btn-full" id="onboarding-submit" disabled>
-                    Set up my dashboard
-                </button>
-            </div>
-        </div>
-    `;
-
-    // Show seed chips when industry is selected
-    document.getElementById('industry-select')?.addEventListener('change', (e) => {
-        const selected  = e.target.value;
-        const preview   = document.getElementById('seed-preview');
-        const chipsEl   = document.getElementById('seed-chips');
-        const submitBtn = document.getElementById('onboarding-submit');
-
-        if (!selected) {
-            preview.style.display   = 'none';
-            submitBtn.disabled      = true;
-            return;
-        }
-
-        const domainSeeds = seeds[selected] ?? seeds['Other'];
-        chipsEl.innerHTML = domainSeeds.map(name => `
-            <span class="chip chip-pending" style="cursor: default;">${name}</span>
-        `).join('');
-
-        preview.style.display  = 'block';
-        submitBtn.disabled     = false;
-    });
-
-    document.getElementById('onboarding-submit')?.addEventListener('click', async () => {
-        const selected  = document.getElementById('industry-select')?.value;
-        const errorEl   = document.getElementById('onboarding-error');
-        if (!selected) {
-            errorEl.textContent   = 'Please choose an industry to continue.';
-            errorEl.style.display = 'block';
-            return;
-        }
-
-        const btn = document.getElementById('onboarding-submit');
-        btn.disabled    = true;
-        btn.textContent = 'Setting up…';
-
-        await _saveIndustryAndProceed(container, selected, seeds[selected] ?? seeds['Other']);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Save the industry to the org profile and seed tentative domains.
-// Then proceed to the main dashboard.
-// ---------------------------------------------------------------------------
-async function _saveIndustryAndProceed(container, industry, domainSeeds) {
+async function _checkOrgHasContent(orgId) {
     const { db } = await import('../firebase.js');
-    const {
-        doc,
-        setDoc,
-        addDoc,
-        collection,
-        serverTimestamp
-    } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-
-    // Save industry to org profile — this is what prevents the gate
-    // from showing on subsequent sign-ins.
+    const { collection, query, limit, getDocs } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
     try {
-        await setDoc(
-            doc(db, 'organisations', _orgId, 'profile', 'data'),
-            { industry, updatedAt: serverTimestamp() },
-            { merge: true }
-        );
-        _industry = industry;
-        console.log('LORE dashboard.js: Industry saved:', industry);
+        const [docsSnap, extSnap] = await Promise.all([
+            getDocs(query(collection(db, 'organisations', orgId, 'documents'),    limit(1))),
+            getDocs(query(collection(db, 'organisations', orgId, 'extractions'),  limit(1))),
+        ]);
+        return !docsSnap.empty || !extSnap.empty;
     } catch (err) {
-        console.warn('LORE dashboard.js: Could not save industry.', err);
-        // Proceed anyway — the gate will show again next sign-in but that is acceptable
+        console.warn('LORE dashboard.js: Could not check for existing content.', err);
+        // Fail safe — if we cannot check, show the normal dashboard
+        return true;
     }
-
-    // Seed tentative domain documents — each labelled as provisional so
-    // the Manager knows they are starting points, not confirmed skill areas.
-    for (const name of domainSeeds) {
-        try {
-            await addDoc(collection(db, 'organisations', _orgId, 'domains'), {
-                name,
-                description: '',
-                recipeIds:   [],
-                reviewerIds: [],
-                provisional: true,   // shown differently in Skill Areas — greyed, dismissible
-                confirmedAt: serverTimestamp(),
-            });
-        } catch (err) {
-            console.warn('LORE dashboard.js: Could not seed domain:', name, err);
-        }
-    }
-
-    console.log('LORE dashboard.js: Seeded', domainSeeds.length, 'provisional domains. Proceeding to dashboard.');
-
-    // Reload domains (now includes the seeds) and render main dashboard
-    _domains = await getDomains(_orgId);
-    renderDashboard(container);
 }
 
 // ---------------------------------------------------------------------------
-// Render the full dashboard shell with section navigation.
+// ONBOARD-01 — First-run state.
+// Shown to new Managers (non-demo) who have no content yet.
+// Replaces the Knowledge Base tab content area with a single focused panel:
+// a two-sentence value statement and the document upload interface.
+// The Team tab remains accessible — the Manager may want to invite people
+// before uploading anything.
+// The normal dashboard renders on the next load once content exists.
 // ---------------------------------------------------------------------------
-function renderDashboard(container) {
-    const pendingCount = _pending.length;
-    const clusterCount = _clusters.length;
+function renderFirstRun(container) {
+    console.log('LORE dashboard.js: Rendering first-run state — no content yet.');
 
     container.innerHTML = `
         <div>
@@ -294,161 +179,136 @@ function renderDashboard(container) {
                     <h1>Dashboard</h1>
                     <p class="text-secondary text-sm mt-2">${_orgName || 'Your organisation'}</p>
                 </div>
-                <button class="btn btn-primary" id="invite-btn" style="font-size: var(--text-sm);">
-                    Invite someone
+            </div>
+
+            <!-- Two-tab shell — Team tab accessible even in first-run -->
+            <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); border-bottom: 1px solid rgba(44,36,22,0.08); padding-bottom: var(--space-2);">
+                <button class="btn btn-secondary dashboard-tab" id="fr-tab-knowledge"
+                    style="font-size: var(--text-sm); padding: var(--space-2) var(--space-5); background: var(--ember); color: white; border: none;">
+                    Knowledge Base
+                </button>
+                <button class="btn btn-secondary dashboard-tab" id="fr-tab-team"
+                    style="font-size: var(--text-sm); padding: var(--space-2) var(--space-5);">
+                    Team
                 </button>
             </div>
 
-            <!-- Section navigation -->
-            <div class="dashboard-nav" style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                ${_navTab('overview',   'Overview')}
-                ${_navTab('progress',   'Team progress')}
-                ${_navTab('ttc',        'Time to readiness')}
-                ${_navTab('reviewer',   'Reviewer activity')}
-                ${_navTab('knowledge',  'Knowledge base')}
-                ${_navTab('queue',      `Review queue${pendingCount > 0 ? ` <span class="queue-badge">${pendingCount}</span>` : ''}`)}
-                ${_navTab('upload',     'Add knowledge')}
-                ${_navTab('areas',      `Skill areas${clusterCount > 0 ? ' <span class="queue-badge">!</span>' : ''}`)}
-                ${_navTab('team',       'Team')}
+            <!-- First-run panel — only shown in Knowledge Base tab -->
+            <div id="fr-content">
+                ${_renderFirstRunPanel()}
             </div>
-
-            <!-- Section content -->
-            <div id="dashboard-section"></div>
         </div>
     `;
 
-    // Attach nav tab handlers
-    ['overview', 'progress', 'ttc', 'reviewer', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(section => {
-        document.getElementById(`tab-${section}`)?.addEventListener('click', () => {
-            _activeSection = section;
-            _setActiveTab(section);
-            renderSection(section);
-        });
+    document.getElementById('fr-tab-knowledge')?.addEventListener('click', () => {
+        document.getElementById('fr-tab-knowledge').style.background = 'var(--ember)';
+        document.getElementById('fr-tab-knowledge').style.color      = 'white';
+        document.getElementById('fr-tab-knowledge').style.border     = 'none';
+        document.getElementById('fr-tab-team').style.background      = '';
+        document.getElementById('fr-tab-team').style.color           = '';
+        document.getElementById('fr-tab-team').style.border          = '';
+        document.getElementById('fr-content').innerHTML = _renderFirstRunPanel();
+        _attachFirstRunUploadHandlers(container);
     });
 
-    // Invite button
-    document.getElementById('invite-btn')?.addEventListener('click', () => {
-        _activeSection = 'team';
-        _setActiveTab('team');
-        renderSection('team', { openInvite: true });
+    document.getElementById('fr-tab-team')?.addEventListener('click', () => {
+        document.getElementById('fr-tab-team').style.background      = 'var(--ember)';
+        document.getElementById('fr-tab-team').style.color           = 'white';
+        document.getElementById('fr-tab-team').style.border          = 'none';
+        document.getElementById('fr-tab-knowledge').style.background = '';
+        document.getElementById('fr-tab-knowledge').style.color      = '';
+        document.getElementById('fr-tab-knowledge').style.border     = '';
+        const fc = document.getElementById('fr-content');
+        fc.innerHTML = '';
+        renderTeamSections(fc);
     });
 
-    // Render the default section
-    _setActiveTab(_activeSection);
-    renderSection(_activeSection);
-
-    // Show first-run onboarding overlay on the very first load of the session.
-    // Once dismissed it stays dismissed for the session (not persisted — it is
-    // cheap to show once per login and the Manager may want to revisit it).
-    if (!_onboardingDismissed) {
-        _onboardingDismissed = true;
-        _showOnboarding();
-    }
+    _attachFirstRunUploadHandlers(container);
 }
 
-// ---------------------------------------------------------------------------
-// First-run onboarding overlay.
-// Plain language walkthrough of what LORE does and what each tab is for.
-// Shown once per session. Skippable. Does not block use of the dashboard.
-// ---------------------------------------------------------------------------
-function _showOnboarding() {
-    const steps = [
-        {
-            title: 'Welcome to your LORE dashboard',
-            body: 'LORE turns what your most experienced people know into training scenarios for the rest of your team. This quick guide explains what each part of the dashboard does. You can skip it at any time.',
-        },
-        {
-            title: 'Start with knowledge',
-            body: 'The ‘Add knowledge’ tab is where everything begins. Paste in any internal document — a retrospective, a playbook, a post-mortem — and LORE finds the decision-making moments inside it. Those moments become training material.',
-        },
-        {
-            title: 'Review what LORE extracts',
-            body: 'The ‘Review queue’ is your quality gate. Every time LORE processes a document, it drafts Career Recipes for you to approve. Read each one, edit the wording if needed, and decide what goes into the knowledge base.',
-        },
-        {
-            title: 'Confirm your skill areas',
-            body: 'The ‘Skill areas’ tab is where LORE groups your recipes into training domains. Once you have enough recipes, LORE will propose clusters — you confirm, rename, or adjust them. These become the areas your team trains in.',
-        },
-        {
-            title: 'Invite your team',
-            body: 'Use the ‘Team’ tab to invite Employees and Reviewers. Employees train through AI-generated scenarios. Reviewers — your senior people — receive occasional prompts that capture their instincts without taking them away from real work.',
-        },
-        {
-            title: 'Track development',
-            body: 'The ‘Team progress’ and ‘Time to readiness’ tabs show how each person is developing and when they are likely to reach a useful capability level. Use this to plan who is ready for more complex work.',
-        },
-    ];
-
-    let stepIndex = 0;
-
-    // Build overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'lore-onboarding';
-    overlay.style.cssText = [
-        'position:fixed;inset:0;z-index:8888',
-        'display:flex;align-items:center;justify-content:center',
-        'background:rgba(28,22,14,0.45);backdrop-filter:blur(2px)',
-        'padding:var(--space-4)',
-    ].join(';');
-
-    function renderStep() {
-        const step = steps[stepIndex];
-        const isLast = stepIndex === steps.length - 1;
-        const dots = steps.map((_, i) =>
-            `<span style="width:6px;height:6px;border-radius:50%;background:${i === stepIndex ? 'var(--ember)' : 'rgba(44,36,22,0.2)'};display:inline-block;margin:0 3px;"></span>`
-        ).join('');
-
-        overlay.innerHTML = `
-            <div style="background:var(--surface-1,#faf7f4);border:1px solid rgba(44,36,22,0.1);border-radius:var(--radius-lg,12px);padding:var(--space-8);max-width:480px;width:100%;box-shadow:0 8px 40px rgba(28,22,14,0.2);">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-6);">
-                    <span style="font-size:var(--text-xs);color:var(--warm-grey);">${stepIndex + 1} of ${steps.length}</span>
-                    <button id="onb-skip" style="background:none;border:none;cursor:pointer;color:var(--warm-grey);font-size:var(--text-sm);padding:0;">Skip guide</button>
-                </div>
-                <h2 style="margin-bottom:var(--space-4);font-size:var(--text-xl);line-height:1.3;">${step.title}</h2>
-                <p style="color:var(--warm-grey);line-height:1.7;font-size:var(--text-sm);margin-bottom:var(--space-8);">${step.body}</p>
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                    <div>${dots}</div>
-                    <div style="display:flex;gap:var(--space-3);">
-                        ${stepIndex > 0 ? '<button id="onb-back" class="btn btn-secondary" style="font-size:var(--text-sm);">Back</button>' : ''}
-                        <button id="onb-next" class="btn btn-primary" style="font-size:var(--text-sm);">${isLast ? 'Get started' : 'Next'}</button>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        document.getElementById('onb-skip')?.addEventListener('click', () => overlay.remove());
-        document.getElementById('onb-next')?.addEventListener('click', () => {
-            if (isLast) { overlay.remove(); return; }
-            stepIndex++;
-            renderStep();
-        });
-        document.getElementById('onb-back')?.addEventListener('click', () => {
-            stepIndex--;
-            renderStep();
-        });
-    }
-
-    renderStep();
-    document.body.appendChild(overlay);
-}
-
-// ---------------------------------------------------------------------------
-// Tab builder helpers.
-// ---------------------------------------------------------------------------
-function _navTab(id, label) {
+function _renderFirstRunPanel() {
+    // Value statement — framed around the Manager's documents, not LORE's features.
+    // Copy rule: never say "knowledge base", "recipes", "extraction", "training data".
     return `
-        <button
-            id="tab-${id}"
-            class="btn btn-secondary dashboard-tab"
-            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4);"
-        >
-            ${label}
-        </button>
+        <div style="max-width: 560px; margin: var(--space-8) auto 0;">
+            <div class="card" style="margin-bottom: var(--space-6);">
+                <h2 style="margin-bottom: var(--space-3);">Start with what your team already knows</h2>
+                <p class="text-secondary" style="line-height: 1.7;">
+                    Upload a document that captures how your team makes decisions — a retrospective,
+                    a playbook, a post-mortem. LORE will find the moments of expertise inside it
+                    and turn them into training scenarios for the rest of your team.
+                </p>
+            </div>
+            ${_renderUploadForm()}
+        </div>
     `;
 }
 
-function _setActiveTab(activeId) {
-    ['overview', 'progress', 'ttc', 'reviewer', 'knowledge', 'queue', 'upload', 'areas', 'team'].forEach(id => {
+function _attachFirstRunUploadHandlers(container) {
+    _attachUploadHandlers(async () => {
+        // Once the first document is uploaded and processed, transition to the
+        // normal dashboard so the Manager can see the review queue.
+        _pending = await getPendingExtractions(_orgId);
+        _recipes = await getAllApprovedRecipes(_orgId);
+        renderDashboard(container);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Render the full two-tab dashboard shell.
+// ---------------------------------------------------------------------------
+function renderDashboard(container) {
+    container.innerHTML = `
+        <div>
+            <!-- Dashboard header -->
+            <div class="flex-between mb-6">
+                <div>
+                    <h1>Dashboard</h1>
+                    <p class="text-secondary text-sm mt-2">${_orgName || 'Your organisation'}</p>
+                </div>
+            </div>
+
+            <!-- Two primary tabs: Knowledge Base and Team -->
+            <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); border-bottom: 1px solid rgba(44,36,22,0.08); padding-bottom: var(--space-2);">
+                <button class="btn btn-secondary dashboard-tab" id="tab-knowledge"
+                    style="font-size: var(--text-sm); padding: var(--space-2) var(--space-5);">
+                    Knowledge Base
+                </button>
+                <button class="btn btn-secondary dashboard-tab" id="tab-team"
+                    style="font-size: var(--text-sm); padding: var(--space-2) var(--space-5);">
+                    Team
+                </button>
+            </div>
+
+            <!-- Tab content area -->
+            <div id="dashboard-tab-content"></div>
+        </div>
+    `;
+
+    document.getElementById('tab-knowledge')?.addEventListener('click', () => {
+        _activeTab = 'knowledge';
+        _setActiveTabStyle('knowledge');
+        renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
+    });
+
+    document.getElementById('tab-team')?.addEventListener('click', () => {
+        _activeTab = 'team';
+        _setActiveTabStyle('team');
+        renderTeamTab(document.getElementById('dashboard-tab-content'));
+    });
+
+    // Render the active tab
+    _setActiveTabStyle(_activeTab);
+    const tabContent = document.getElementById('dashboard-tab-content');
+    if (_activeTab === 'team') {
+        renderTeamTab(tabContent);
+    } else {
+        renderKnowledgeTab(tabContent);
+    }
+}
+
+function _setActiveTabStyle(activeId) {
+    ['knowledge', 'team'].forEach(id => {
         const btn = document.getElementById(`tab-${id}`);
         if (!btn) return;
         if (id === activeId) {
@@ -463,180 +323,114 @@ function _setActiveTab(activeId) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Render the content for a given section.
-// ---------------------------------------------------------------------------
-function renderSection(section, opts = {}) {
-    const el = document.getElementById('dashboard-section');
+// =============================================================================
+// KNOWLEDGE BASE TAB
+// Sub-sections: recipes, queue, upload, domains
+// =============================================================================
+
+function renderKnowledgeTab(container) {
+    // Summary header — recipe count, domains confirmed, pending count
+    const confirmedDomains = _domains.filter(d => !d.provisional).length;
+    const pendingCount     = _pending.length;
+
+    container.innerHTML = `
+        <div>
+            <!-- Summary header -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-6);">
+                <div class="card" style="text-align: center;">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Recipes</p>
+                    <p style="font-size: var(--text-2xl); font-weight: 600;">${_recipes.length}</p>
+                </div>
+                <div class="card" style="text-align: center;">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Skill areas confirmed</p>
+                    <p style="font-size: var(--text-2xl); font-weight: 600;">${confirmedDomains}</p>
+                </div>
+                <div class="card" style="text-align: center; cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Pending review</p>
+                    <p style="font-size: var(--text-2xl); font-weight: 600; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
+                </div>
+            </div>
+
+            <!-- Knowledge Base sub-navigation -->
+            <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;">
+                ${_kbNavTab('recipes', 'Recipes')}
+                ${_kbNavTab('queue',   `Review queue${pendingCount > 0 ? ` <span class="queue-badge">${pendingCount}</span>` : ''}`)}
+                ${_kbNavTab('upload',  'Add knowledge')}
+                ${_kbNavTab('domains', 'Skill areas')}
+            </div>
+
+            <!-- Sub-section content -->
+            <div id="kb-section-content"></div>
+        </div>
+    `;
+
+    // Clicking the pending card navigates to the review queue
+    document.getElementById('kb-pending-card')?.addEventListener('click', () => {
+        if (pendingCount > 0) _switchKbSection('queue');
+    });
+
+    // Sub-nav handlers
+    ['recipes', 'queue', 'upload', 'domains'].forEach(s => {
+        document.getElementById(`kb-tab-${s}`)?.addEventListener('click', () => {
+            _switchKbSection(s);
+        });
+    });
+
+    _switchKbSection(_activeKnowledgeSection);
+}
+
+function _kbNavTab(id, label) {
+    return `
+        <button
+            id="kb-tab-${id}"
+            class="btn btn-secondary"
+            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4);"
+        >${label}</button>
+    `;
+}
+
+function _switchKbSection(section) {
+    _activeKnowledgeSection = section;
+
+    // Update sub-nav active styles
+    ['recipes', 'queue', 'upload', 'domains'].forEach(s => {
+        const btn = document.getElementById(`kb-tab-${s}`);
+        if (!btn) return;
+        if (s === section) {
+            btn.style.background = 'rgba(44,36,22,0.08)';
+            btn.style.fontWeight = '600';
+        } else {
+            btn.style.background = '';
+            btn.style.fontWeight = '';
+        }
+    });
+
+    const el = document.getElementById('kb-section-content');
     if (!el) return;
 
     switch (section) {
-        case 'overview':   renderOverview(el);            break;
-        case 'progress':   renderTeamProgress(el);        break;
-        case 'ttc':        renderTimeToReadiness(el);     break;
-        case 'reviewer':   renderReviewerActivity(el);    break;
-        case 'knowledge':  renderKnowledgeBase(el);       break;
-        case 'queue':      renderReviewQueue(el);         break;
-        case 'upload':     renderUpload(el);              break;
-        case 'areas':      renderSkillAreas(el);          break;
-        case 'team':       renderTeam(el, opts);          break;
-        default:           renderOverview(el);
+        case 'recipes': renderKbRecipes(el);  break;
+        case 'queue':   renderKbQueue(el);    break;
+        case 'upload':  renderKbUpload(el);   break;
+        case 'domains': renderKbDomains(el);  break;
+        default:        renderKbRecipes(el);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Section header helper — every tab gets a title and a plain-language
-// description of what it does and why the Manager should care about it.
-// This replaces the pattern of each section managing its own h3/p header.
+// KB SUB-SECTION: Recipes
+// All approved recipes browsable by domain.
 // ---------------------------------------------------------------------------
-function _sectionHeader(title, description) {
-    return `
-        <div style="margin-bottom: var(--space-6);">
-            <h2 style="margin-bottom: var(--space-2);">${title}</h2>
-            <p class="text-secondary text-sm" style="max-width: 600px; line-height: 1.6;">${description}</p>
-        </div>
-    `;
-}
-
-// ---------------------------------------------------------------------------
-// SECTION: Overview
-// High-level numbers — recipe count, coverage summary, pending queue count.
-// The Manager sees the health of the knowledge base at a glance.
-// ---------------------------------------------------------------------------
-function renderOverview(el) {
-    // Group recipes by domain name for the coverage heat map
-    const byDomain = {};
-    _recipes.forEach(r => {
-        const d = r.domain || 'Uncategorised';
-        if (!byDomain[d]) byDomain[d] = 0;
-        byDomain[d]++;
-    });
-
-    const domainCount  = Object.keys(byDomain).length;
-    const pendingCount = _pending.length;
-
-    // Thin areas: domains with fewer than 5 recipes cannot generate varied
-    // scenarios reliably. Flagged prominently so the Manager knows where to
-    // focus knowledge-building effort.
-    const thinAreas = Object.entries(byDomain).filter(([, count]) => count < 5);
-
-    const clusterAlert = _clusters.length > 0
-        ? `<div class="card mt-4" style="border-left: 3px solid var(--ember);">
-               <p style="font-weight: 500; color: var(--ember);">Skill areas ready to confirm</p>
-               <p class="text-secondary text-sm mt-2">LORE has grouped your recipes into ${_clusters.length} proposed skill areas. Review them in the Skill Areas tab.</p>
-           </div>`
-        : '';
-
-    const thinAlert = thinAreas.length > 0 && _recipes.length > 0
-        ? `<div class="card mt-4" style="border-left: 3px solid #D4943A;">
-               <p style="font-weight: 500; color: #8C5A0A;">
-                   ${thinAreas.length} skill area${thinAreas.length !== 1 ? 's' : ''} need${thinAreas.length === 1 ? 's' : ''} more recipes
-               </p>
-               <p class="text-secondary text-sm mt-2">
-                   ${thinAreas.map(([d]) => d).join(', ')} — fewer than 5 recipes each. Scenario variety will be limited until more are added.
-               </p>
-           </div>`
-        : '';
-
-    el.innerHTML = `
-        <div>
-            ${clusterAlert}
-            ${thinAlert}
-
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-4);">
-                <div class="card">
-                    <p class="label">Recipes in knowledge base</p>
-                    <p style="font-size: var(--text-3xl); font-weight: 600; margin-top: var(--space-2);">${_recipes.length}</p>
-                    <p class="text-secondary text-sm mt-2">${domainCount} skill area${domainCount !== 1 ? 's' : ''}</p>
-                </div>
-                <div class="card">
-                    <p class="label">Awaiting your review</p>
-                    <p style="font-size: var(--text-3xl); font-weight: 600; margin-top: var(--space-2);">${pendingCount}</p>
-                    <p class="text-secondary text-sm mt-2">${pendingCount > 0 ? 'Open Review Queue' : 'Nothing pending'}</p>
-                </div>
-            </div>
-
-            ${_recipes.length === 0 ? renderEmptyKnowledgeBase() : renderCoverageHeatMap(byDomain)}
-
-            <div class="card mt-4">
-                <h3 style="margin-bottom: var(--space-3);">Getting started</h3>
-                <p class="text-secondary text-sm">Add knowledge by uploading a document, or invite a senior team member to start contributing. Once you have three or more recipes, LORE will suggest skill areas to confirm.</p>
-                <div style="display: flex; gap: var(--space-3); margin-top: var(--space-4); flex-wrap: wrap;">
-                    <button class="btn btn-primary" id="go-upload" style="font-size: var(--text-sm);">Upload a document</button>
-                    <button class="btn btn-secondary" id="go-invite" style="font-size: var(--text-sm);">Invite a reviewer</button>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.getElementById('go-upload')?.addEventListener('click', () => {
-        _activeSection = 'upload'; _setActiveTab('upload'); renderSection('upload');
-    });
-    document.getElementById('go-invite')?.addEventListener('click', () => {
-        _activeSection = 'team'; _setActiveTab('team'); renderSection('team', { openInvite: true });
-    });
-}
-
-function renderEmptyKnowledgeBase() {
-    return `
-        <div class="card mt-4" style="text-align: center; padding: var(--space-10);">
-            <p style="color: var(--warm-grey); font-size: var(--text-lg);">No recipes yet</p>
-            <p class="text-secondary text-sm mt-2">Your knowledge base is empty on day one — that's correct. Upload a document or invite a senior team member to start building it.</p>
-        </div>
-    `;
-}
-
-// Coverage heat map — visual representation of recipe depth per skill area.
-// Colour-coded: sage (strong, >= 5), amber (developing, 3–4), ember (thin, < 3).
-// The 5-recipe threshold is not arbitrary — below it, scenario variety drops
-// and Employees will see repeated content, breaking the learning experience.
-function renderCoverageHeatMap(byDomain) {
-    const max = Math.max(...Object.values(byDomain));
-    return `
-        <div class="card mt-4">
-            <h3 style="margin-bottom: var(--space-1);">Coverage heat map</h3>
-            <p class="text-secondary text-sm mb-4">Skill areas with fewer than 5 recipes cannot generate enough varied scenarios for effective training.</p>
-            ${Object.entries(byDomain).sort((a, b) => b[1] - a[1]).map(([domain, count]) => {
-                const barColour  = count >= 5 ? 'var(--sage)' : count >= 3 ? '#D4943A' : 'var(--ember)';
-                const labelColour = count >= 5 ? 'var(--sage)' : count >= 3 ? '#8C5A0A' : 'var(--error)';
-                const pct        = Math.round((count / max) * 100);
-                const label      = count >= 5 ? 'Strong' : count >= 3 ? 'Developing' : 'Thin — needs recipes';
-                return `
-                    <div style="margin-bottom: var(--space-4);">
-                        <div class="flex-between mb-2">
-                            <p style="font-size: var(--text-sm); font-weight: 500;">${domain}</p>
-                            <p style="font-size: var(--text-xs); color: ${labelColour};">${count} recipe${count !== 1 ? 's' : ''} · ${label}</p>
-                        </div>
-                        <div class="xp-bar-track">
-                            <div class="xp-bar-fill" style="width: ${pct}%; background: ${barColour};"></div>
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-}
-
-// ---------------------------------------------------------------------------
-// SECTION: Knowledge Base
-// All approved recipes listed by skill area.
-// ---------------------------------------------------------------------------
-function renderKnowledgeBase(el) {
-    const header = _sectionHeader(
-        'Knowledge base',
-        'These are the approved Career Recipes that power your team\'s training scenarios. Each recipe captures one specific skill — a decision, a behaviour, a judgement call — that your best people use in the field. The more recipes you have in a skill area, the more varied and realistic the training scenarios your team gets.'
-    );
+function renderKbRecipes(el) {
     if (_recipes.length === 0) {
-        el.innerHTML = header + `
+        el.innerHTML = `
             <div class="empty-state">
                 <h3>No recipes yet</h3>
                 <p class="mt-2">Upload a document or invite a Reviewer to start building your knowledge base.</p>
-                <button class="btn btn-primary mt-6" id="kb-go-upload">Upload a document</button>
+                <button class="btn btn-primary mt-6" id="kb-recipes-go-upload">Upload a document</button>
             </div>
         `;
-        document.getElementById('kb-go-upload')?.addEventListener('click', () => {
-            _activeSection = 'upload'; _setActiveTab('upload'); renderSection('upload');
-        });
+        document.getElementById('kb-recipes-go-upload')?.addEventListener('click', () => _switchKbSection('upload'));
         return;
     }
 
@@ -649,19 +443,18 @@ function renderKnowledgeBase(el) {
     });
 
     el.innerHTML = `
-        ${header}
         <div>
             <p class="text-secondary text-sm mb-6">${_recipes.length} recipe${_recipes.length !== 1 ? 's' : ''} across ${Object.keys(byDomain).length} skill area${Object.keys(byDomain).length !== 1 ? 's' : ''}</p>
             ${Object.entries(byDomain).map(([domain, recipes]) => `
                 <div style="margin-bottom: var(--space-8);">
                     <h3 style="margin-bottom: var(--space-4);">${domain}</h3>
-                    ${recipes.map(r => renderRecipeCard(r)).join('')}
+                    ${recipes.map(r => _renderRecipeCard(r)).join('')}
                 </div>
             `).join('')}
         </div>
     `;
 
-    // Attach expand/collapse and send-for-review handlers for each recipe
+    // Attach expand/collapse and send-for-review handlers
     _recipes.forEach(r => {
         document.getElementById(`recipe-toggle-${r.id}`)?.addEventListener('click', () => {
             const detail = document.getElementById(`recipe-detail-${r.id}`);
@@ -676,26 +469,20 @@ function renderKnowledgeBase(el) {
         document.getElementById(`recipe-review-${r.id}`)?.addEventListener('click', async () => {
             const panel = document.getElementById(`recipe-review-panel-${r.id}`);
             if (!panel) return;
-
-            // Toggle the panel
             const isOpen = panel.style.display !== 'none';
             panel.style.display = isOpen ? 'none' : 'block';
             if (isOpen) return;
 
-            // Populate Reviewer dropdown from team members with role='reviewer'
-            const reviewerSelect   = document.getElementById(`review-reviewer-${r.id}`);
-            const scenarioSelect   = document.getElementById(`review-scenario-${r.id}`);
-            const statusEl         = document.getElementById(`review-status-${r.id}`);
+            const reviewerSelect = document.getElementById(`review-reviewer-${r.id}`);
+            const scenarioSelect = document.getElementById(`review-scenario-${r.id}`);
+            const statusEl       = document.getElementById(`review-status-${r.id}`);
 
-            // Load Reviewers
             const { db: firestoreDb } = await import('../firebase.js');
             const { collection: col, query: q, where: wh, getDocs: gd } =
                 await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 
             try {
-                const usersSnap = await gd(
-                    q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))
-                );
+                const usersSnap = await gd(q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer')));
                 usersSnap.forEach(d => {
                     const opt = document.createElement('option');
                     opt.value = d.id;
@@ -703,10 +490,7 @@ function renderKnowledgeBase(el) {
                     reviewerSelect?.appendChild(opt);
                 });
 
-                // Load scenarios for this recipe
-                const scenariosSnap = await gd(
-                    q(col(firestoreDb, 'organisations', _orgId, 'scenarios'), wh('recipeId', '==', r.id))
-                );
+                const scenariosSnap = await gd(q(col(firestoreDb, 'organisations', _orgId, 'scenarios'), wh('recipeId', '==', r.id)));
                 if (scenariosSnap.empty) {
                     if (statusEl) statusEl.textContent = 'No scenarios generated for this recipe yet.';
                 } else {
@@ -722,7 +506,6 @@ function renderKnowledgeBase(el) {
                 if (statusEl) statusEl.textContent = 'Could not load Reviewers. Try again.';
             }
 
-            // Send button
             document.getElementById(`review-send-${r.id}`)?.addEventListener('click', async () => {
                 const reviewerId = reviewerSelect?.value;
                 const scenarioId = scenarioSelect?.value;
@@ -731,12 +514,9 @@ function renderKnowledgeBase(el) {
                     return;
                 }
                 const btn = document.getElementById(`review-send-${r.id}`);
-                btn.disabled = true;
-                btn.textContent = 'Sending…';
-
+                btn.disabled = true; btn.textContent = 'Sending…';
                 const result = await queueScenarioReview(_orgId, scenarioId, reviewerId);
-                btn.disabled = false;
-                btn.textContent = 'Send';
+                btn.disabled = false; btn.textContent = 'Send';
                 if (statusEl) statusEl.textContent = result.ok
                     ? "Sent. They'll see it in their next session."
                     : result.error ?? 'Could not send. Try again.';
@@ -745,26 +525,20 @@ function renderKnowledgeBase(el) {
     });
 }
 
-function renderRecipeCard(r) {
-    // Find scenarios in Firestore linked to this recipe so the Manager
-    // can send one for Reviewer quality check. The scenario list is
-    // fetched lazily when the Manager clicks "Send for review."
+function _renderRecipeCard(r) {
     return `
         <div class="card" style="margin-bottom: var(--space-3);">
             <div class="flex-between">
                 <p style="font-weight: 500;">${r.skillName}</p>
                 <div style="display: flex; gap: var(--space-2);">
-                    <button
-                        class="btn btn-secondary"
-                        id="recipe-review-${r.id}"
-                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);"
-                        title="Send a scenario from this recipe for Reviewer quality check"
-                    >Send for review</button>
-                    <button
-                        class="btn btn-secondary"
-                        id="recipe-toggle-${r.id}"
-                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);"
-                    >Show</button>
+                    <button class="btn btn-secondary" id="recipe-review-${r.id}"
+                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
+                        Send for review
+                    </button>
+                    <button class="btn btn-secondary" id="recipe-toggle-${r.id}"
+                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
+                        Show
+                    </button>
                 </div>
             </div>
             <div id="recipe-detail-${r.id}" style="display: none; margin-top: var(--space-4);">
@@ -776,15 +550,15 @@ function renderRecipeCard(r) {
                 <p class="label mt-4 mb-1">What it produces</p>
                 <p class="text-sm text-secondary">${r.expectedOutcome}</p>
                 ${r.flawPattern ? `
-                    <p class="label mt-4 mb-1">Common mistake</p>
+                    <p class="label mt-4 mb-1">What less experienced people tend to do</p>
                     <p class="text-sm text-secondary">${r.flawPattern}</p>
                 ` : ''}
             </div>
-            <!-- Send for review panel — shown when Manager clicks the button -->
+            <!-- Send for review panel -->
             <div id="recipe-review-panel-${r.id}" style="display: none; margin-top: var(--space-4);">
                 <div class="divider" style="margin: var(--space-3) 0;"></div>
                 <p class="label mb-2">Send a scenario for review</p>
-                <p class="text-sm text-secondary mb-3">Choose a Reviewer and a scenario generated from this recipe. They'll see it as a quality check — nothing else.</p>
+                <p class="text-sm text-secondary mb-3">Choose a Reviewer and a scenario. They'll see it as a quality check — nothing else.</p>
                 <select class="input mb-3" id="review-reviewer-${r.id}" style="margin-bottom: var(--space-3);">
                     <option value="">Choose a Reviewer…</option>
                 </select>
@@ -792,30 +566,24 @@ function renderRecipeCard(r) {
                     <option value="">Choose a scenario…</option>
                 </select>
                 <p id="review-status-${r.id}" class="text-xs text-secondary mb-2"></p>
-                <button class="btn btn-primary" id="review-send-${r.id}" style="font-size: var(--text-sm);">
-                    Send
-                </button>
+                <button class="btn btn-primary" id="review-send-${r.id}" style="font-size: var(--text-sm);">Send</button>
             </div>
         </div>
     `;
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Review Queue
-// Pending extractions — the Manager reads each one and decides to approve,
-// edit and approve, or reject. Each approved extraction becomes a live recipe.
+// KB SUB-SECTION: Review Queue (PIPE-05)
+// Cards now show: source type and provenance, raw content verbatim,
+// intermediate knowledge representation (summary, situation, insight) as
+// the primary review surface, draft recipe fields below as editable output.
 // ---------------------------------------------------------------------------
-function renderReviewQueue(el) {
-    const _rqHeader = _sectionHeader(
-        'Review queue',
-        'When LORE processes a document or a Reviewer contribution, it extracts draft Career Recipes for you to review. This is your quality gate — you decide what goes into the knowledge base and what gets discarded. Read each draft, edit the wording if needed, and either add it to the knowledge base or discard it.'
-    );
+function renderKbQueue(el) {
     if (_pending.length === 0) {
         el.innerHTML = `
-        ${_rqHeader}
             <div class="empty-state">
                 <h3>Nothing to review</h3>
-                <p class="mt-2">When Reviewers submit feedback or you upload a document, the extracted knowledge will appear here for your sign-off.</p>
+                <p class="mt-2">When Reviewers contribute or you upload a document, extracted knowledge will appear here for your approval.</p>
             </div>
         `;
         return;
@@ -825,132 +593,146 @@ function renderReviewQueue(el) {
         <div>
             <p class="text-secondary text-sm mb-6">${_pending.length} item${_pending.length !== 1 ? 's' : ''} waiting for your review</p>
             <div id="queue-list">
-                ${_pending.map((ext, i) => renderExtractionCard(ext, i)).join('')}
+                ${_pending.map((ext, i) => _renderExtractionCard(ext, i)).join('')}
             </div>
         </div>
     `;
 
-    // Attach handlers for each extraction card
-    _pending.forEach((ext, i) => {
-        _attachExtractionHandlers(ext, i, el);
-    });
+    _pending.forEach((ext, i) => _attachExtractionHandlers(ext, i, el));
 }
 
-function renderExtractionCard(ext, index) {
-    const sourceLabel = {
-        'scenario_review': 'Scenario feedback',
-        'mentorship_note': 'Mentorship note',
-        'document':        'Document',
-    }[ext.sourceType] ?? 'Contribution';
+function _renderExtractionCard(ext, index) {
+    // PIPE-05: source type label includes provenance context
+    const sourceLabels = {
+        'scenario_review':  'Scenario feedback',
+        'mentorship_note':  'Mentorship note',
+        'document_chunk':   'Document',
+        'employee_response':'Team response pattern',
+    };
+    const sourceLabel = sourceLabels[ext.sourceType] ?? 'Contribution';
 
-    // An extraction may already have a processed draft (from AI), or may be raw
-    const hasDraft = ext.draft && ext.draft.hasRecipe !== false && ext.draft.skillName;
+    // Provenance line — shows what the contributor was responding to
+    const provenanceLine = ext.rawPrompt
+        ? `<p class="text-xs text-secondary mt-1" style="font-style: italic;">${_esc(ext.rawPrompt.slice(0, 120))}${ext.rawPrompt.length > 120 ? '…' : ''}</p>`
+        : '';
+
+    const hasKnowledge = ext.knowledge && ext.knowledge.hasKnowledge !== false && ext.knowledge.summary;
+    const hasDraft     = ext.draft && ext.draft.skillName;
 
     return `
-        <div class="card" style="margin-bottom: var(--space-4);" id="ext-card-${index}">
-            <div class="flex-between mb-3">
-                <span class="chip chip-pending">${sourceLabel}</span>
-                <span class="text-xs text-secondary">${ext.contextNote ? ext.contextNote.slice(0, 60) : ''}</span>
+        <div class="card" style="margin-bottom: var(--space-6);" id="ext-card-${index}">
+
+            <!-- Source and provenance header -->
+            <div style="margin-bottom: var(--space-4);">
+                <div class="flex-between">
+                    <span class="chip chip-pending">${sourceLabel}</span>
+                    <span class="text-xs text-secondary">${ext.wordCount ? ext.wordCount + ' words' : ''}</span>
+                </div>
+                ${provenanceLine}
             </div>
 
-            ${hasDraft ? renderDraftPreview(ext.draft, index) : renderRawContent(ext, index)}
+            <!-- Raw content — verbatim, always shown -->
+            <div style="margin-bottom: var(--space-4);">
+                <p class="label mb-2">What was contributed</p>
+                <div style="background: rgba(44,36,22,0.04); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);">
+                    <p class="text-sm" style="line-height: 1.7; color: var(--ink);">${_esc(ext.rawContent ?? 'No content available')}</p>
+                </div>
+            </div>
+
+            <!-- Intermediate knowledge representation — shown when Stage 2 has run -->
+            ${hasKnowledge ? `
+                <div style="margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); background: rgba(95,127,95,0.04);">
+                    <p class="label mb-3" style="color: var(--sage);">What LORE understood</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Summary</p>
+                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.summary ?? '')}</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Situation</p>
+                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.situation ?? '')}</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Insight</p>
+                    <p class="text-sm" style="line-height: 1.6;">${_esc(ext.knowledge.insight ?? '')}</p>
+                </div>
+            ` : ''}
+
+            <!-- Draft recipe fields — editable, shown when Stage 3 has run -->
+            ${hasDraft ? `
+                <div style="margin-bottom: var(--space-4);">
+                    <p class="label mb-3">Proposed recipe — edit before approving</p>
+                    <div class="auth-field">
+                        <label class="label mb-1">Skill name</label>
+                        <input class="input" id="draft-skill-${index}" value="${_esc(ext.draft.skillName ?? '')}" style="margin-bottom: var(--space-3);">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">When to use it</label>
+                        <textarea class="input" id="draft-trigger-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.trigger ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">What to do</label>
+                        <textarea class="input" id="draft-action-${index}" rows="3" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.actionSequence ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">What it produces</label>
+                        <textarea class="input" id="draft-outcome-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.expectedOutcome ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">Assign to skill area</label>
+                        <input class="input" id="draft-domain-${index}"
+                            value="${_esc(ext.knowledge?.domain ?? ext.draft.domain ?? (_domains[0]?.name ?? ''))}"
+                            placeholder="Type a skill area name…">
+                    </div>
+                </div>
+            ` : `
+                <!-- No draft yet — show the raw content status and a process button -->
+                <p class="text-xs text-secondary mb-3" id="process-status-${index}"></p>
+            `}
 
             <div class="divider" style="margin: var(--space-4) 0;"></div>
 
-            ${hasDraft ? renderApprovalControls(index, ext.draft) : renderProcessButton(index)}
-        </div>
-    `;
-}
-
-function renderRawContent(ext, index) {
-    return `
-        <div>
-            <p class="label mb-2">Raw contribution</p>
-            <p class="text-sm text-secondary" style="line-height: 1.7;">${ext.rawContent ?? 'No content available'}</p>
-            <p class="text-xs text-secondary mt-3" id="process-status-${index}"></p>
-        </div>
-    `;
-}
-
-function renderDraftPreview(draft, index) {
-    return `
-        <div>
-            <p class="label mb-1">Skill</p>
-            <input
-                class="input"
-                id="draft-skill-${index}"
-                value="${_esc(draft.skillName ?? '')}"
-                style="margin-bottom: var(--space-3);"
-            >
-            <p class="label mb-1">When to use it</p>
-            <textarea class="input" id="draft-trigger-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(draft.trigger ?? '')}</textarea>
-            <p class="label mb-1">What to do</p>
-            <textarea class="input" id="draft-action-${index}" rows="3" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(draft.actionSequence ?? '')}</textarea>
-            <p class="label mb-1">What it produces</p>
-            <textarea class="input" id="draft-outcome-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(draft.expectedOutcome ?? '')}</textarea>
-            <p class="label mb-1">Assign to skill area</p>
-            <input
-                class="input"
-                id="draft-domain-${index}"
-                value="${_esc(draft.domain ?? (_domains[0]?.name ?? ''))}"
-                placeholder="Type a skill area name…"
-            >
-        </div>
-    `;
-}
-
-function renderProcessButton(index) {
-    return `
-        <div style="display: flex; gap: var(--space-3);">
-            <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
-                Extract knowledge
-            </button>
-            <button class="btn btn-secondary" id="reject-btn-${index}" style="font-size: var(--text-sm); color: var(--error);">
-                Dismiss
-            </button>
-        </div>
-    `;
-}
-
-function renderApprovalControls(index, draft) {
-    return `
-        <div style="display: flex; gap: var(--space-3);">
-            <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
-                Add to knowledge base
-            </button>
-            <button class="btn btn-secondary" id="reject-btn-${index}" style="font-size: var(--text-sm); color: var(--error);">
-                Dismiss
-            </button>
+            <!-- Action buttons -->
+            <div style="display: flex; gap: var(--space-3);">
+                ${hasDraft ? `
+                    <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
+                        Add to knowledge base
+                    </button>
+                ` : `
+                    <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
+                        Extract knowledge
+                    </button>
+                `}
+                <button class="btn btn-secondary" id="reject-btn-${index}"
+                    style="font-size: var(--text-sm); color: var(--error);">
+                    Dismiss
+                </button>
+            </div>
         </div>
     `;
 }
 
 function _attachExtractionHandlers(ext, index, el) {
-    // Process button (raw → draft)
+    // Process button (raw → three-stage pipeline)
     document.getElementById(`process-btn-${index}`)?.addEventListener('click', async () => {
-        const btn = document.getElementById(`process-btn-${index}`);
+        const btn    = document.getElementById(`process-btn-${index}`);
         const status = document.getElementById(`process-status-${index}`);
-        btn.disabled = true;
+        btn.disabled    = true;
         btn.textContent = 'Extracting…';
-        if (status) status.textContent = 'Reading contribution…';
+        if (status) status.textContent = 'Running extraction pipeline…';
 
         const result = await processExtraction(_orgId, ext.id, ext);
 
-        if (!result.ok || !result.draft?.hasRecipe) {
-            if (status) status.textContent = result.ok
-                ? 'No clear recipe pattern found in this contribution.'
+        if (!result.ok) {
+            const reason = result.reason === 'NO_KNOWLEDGE'
+                ? 'No clear expert decision logic found in this contribution.'
                 : 'Could not extract at this time. Try again shortly.';
-            btn.disabled  = false;
+            if (status) status.textContent = reason;
+            btn.disabled    = false;
             btn.textContent = 'Try again';
             return;
         }
 
-        // Update the local pending list and re-render the card in place
+        // Re-fetch the updated extraction and re-render the card in place
         const cardEl = document.getElementById(`ext-card-${index}`);
         if (cardEl) {
-            const updatedExt = { ...ext, draft: result.draft, status: 'processed' };
-            _pending[index] = updatedExt;
-            cardEl.outerHTML = renderExtractionCard(updatedExt, index);
+            const updatedExt = { ...ext, knowledge: result.knowledge, draft: result.draft, status: 'processed' };
+            _pending[index]  = updatedExt;
+            cardEl.outerHTML = _renderExtractionCard(updatedExt, index);
             _attachExtractionHandlers(updatedExt, index, el);
         }
     });
@@ -958,17 +740,15 @@ function _attachExtractionHandlers(ext, index, el) {
     // Approve button (draft → live recipe)
     document.getElementById(`approve-btn-${index}`)?.addEventListener('click', async () => {
         const btn = document.getElementById(`approve-btn-${index}`);
-        btn.disabled = true;
+        btn.disabled    = true;
         btn.textContent = 'Saving…';
 
-        // Read any Manager edits from the form fields
         const draft = {
-            skillName:      document.getElementById(`draft-skill-${index}`)?.value?.trim()   ?? ext.draft?.skillName,
-            trigger:        document.getElementById(`draft-trigger-${index}`)?.value?.trim() ?? ext.draft?.trigger,
-            actionSequence: document.getElementById(`draft-action-${index}`)?.value?.trim()  ?? ext.draft?.actionSequence,
+            skillName:       document.getElementById(`draft-skill-${index}`)?.value?.trim()   ?? ext.draft?.skillName,
+            trigger:         document.getElementById(`draft-trigger-${index}`)?.value?.trim() ?? ext.draft?.trigger,
+            actionSequence:  document.getElementById(`draft-action-${index}`)?.value?.trim()  ?? ext.draft?.actionSequence,
             expectedOutcome: document.getElementById(`draft-outcome-${index}`)?.value?.trim() ?? ext.draft?.expectedOutcome,
-            flawPattern:    ext.draft?.flawPattern ?? null,
-            sourceType:     ext.sourceType,
+            flawPattern:     ext.draft?.flawPattern ?? null,
         };
         const domain = document.getElementById(`draft-domain-${index}`)?.value?.trim()
             ?? (_domains[0]?.name ?? 'General');
@@ -976,16 +756,10 @@ function _attachExtractionHandlers(ext, index, el) {
         const recipeId = await approveRecipe(_orgId, draft, ext.id, domain);
 
         if (recipeId) {
-            // Remove from pending list and reload recipes
             _pending.splice(index, 1);
             _recipes = await getAllApprovedRecipes(_orgId);
-            renderReviewQueue(document.getElementById('dashboard-section'));
-
-            // Trigger clustering if we have enough recipes now
-            if (_recipes.length >= 3) {
-                const clusterResult = await triggerClustering(_orgId, _recipes);
-                if (clusterResult.ok) _clusters = clusterResult.clusters;
-            }
+            // Re-render the full Knowledge Base tab to update the summary header counts
+            renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
         } else {
             btn.disabled    = false;
             btn.textContent = 'Add to knowledge base';
@@ -996,112 +770,115 @@ function _attachExtractionHandlers(ext, index, el) {
     document.getElementById(`reject-btn-${index}`)?.addEventListener('click', async () => {
         await rejectExtraction(_orgId, ext.id);
         _pending.splice(index, 1);
-        renderReviewQueue(document.getElementById('dashboard-section'));
+        renderKbQueue(document.getElementById('kb-section-content'));
     });
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Upload
-// Manager uploads a document as plain text; AI extracts recipe drafts.
-// The Manager sees a count of training moments found — copy never mentions
-// extraction, knowledge base, or recipes.
+// KB SUB-SECTION: Upload (Add knowledge)
+// Document upload with chunking progress indicator (PIPE-05).
 // ---------------------------------------------------------------------------
-function renderUpload(el) {
-    // Section header — tells the Manager exactly what this tab is for
-    const sectionHeader = _sectionHeader(
-        'Add knowledge',
-        'Paste in any document that captures how your team works — a retrospective, a playbook, a post-mortem, a process note. LORE reads it and pulls out the decision-making moments that become training scenarios for your team.'
-    );
-
-    // If an extraction is currently in progress (Manager navigated away mid-run),
-    // show the in-progress state so they know it has not been lost.
+function renderKbUpload(el) {
     if (_uploadState.inProgress) {
+        const progress = _uploadState.chunkProgress;
         el.innerHTML = `
-            ${sectionHeader}
-            <div class="card mt-6">
+            <div class="card">
                 <div class="empty-state">
                     <div class="spinner"></div>
-                    <p class="text-secondary mt-4">Still reading <strong>${_uploadState.docName || 'your document'}</strong>…</p>
-                    <p class="text-secondary text-sm mt-2">This usually takes 10–20 seconds. You can keep using other tabs — the result will be waiting here when it is done.</p>
+                    <p class="text-secondary mt-4">Reading <strong>${_uploadState.docName || 'your document'}</strong>…</p>
+                    ${progress ? `
+                        <p class="text-secondary text-sm mt-2">Processing chunk ${progress.current} of ${progress.total}</p>
+                        <div class="xp-bar-track" style="width: 200px; margin: var(--space-3) auto 0;">
+                            <div class="xp-bar-fill" style="width: ${Math.round((progress.current / progress.total) * 100)}%; background: var(--ember); transition: width 0.4s ease;"></div>
+                        </div>
+                    ` : `
+                        <p class="text-secondary text-sm mt-2">This usually takes 10–20 seconds.</p>
+                    `}
                 </div>
             </div>
         `;
         return;
     }
 
-    // If a completed result is stored, show it straight away without re-rendering the form
     if (_uploadState.result) {
         const result = _uploadState.result;
         let resultHtml;
         if (!result.ok) {
-            resultHtml = `<p class="text-secondary text-sm" style="color: var(--error);">${_uploadState.errorMsg || 'Could not process the document right now. Please try again.'}</p>`;
-        } else if (result.extractions.length === 0) {
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--error);">
+                    <p style="font-weight: 500;">Could not process the document</p>
+                    <p class="text-secondary text-sm mt-2">${_uploadState.errorMsg || 'Please try again shortly.'}</p>
+                </div>`;
+        } else if (result.extractionsCreated === 0) {
             resultHtml = `
                 <div class="card" style="border-left: 3px solid var(--ember);">
                     <p style="font-weight: 500;">No clear training moments found</p>
-                    <p class="text-secondary text-sm mt-2">This document does not seem to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook that describes how your team made specific calls.</p>
+                    <p class="text-secondary text-sm mt-2">This document does not appear to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook.</p>
                 </div>`;
         } else {
             resultHtml = `
                 <div class="card" style="border-left: 3px solid var(--sage);">
-                    <p style="font-weight: 500; color: var(--sage);">We found ${result.extractions.length} training moment${result.extractions.length !== 1 ? 's' : ''} in “${_uploadState.docName}”</p>
+                    <p style="font-weight: 500; color: var(--sage);">Found ${result.extractionsCreated} training moment${result.extractionsCreated !== 1 ? 's' : ''} in "${_esc(_uploadState.docName)}"</p>
                     <p class="text-secondary text-sm mt-2">They are in your review queue. Go through them and add the ones that feel right to your knowledge base.</p>
-                    <div style="display:flex;gap:var(--space-3);margin-top:var(--space-4);">
+                    <div style="display: flex; gap: var(--space-3); margin-top: var(--space-4);">
                         <button class="btn btn-primary" id="go-to-queue" style="font-size: var(--text-sm);">Open review queue</button>
                         <button class="btn btn-secondary" id="upload-another" style="font-size: var(--text-sm);">Add another document</button>
                     </div>
                 </div>`;
         }
 
-        el.innerHTML = `${sectionHeader}<div style="margin-top: var(--space-6);">${resultHtml}</div>`;
+        el.innerHTML = `<div style="margin-top: var(--space-2);">${resultHtml}</div>`;
 
-        document.getElementById('go-to-queue')?.addEventListener('click', () => {
-            _activeSection = 'queue'; _setActiveTab('queue'); renderSection('queue');
-        });
+        document.getElementById('go-to-queue')?.addEventListener('click', () => _switchKbSection('queue'));
         document.getElementById('upload-another')?.addEventListener('click', () => {
-            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '' };
-            renderUpload(el);
+            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null };
+            renderKbUpload(el);
         });
         return;
     }
 
-    // Default: empty form
+    // Default: upload form
     el.innerHTML = `
-        ${sectionHeader}
-        <div class="card mt-6">
-            <div class="auth-field">
-                <label class="label" for="doc-name">Document name</label>
-                <input
-                    class="input"
-                    id="doc-name"
-                    type="text"
-                    placeholder="e.g. Q3 Project Retrospective"
-                    value="${_uploadState.docName}"
-                >
-            </div>
-
-            <div class="auth-field mt-4">
-                <label class="label" for="doc-text">Document content</label>
-                <textarea
-                    class="input"
-                    id="doc-text"
-                    rows="12"
-                    placeholder="Paste the document text here…"
-                    style="resize: vertical;"
-                >${_uploadState.docText}</textarea>
-            </div>
-
-            <p class="text-xs text-secondary mb-4">The first 6,000 characters will be processed. For longer documents, paste the most decision-rich sections.</p>
-
-            <button class="btn btn-primary" id="process-doc">
-                Find training moments
-            </button>
+        <div class="card">
+            <h3 style="margin-bottom: var(--space-2);">Add a document</h3>
+            <p class="text-secondary text-sm mb-6" style="line-height: 1.6;">
+                Paste in any document that captures how your team makes decisions — a retrospective,
+                a playbook, a post-mortem. LORE reads it and finds the decision-making moments
+                that become training scenarios.
+            </p>
+            ${_renderUploadForm()}
         </div>
-
         <div id="upload-result" style="margin-top: var(--space-6);"></div>
     `;
 
-    // Persist what the Manager types so it survives a tab switch mid-typing
+    _attachUploadHandlers(async () => {
+        _pending = await getPendingExtractions(_orgId);
+        renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
+    });
+}
+
+// Shared upload form markup — used in both first-run and normal upload sections.
+function _renderUploadForm() {
+    return `
+        <div class="auth-field">
+            <label class="label" for="doc-name">Document name</label>
+            <input class="input" id="doc-name" type="text"
+                placeholder="e.g. Q3 Project Retrospective"
+                value="${_esc(_uploadState.docName)}">
+        </div>
+        <div class="auth-field mt-4">
+            <label class="label" for="doc-text">Document content</label>
+            <textarea class="input" id="doc-text" rows="12"
+                placeholder="Paste the document text here…"
+                style="resize: vertical;">${_esc(_uploadState.docText)}</textarea>
+        </div>
+        <button class="btn btn-primary mt-4" id="process-doc">Find training moments</button>
+        <div id="upload-result" style="margin-top: var(--space-4);"></div>
+    `;
+}
+
+// Shared upload handler — onComplete is called after a successful upload.
+function _attachUploadHandlers(onComplete) {
     document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
     document.getElementById('doc-text')?.addEventListener('input', e => { _uploadState.docText = e.target.value; });
 
@@ -1110,165 +887,286 @@ function renderUpload(el) {
         const text = document.getElementById('doc-text')?.value?.trim();
 
         if (!name || !text) {
-            document.getElementById('upload-result').innerHTML =
-                '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
+            const resultEl = document.getElementById('upload-result');
+            if (resultEl) resultEl.innerHTML = '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
             return;
         }
 
-        // Mark as in-progress so if the Manager switches tabs, they see the spinner
-        _uploadState.inProgress = true;
-        _uploadState.docName    = name;
-        _uploadState.docText    = text;
-        _uploadState.result     = null;
-        _uploadState.errorMsg   = '';
+        _uploadState.inProgress    = true;
+        _uploadState.docName       = name;
+        _uploadState.docText       = text;
+        _uploadState.result        = null;
+        _uploadState.errorMsg      = '';
+        _uploadState.chunkProgress = null;
 
         const btn = document.getElementById('process-doc');
         if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
 
-        const resultEl = document.getElementById('upload-result');
-        if (resultEl) {
-            resultEl.innerHTML = '<div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Reading your document… You can switch tabs — the result will be here when it’s done.</p></div>';
-        }
+        // Re-render the upload section to show the in-progress spinner
+        const kbContent = document.getElementById('kb-section-content');
+        if (kbContent) renderKbUpload(kbContent);
 
-        // The AI call — may take 10-20 seconds
-        const result = await processDocument(_orgId, text, name);
+        // Progress callback — updates chunkProgress and re-renders the spinner
+        const onProgress = (current, total) => {
+            _uploadState.chunkProgress = { current, total };
+            const kbEl = document.getElementById('kb-section-content');
+            if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+        };
 
-        // Store result in module state regardless of whether this tab is still active
-        _uploadState.inProgress = false;
-        _uploadState.result     = result;
+        // processDocument now accepts uid and an onProgress callback
+        const result = await processDocument(_orgId, _uid, text, name, onProgress);
+
+        _uploadState.inProgress    = false;
+        _uploadState.chunkProgress = null;
+        _uploadState.result        = result;
         if (!result.ok) _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
 
-        if (result.ok && result.extractions.length > 0) {
-            _pending = await getPendingExtractions(_orgId);
+        if (result.ok && result.extractionsCreated > 0) {
+            await onComplete();
         }
 
-        // Only update the DOM if the upload tab is still the active section
-        if (_activeSection !== 'upload') return;
-
-        // Re-render upload tab with the stored result
-        renderUpload(el);
+        const kbEl = document.getElementById('kb-section-content');
+        if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
     });
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Skill Areas
-// Shows AI-proposed domain clusters for Manager review.
-// The Manager can confirm, rename, or dismiss clusters.
-// Also shows already-confirmed domains.
+// KB SUB-SECTION: Domains (DOMAIN-02)
+// "Create a skill area" (manual) always shown first.
+// "Suggest skill areas from recipes" (AI clustering) shown only when
+// recipe count >= 3.
+// Provisional seeds shown as dismissible chips.
 // ---------------------------------------------------------------------------
-function renderSkillAreas(el) {
-    const _saHeader = _sectionHeader(
-        'Skill areas',
-        'Skill areas are the categories that organise your knowledge base and structure your team\'s training. LORE proposes them automatically by grouping your recipes into clusters — you confirm, rename, or adjust them. Once confirmed, each skill area becomes a domain your team can train in, and a space you can assign Reviewers to.'
-    );
-    const hasProposed  = _clusters.length > 0;
-    const hasConfirmed = _domains.length  > 0;
+function renderKbDomains(el) {
+    const confirmed   = _domains.filter(d => !d.provisional);
+    const provisional = _domains.filter(d =>  d.provisional);
+    const canCluster  = _recipes.length >= 3;
+
+    // Check whether there are flagged responses to show the corpus analysis action
+    _checkFlaggedResponses().then(hasFlagged => {
+        const corpusBtn = document.getElementById('corpus-analysis-btn');
+        if (corpusBtn) corpusBtn.style.display = hasFlagged ? 'block' : 'none';
+    });
 
     el.innerHTML = `
-        ${_saHeader}
         <div>
-            <h3 style="margin-bottom: var(--space-2);">Skill areas</h3>
-            <p class="text-secondary text-sm mb-6">Skill areas are found in what your organisation knows — not set in advance. LORE proposes groupings; you confirm them.</p>
+            <!-- CORP-03: Corpus analysis action — shown only when flagged responses exist -->
+            <div id="corpus-analysis-section" style="margin-bottom: var(--space-6); display: none;">
+                <div class="card" style="border-left: 3px solid var(--ember);">
+                    <p style="font-weight: 500;">New patterns found in team responses</p>
+                    <p class="text-secondary text-sm mt-2 mb-4">LORE has found response patterns from your senior team members that may contain useful knowledge. Run the analysis to extract them into your review queue.</p>
+                    <button class="btn btn-primary" id="corpus-analysis-btn" style="font-size: var(--text-sm);">
+                        Find patterns in team responses
+                    </button>
+                    <p id="corpus-status" class="text-xs text-secondary mt-3"></p>
+                </div>
+            </div>
 
-            ${hasProposed ? renderProposedClusters() : ''}
-            ${hasConfirmed ? renderConfirmedDomains() : ''}
-            ${!hasProposed && !hasConfirmed ? renderNoAreas() : ''}
+            <!-- Manual domain creation — always first -->
+            <div class="card" style="margin-bottom: var(--space-6);">
+                <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>
+                <p class="text-secondary text-sm mb-4">Name a skill area that matters to your organisation. You can always rename it later.</p>
+                <div class="auth-field">
+                    <label class="label mb-1">Skill area name</label>
+                    <input class="input" id="new-domain-name" type="text" placeholder="e.g. Client Engagement" style="margin-bottom: var(--space-3);">
+                </div>
+                <div class="auth-field">
+                    <label class="label mb-1">Description (optional)</label>
+                    <input class="input" id="new-domain-desc" type="text" placeholder="One sentence describing this skill area…">
+                </div>
+                <p id="new-domain-error" class="text-xs" style="color: var(--error); margin-top: var(--space-2); display: none;"></p>
+                <button class="btn btn-primary mt-4" id="create-domain-btn" style="font-size: var(--text-sm);">
+                    Create skill area
+                </button>
+            </div>
+
+            <!-- AI clustering — shown only when recipe count >= 3 (DOMAIN-02) -->
+            ${canCluster ? `
+                <div class="card" style="margin-bottom: var(--space-6);">
+                    <h3 style="margin-bottom: var(--space-2);">Suggest skill areas from recipes</h3>
+                    <p class="text-secondary text-sm mb-4">LORE can group your ${_recipes.length} recipes into suggested skill areas. You confirm, rename, or adjust them.</p>
+                    ${_clusters.length > 0 ? _renderProposedClusters() : `
+                        <button class="btn btn-secondary" id="run-clustering" style="font-size: var(--text-sm);">
+                            Suggest skill areas
+                        </button>
+                    `}
+                </div>
+            ` : ''}
+
+            <!-- Confirmed skill areas -->
+            ${confirmed.length > 0 ? `
+                <div style="margin-bottom: var(--space-6);">
+                    <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
+                    ${confirmed.map(d => `
+                        <div class="card" style="margin-bottom: var(--space-3);">
+                            <div class="flex-between">
+                                <div>
+                                    <p style="font-weight: 500;">${_esc(d.name)}</p>
+                                    <p class="text-secondary text-sm mt-1">${_esc(d.description ?? '')}</p>
+                                </div>
+                                <p class="text-xs text-secondary">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
+
+            <!-- Provisional seed domains — dismissible -->
+            ${provisional.length > 0 ? `
+                <div>
+                    <h3 style="margin-bottom: var(--space-2);">Starting points</h3>
+                    <p class="text-secondary text-sm mb-4">Provisional skill areas based on your industry. Dismiss any that don't apply — LORE will replace them with your organisation's own as knowledge builds.</p>
+                    ${provisional.map(d => `
+                        <div class="card" style="margin-bottom: var(--space-3); opacity: 0.75;">
+                            <div class="flex-between">
+                                <div>
+                                    <p style="font-weight: 500; color: var(--warm-grey);">${_esc(d.name)}</p>
+                                    <span class="chip chip-pending" style="margin-top: var(--space-1); font-size: 10px;">Provisional</span>
+                                </div>
+                                <button class="btn btn-secondary" id="dismiss-provisional-${d.id}"
+                                    style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);">
+                                    Dismiss
+                                </button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : ''}
         </div>
     `;
 
-    // Populate Reviewer dropdowns and attach confirm handlers for each proposed cluster
-    _loadReviewersForSelects(_clusters.map((_, i) => `cluster-reviewer-${i}`));
-
-    _clusters.forEach((cluster, i) => {
-        document.getElementById(`confirm-cluster-${i}`)?.addEventListener('click', async () => {
-            const name       = document.getElementById(`cluster-name-${i}`)?.value?.trim();
-            const desc       = document.getElementById(`cluster-desc-${i}`)?.value?.trim();
-            const reviewerId = document.getElementById(`cluster-reviewer-${i}`)?.value;
-            if (!name) return;
-
-            const btn = document.getElementById(`confirm-cluster-${i}`);
-            btn.disabled = true;
-            btn.textContent = 'Confirming…';
-
-            // reviewerIds is an array — supports multiple Reviewers per domain
-            // in the future. For now, one Reviewer maximum via this UI.
-            const reviewerIds = reviewerId ? [reviewerId] : [];
-            await confirmDomain(_orgId, { ...cluster, name, description: desc, reviewerIds });
-            console.log('LORE dashboard.js: Domain confirmed:', name, 'reviewerIds:', reviewerIds);
-
-            // Refresh domains list and re-render after confirmation
-            _domains  = await getDomains(_orgId);
-            _clusters.splice(i, 1);
-            if (_clusters.length === 0) clearPendingClusters(_orgId);
-            renderSkillAreas(el);
-        });
-
-        document.getElementById(`dismiss-cluster-${i}`)?.addEventListener('click', () => {
-            // Remove this cluster from local list and re-render
-            _clusters.splice(i, 1);
-            if (_clusters.length === 0) clearPendingClusters(_orgId);
-            renderSkillAreas(el);
-        });
+    // Show corpus analysis section if there are flagged responses
+    _checkFlaggedResponses().then(hasFlagged => {
+        const section = document.getElementById('corpus-analysis-section');
+        if (section) section.style.display = hasFlagged ? 'block' : 'none';
     });
 
-    // Dismiss handlers for provisional (seeded) domains
-    _domains.filter(d => d.provisional).forEach(d => {
-        document.getElementById(`dismiss-provisional-${d.id}`)?.addEventListener('click', async () => {
-            await deleteDomain(_orgId, d.id);
-            _domains = _domains.filter(x => x.id !== d.id);
-            console.log('LORE dashboard.js: Provisional domain dismissed:', d.name);
-            renderSkillAreas(el);
-        });
+    // Create domain handler
+    document.getElementById('create-domain-btn')?.addEventListener('click', async () => {
+        const name  = document.getElementById('new-domain-name')?.value?.trim();
+        const desc  = document.getElementById('new-domain-desc')?.value?.trim();
+        const errEl = document.getElementById('new-domain-error');
+
+        if (!name) {
+            errEl.textContent   = 'Please enter a name for the skill area.';
+            errEl.style.display = 'block';
+            return;
+        }
+        errEl.style.display = 'none';
+
+        const btn = document.getElementById('create-domain-btn');
+        btn.disabled    = true;
+        btn.textContent = 'Creating…';
+
+        const newId = await confirmDomain(_orgId, { name, description: desc ?? '', recipeIds: [], reviewerIds: [] });
+        if (newId) {
+            _domains = await getDomains(_orgId);
+            renderKbDomains(el);
+        } else {
+            btn.disabled    = false;
+            btn.textContent = 'Create skill area';
+            errEl.textContent   = 'Could not create the skill area. Please try again.';
+            errEl.style.display = 'block';
+        }
     });
 
-    // Trigger re-clustering if there are enough recipes but no proposals yet
+    // AI clustering handler
     document.getElementById('run-clustering')?.addEventListener('click', async () => {
         const btn = document.getElementById('run-clustering');
-        btn.disabled = true;
+        btn.disabled    = true;
         btn.textContent = 'Grouping…';
-
         const result = await triggerClustering(_orgId, _recipes);
         if (result.ok && result.clusters.length > 0) {
             _clusters = result.clusters;
-            _domains  = await getDomains(_orgId);
-            renderSkillAreas(el);
+            renderKbDomains(el);
         } else {
             btn.disabled    = false;
-            btn.textContent = 'Group my recipes';
+            btn.textContent = 'Suggest skill areas';
         }
+    });
+
+    // Corpus analysis handler
+    document.getElementById('corpus-analysis-btn')?.addEventListener('click', async () => {
+        const btn    = document.getElementById('corpus-analysis-btn');
+        const status = document.getElementById('corpus-status');
+        btn.disabled    = true;
+        btn.textContent = 'Analysing…';
+        if (status) status.textContent = 'Looking for patterns in team responses…';
+
+        // Step 1: Flag high-signal responses (senior-correct on junior-missed scenarios).
+        // This must run before deriveFromCorpus so there is something flagged to process.
+        await flagHighSignalResponses(_orgId);
+
+        // Step 2: Derive extractions from all flagged responses across all domains.
+        const result = await deriveFromCorpus(_orgId, null);
+        btn.disabled    = false;
+        btn.textContent = 'Find patterns in team responses';
+
+        if (status) {
+            status.textContent = result.ok && result.extractionsCreated > 0
+                ? `Found ${result.extractionsCreated} pattern${result.extractionsCreated !== 1 ? 's' : ''} — check your review queue.`
+                : result.ok
+                ? 'No new patterns found at this time.'
+                : 'Could not complete the analysis. Try again shortly.';
+        }
+
+        if (result.ok && result.extractionsCreated > 0) {
+            _pending = await getPendingExtractions(_orgId);
+        }
+    });
+
+    // Dismiss provisional domain handlers
+    provisional.forEach(d => {
+        document.getElementById(`dismiss-provisional-${d.id}`)?.addEventListener('click', async () => {
+            await deleteDomain(_orgId, d.id);
+            _domains = _domains.filter(x => x.id !== d.id);
+            renderKbDomains(el);
+        });
+    });
+
+    // Confirm proposed cluster handlers
+    _clusters.forEach((cluster, i) => {
+        document.getElementById(`confirm-cluster-${i}`)?.addEventListener('click', async () => {
+            const name = document.getElementById(`cluster-name-${i}`)?.value?.trim();
+            const desc = document.getElementById(`cluster-desc-${i}`)?.value?.trim();
+            if (!name) return;
+
+            const btn = document.getElementById(`confirm-cluster-${i}`);
+            btn.disabled    = true;
+            btn.textContent = 'Confirming…';
+
+            await confirmDomain(_orgId, { ...cluster, name, description: desc });
+            _domains = await getDomains(_orgId);
+            _clusters.splice(i, 1);
+            if (_clusters.length === 0) clearPendingClusters(_orgId);
+            renderKbDomains(el);
+        });
+
+        document.getElementById(`dismiss-cluster-${i}`)?.addEventListener('click', () => {
+            _clusters.splice(i, 1);
+            if (_clusters.length === 0) clearPendingClusters(_orgId);
+            renderKbDomains(el);
+        });
     });
 }
 
-function renderProposedClusters() {
-    // Build a Reviewer option list from known team members —
-    // rendered as a datalist so the Manager can type or pick.
-    // The actual Reviewer uid is stored in a hidden input alongside the name.
+function _renderProposedClusters() {
     return `
-        <div class="card mb-6" style="border-left: 3px solid var(--ember);">
-            <p style="font-weight: 500; margin-bottom: var(--space-2);">Proposed skill areas</p>
-            <p class="text-secondary text-sm mb-6">Based on your recipes, LORE suggests these groupings. Edit the names, assign a Reviewer, then confirm.</p>
-
+        <div>
+            <p class="text-secondary text-sm mb-4">Based on your recipes, LORE suggests these groupings. Edit the names, then confirm.</p>
             ${_clusters.map((cluster, i) => `
                 <div style="border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); padding: var(--space-4); margin-bottom: var(--space-4);">
                     <div class="auth-field">
-                        <label class="label" for="cluster-name-${i}">Skill area name</label>
+                        <label class="label mb-1">Skill area name</label>
                         <input class="input" id="cluster-name-${i}" value="${_esc(cluster.name ?? '')}" style="margin-bottom: var(--space-2);">
                     </div>
                     <div class="auth-field">
-                        <label class="label" for="cluster-desc-${i}">Description</label>
-                        <input class="input" id="cluster-desc-${i}" value="${_esc(cluster.description ?? '')}" placeholder="One sentence description…">
+                        <label class="label mb-1">Description</label>
+                        <input class="input" id="cluster-desc-${i}" value="${_esc(cluster.description ?? '')}" placeholder="One sentence…">
                     </div>
-                    <div class="auth-field mt-3">
-                        <label class="label" for="cluster-reviewer-${i}">Assign a Reviewer (optional)</label>
-                        <select class="input" id="cluster-reviewer-${i}">
-                            <option value="">No Reviewer assigned</option>
-                            <!-- Populated by _loadReviewersIntoSelect() after render -->
-                        </select>
-                        <p class="text-xs text-secondary mt-1">The assigned Reviewer receives mentorship prompts when an Employee misses a scenario in this area.</p>
-                    </div>
-                    <p class="text-xs text-secondary mt-3 mb-4">${(cluster.recipeIds ?? []).length} recipe${(cluster.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
+                    <p class="text-xs text-secondary mt-3 mb-3">${(cluster.recipeIds ?? []).length} recipe${(cluster.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
                     <div style="display: flex; gap: var(--space-3);">
-                        <button class="btn btn-primary" id="confirm-cluster-${i}" style="font-size: var(--text-sm);">Confirm skill area</button>
+                        <button class="btn btn-primary" id="confirm-cluster-${i}" style="font-size: var(--text-sm);">Confirm</button>
                         <button class="btn btn-secondary" id="dismiss-cluster-${i}" style="font-size: var(--text-sm);">Dismiss</button>
                     </div>
                 </div>
@@ -1277,88 +1175,110 @@ function renderProposedClusters() {
     `;
 }
 
-function renderConfirmedDomains() {
-    const confirmed    = _domains.filter(d => !d.provisional);
-    const provisional  = _domains.filter(d =>  d.provisional);
-
-    return `
-        <div>
-            ${confirmed.length > 0 ? `
-                <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
-                ${confirmed.map(d => `
-                    <div class="card" style="margin-bottom: var(--space-3);">
-                        <div class="flex-between">
-                            <div>
-                                <p style="font-weight: 500;">${d.name}</p>
-                                <p class="text-secondary text-sm mt-1">${d.description ?? ''}</p>
-                            </div>
-                            <p class="text-xs text-secondary">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
-                        </div>
-                    </div>
-                `).join('')}
-            ` : ''}
-
-            ${provisional.length > 0 ? `
-                <h3 style="margin-bottom: var(--space-2); margin-top: ${confirmed.length > 0 ? 'var(--space-8)' : '0'};">Starting points</h3>
-                <p class="text-secondary text-sm mb-4">These are provisional — based on your industry. They will be replaced by LORE as your organisation's own knowledge builds. Dismiss any that don't apply.</p>
-                ${provisional.map(d => `
-                    <div class="card" style="margin-bottom: var(--space-3); opacity: 0.7;">
-                        <div class="flex-between">
-                            <div>
-                                <p style="font-weight: 500; color: var(--warm-grey);">${d.name}</p>
-                                <span class="chip chip-pending" style="margin-top: var(--space-1); font-size: 10px;">Provisional</span>
-                            </div>
-                            <button
-                                class="btn btn-secondary"
-                                id="dismiss-provisional-${d.id}"
-                                style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);"
-                            >Dismiss</button>
-                        </div>
-                    </div>
-                `).join('')}
-            ` : ''}
-        </div>
-    `;
-}
-
-function renderNoAreas() {
-    const canCluster = _recipes.length >= 3;
-    return `
-        <div class="empty-state">
-            <h3>No skill areas yet</h3>
-            <p class="mt-2">
-                ${canCluster
-                    ? 'You have enough recipes for LORE to suggest skill areas.'
-                    : 'Add at least 3 recipes to your knowledge base before LORE can suggest skill areas.'}
-            </p>
-            ${canCluster ? `
-                <button class="btn btn-primary mt-6" id="run-clustering">Group my recipes</button>
-            ` : ''}
-        </div>
-    `;
-}
-
-// ---------------------------------------------------------------------------
-// SECTION: Team
-// All staff, their roles and statuses. Invite generation for new members.
-// ---------------------------------------------------------------------------
-function renderTeam(el, opts = {}) {
-    const _teamHeader = _sectionHeader(
-        'Team',
-        'Manage everyone on your LORE account. Invite new Employees and Reviewers, see who is active, and remove people who have left. Employees train through scenarios. Reviewers receive prompts that capture their expertise without pulling them away from client work.'
+// Check whether any unflagged responses exist to determine whether to show
+// the corpus analysis action. Returns a boolean.
+async function _checkFlaggedResponses() {
+    const { db } = await import('../firebase.js');
+    const { collection, query, where, limit, getDocs } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
+    try {
+        const snap = await getDocs(query(
+            collection(db, 'organisations', _orgId, 'responses'),
+            where('flaggedForExtraction', '==', true),
+            limit(1)
+        ));
+        return !snap.empty;
+    } catch {
+        return false;
+    }
+}
+
+
+// =============================================================================
+// TEAM TAB
+// Sub-sections: employee list with track assignment, team progress,
+// time to readiness, Reviewer activity.
+// =============================================================================
+
+function renderTeamTab(container) {
+    container.innerHTML = `
+        <div>
+            <!-- Team sub-navigation -->
+            <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;">
+                ${_teamNavTab('members',  'Team members')}
+                ${_teamNavTab('progress', 'Team progress')}
+                ${_teamNavTab('ttc',      'Time to readiness')}
+                ${_teamNavTab('reviewer', 'Reviewer activity')}
+            </div>
+            <div id="team-section-content"></div>
+        </div>
+    `;
+
+    ['members', 'progress', 'ttc', 'reviewer'].forEach(s => {
+        document.getElementById(`team-tab-${s}`)?.addEventListener('click', () => _switchTeamSection(s));
+    });
+
+    _switchTeamSection(_activeTeamSection);
+}
+
+// Shared helper used by renderFirstRun when the Team tab is clicked.
+function renderTeamSections(container) {
+    renderTeamTab(container);
+}
+
+function _teamNavTab(id, label) {
+    return `
+        <button id="team-tab-${id}" class="btn btn-secondary"
+            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4);">
+            ${label}
+        </button>
+    `;
+}
+
+function _switchTeamSection(section) {
+    _activeTeamSection = section;
+
+    ['members', 'progress', 'ttc', 'reviewer'].forEach(s => {
+        const btn = document.getElementById(`team-tab-${s}`);
+        if (!btn) return;
+        if (s === section) {
+            btn.style.background = 'rgba(44,36,22,0.08)';
+            btn.style.fontWeight = '600';
+        } else {
+            btn.style.background = '';
+            btn.style.fontWeight = '';
+        }
+    });
+
+    const el = document.getElementById('team-section-content');
+    if (!el) return;
+
+    switch (section) {
+        case 'members':  renderTeamMembers(el);        break;
+        case 'progress': renderTeamProgress(el);       break;
+        case 'ttc':      renderTimeToReadiness(el);    break;
+        case 'reviewer': renderReviewerActivity(el);   break;
+        default:         renderTeamMembers(el);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TEAM SUB-SECTION: Members
+// Employee and Reviewer list. Invite form. Per-employee track assignment (IA-02).
+// ---------------------------------------------------------------------------
+function renderTeamMembers(el) {
     el.innerHTML = `
-        ${_teamHeader}
         <div>
             <div class="flex-between mb-6">
-                <h3>Team</h3>
+                <h3>Team members</h3>
                 <button class="btn btn-primary" id="show-invite-form" style="font-size: var(--text-sm);">
                     Invite someone
                 </button>
             </div>
 
-            <div id="invite-form" style="display: ${opts.openInvite ? 'block' : 'none'};">
-                ${renderInviteForm()}
+            <div id="invite-form-container" style="display: none; margin-bottom: var(--space-6);">
+                ${_renderInviteForm()}
             </div>
 
             <div id="team-list">
@@ -1367,31 +1287,27 @@ function renderTeam(el, opts = {}) {
         </div>
     `;
 
-    // Toggle the invite form
     document.getElementById('show-invite-form')?.addEventListener('click', () => {
-        const form = document.getElementById('invite-form');
+        const form = document.getElementById('invite-form-container');
         if (form) form.style.display = form.style.display === 'none' ? 'block' : 'none';
     });
 
     _attachInviteFormHandlers();
-    _loadTeamList();
+    _loadTeamList(el);
 }
 
-function renderInviteForm() {
+function _renderInviteForm() {
     return `
-        <div class="card mb-6" style="border-left: 3px solid var(--ember);">
+        <div class="card" style="border-left: 3px solid var(--ember);">
             <h3 style="margin-bottom: var(--space-4);">Invite a team member</h3>
-
             <div class="auth-field">
                 <label class="label" for="inv-name">Their name</label>
                 <input class="input" id="inv-name" type="text" placeholder="First and last name">
             </div>
-
             <div class="auth-field mt-3">
                 <label class="label" for="inv-email">Email address</label>
                 <input class="input" id="inv-email" type="email" placeholder="their@email.com">
             </div>
-
             <div class="auth-field mt-3">
                 <label class="label" for="inv-role">Role in LORE</label>
                 <select class="input" id="inv-role">
@@ -1399,12 +1315,10 @@ function renderInviteForm() {
                     <option value="reviewer">Reviewer — will contribute knowledge</option>
                 </select>
             </div>
-
             <div class="auth-field mt-3">
                 <label class="label" for="inv-title">Their job title</label>
                 <input class="input" id="inv-title" type="text" placeholder="e.g. Senior Account Manager">
             </div>
-
             <div class="auth-field mt-3">
                 <label class="label" for="inv-seniority">Experience level</label>
                 <select class="input" id="inv-seniority">
@@ -1413,10 +1327,8 @@ function renderInviteForm() {
                     <option value="senior">Senior</option>
                 </select>
             </div>
-
             <p id="invite-error" style="color: var(--error); font-size: var(--text-sm); margin-top: var(--space-2); display: none;"></p>
             <p id="invite-link-result" style="margin-top: var(--space-4); display: none;"></p>
-
             <button class="btn btn-primary mt-4" id="generate-invite">Generate invite link</button>
         </div>
     `;
@@ -1431,39 +1343,26 @@ function _attachInviteFormHandlers() {
         const seniority = document.getElementById('inv-seniority')?.value;
         const errorEl   = document.getElementById('invite-error');
         const resultEl  = document.getElementById('invite-link-result');
-
-        // Basic email format validation — catches names typed into the email field
-        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const emailPat  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
         if (!name) {
-            errorEl.textContent = 'Please enter their name.';
-            errorEl.style.display = 'block';
-            return;
+            errorEl.textContent = 'Please enter their name.'; errorEl.style.display = 'block'; return;
         }
-        if (!email || !emailPattern.test(email)) {
-            errorEl.textContent = 'Please enter a valid email address.';
-            errorEl.style.display = 'block';
-            return;
+        if (!email || !emailPat.test(email)) {
+            errorEl.textContent = 'Please enter a valid email address.'; errorEl.style.display = 'block'; return;
         }
 
         errorEl.style.display  = 'none';
         resultEl.style.display = 'none';
 
         const btn = document.getElementById('generate-invite');
-        btn.disabled    = true;
-        btn.textContent = 'Generating…';
+        btn.disabled = true; btn.textContent = 'Generating…';
 
         const result = await generateInvite(_orgId, _uid, {
-            email,
-            role,
-            roleTitle:   title,
-            seniority,
-            orgName:     _orgName,
-            displayName: name,
+            email, role, roleTitle: title, seniority, orgName: _orgName, displayName: name,
         });
 
-        btn.disabled    = false;
-        btn.textContent = 'Generate invite link';
+        btn.disabled = false; btn.textContent = 'Generate invite link';
 
         if (!result.ok) {
             errorEl.textContent   = result.error ?? 'Something went wrong. Please try again.';
@@ -1475,45 +1374,33 @@ function _attachInviteFormHandlers() {
         resultEl.innerHTML = `
             <div class="card" style="border-left: 3px solid var(--sage);">
                 <p style="font-weight: 500; color: var(--sage); margin-bottom: var(--space-2);">Invite link ready</p>
-                <p class="text-secondary text-sm mb-3">Copy this link and send it to ${name}. It expires in 7 days.</p>
+                <p class="text-secondary text-sm mb-3">Copy this link and send it to ${_esc(name)}. It expires in 7 days.</p>
                 <div style="display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;">
-                    <input
-                        class="input"
-                        id="invite-url-display"
-                        value="${result.inviteUrl}"
-                        readonly
-                        style="flex: 1; font-size: var(--text-sm);"
-                    >
+                    <input class="input" id="invite-url-display" value="${result.inviteUrl}" readonly style="flex: 1; font-size: var(--text-sm);">
                     <button class="btn btn-secondary" id="copy-link" style="font-size: var(--text-sm);">Copy</button>
                 </div>
             </div>
         `;
 
         document.getElementById('copy-link')?.addEventListener('click', () => {
-            const input = document.getElementById('invite-url-display');
-            if (input) {
-                navigator.clipboard.writeText(input.value).then(() => {
-                    document.getElementById('copy-link').textContent = 'Copied';
-                });
-            }
+            navigator.clipboard.writeText(result.inviteUrl).then(() => {
+                document.getElementById('copy-link').textContent = 'Copied';
+            });
         });
     });
 }
 
-async function _loadTeamList() {
+async function _loadTeamList(parentEl) {
     const { db } = await import('../firebase.js');
-    const {
-        collection,
-        getDocs
-    } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const { collection, getDocs } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
 
     const listEl = document.getElementById('team-list');
     if (!listEl) return;
 
     try {
-        const snap = await getDocs(
-            collection(db, 'organisations', _orgId, 'users')
-        );
+        const snap  = await getDocs(collection(db, 'organisations', _orgId, 'users'));
         const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
         if (users.length === 0) {
@@ -1529,44 +1416,117 @@ async function _loadTeamList() {
             <div class="card" style="margin-bottom: var(--space-3);">
                 <div class="flex-between">
                     <div>
-                        <p style="font-weight: 500;">${u.displayName ?? u.email ?? 'Team member'}</p>
-                        <p class="text-secondary text-sm mt-1">${u.roleTitle ?? u.role ?? ''}</p>
+                        <p style="font-weight: 500;">${_esc(u.displayName ?? u.email ?? 'Team member')}</p>
+                        <p class="text-secondary text-sm mt-1">${_esc(u.roleTitle ?? u.role ?? '')}</p>
                     </div>
-                    <span class="chip chip-correct" style="font-size: var(--text-xs);">${u.role ?? 'employee'}</span>
+                    <div style="display: flex; gap: var(--space-2); align-items: center;">
+                        <span class="chip chip-correct" style="font-size: var(--text-xs);">${u.role ?? 'employee'}</span>
+                        ${u.role === 'employee' ? `
+                            <button class="btn btn-secondary" id="track-btn-${u.id}"
+                                style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
+                                Manage track
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+                <!-- IA-02: Track assignment panel — shown when Manager clicks "Manage track" -->
+                <div id="track-panel-${u.id}" style="display: none; margin-top: var(--space-4);">
+                    <div class="divider" style="margin: var(--space-3) 0;"></div>
+                    <p class="label mb-2">Assigned skill areas</p>
+                    <p class="text-secondary text-sm mb-3">Select the skill areas this employee should train in.</p>
+                    <div id="track-domains-${u.id}" style="display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4);">
+                        ${_domains.map(d => `
+                            <label style="display: flex; align-items: center; gap: var(--space-2); cursor: pointer;">
+                                <input type="checkbox" value="${d.id}" data-name="${_esc(d.name)}"
+                                    class="track-domain-check-${u.id}"
+                                    ${(u.assignedDomains ?? []).includes(d.id) ? 'checked' : ''}>
+                                <span class="text-sm">${_esc(d.name)}</span>
+                            </label>
+                        `).join('')}
+                        ${_domains.length === 0 ? '<p class="text-secondary text-sm">No skill areas confirmed yet.</p>' : ''}
+                    </div>
+                    <p class="label mb-2">Handover package (optional)</p>
+                    <p class="text-secondary text-sm mb-2">If this employee is taking over from someone, note their name here so LORE can contextualise the training.</p>
+                    <input class="input" id="handover-from-${u.id}" type="text"
+                        placeholder="e.g. Amaka Obi"
+                        value="${_esc(u.handoverFrom?.name ?? '')}">
+                    <p id="track-status-${u.id}" class="text-xs text-secondary mt-3"></p>
+                    <button class="btn btn-primary mt-4" id="save-track-${u.id}" style="font-size: var(--text-sm);">
+                        Save track
+                    </button>
                 </div>
             </div>
         `).join('');
+
+        // Attach track panel toggle and save handlers for each employee
+        users.filter(u => u.role === 'employee').forEach(u => {
+            document.getElementById(`track-btn-${u.id}`)?.addEventListener('click', () => {
+                const panel = document.getElementById(`track-panel-${u.id}`);
+                if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            });
+
+            document.getElementById(`save-track-${u.id}`)?.addEventListener('click', async () => {
+                const btn      = document.getElementById(`save-track-${u.id}`);
+                const statusEl = document.getElementById(`track-status-${u.id}`);
+                btn.disabled    = true;
+                btn.textContent = 'Saving…';
+
+                // Collect selected domain IDs
+                const checkedBoxes = document.querySelectorAll(`.track-domain-check-${u.id}:checked`);
+                const assignedDomains = Array.from(checkedBoxes).map(cb => cb.value);
+
+                // Handover field
+                const handoverName = document.getElementById(`handover-from-${u.id}`)?.value?.trim();
+                const handoverFrom = handoverName ? { name: handoverName } : {};
+
+                const { db: _db } = await import('../firebase.js');
+                const { doc, updateDoc } = await import(
+                    'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+                );
+
+                try {
+                    await updateDoc(doc(_db, 'organisations', _orgId, 'users', u.id), {
+                        assignedDomains,
+                        handoverFrom,
+                    });
+                    if (statusEl) statusEl.textContent = 'Track saved.';
+                    console.log('LORE dashboard.js: Track saved for uid:', u.id, 'domains:', assignedDomains);
+                } catch (err) {
+                    console.warn('LORE dashboard.js: Could not save track for uid:', u.id, err);
+                    if (statusEl) statusEl.textContent = 'Could not save. Please try again.';
+                }
+
+                btn.disabled    = false;
+                btn.textContent = 'Save track';
+            });
+        });
+
     } catch (err) {
-        console.warn('LORE Dashboard: Could not load team list.', err);
-        listEl.innerHTML = `<p class="text-secondary text-sm">Could not load team list.</p>`;
+        console.warn('LORE dashboard.js: Could not load team list.', err);
+        listEl.innerHTML = '<p class="text-secondary text-sm">Could not load team list.</p>';
     }
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Team Progress
-// Every Employee's mastery percentage, rank, sessions completed, and last
-// active date — in one scannable list. The Manager uses this to spot who is
-// active, who has stalled, and who needs a nudge.
-// Clicking an Employee's row navigates to their full profile view.
+// TEAM SUB-SECTION: Team Progress
 // ---------------------------------------------------------------------------
 async function renderTeamProgress(el) {
-    const _tpHeader = _sectionHeader(
-        'Team progress',
-        'See how each person on your team is developing across your skill areas. XP reflects how much they have trained. Mastery reflects how accurately they are responding. Use this to spot who is progressing well, who needs support, and which skill areas the whole team might be underdeveloped in.'
-    );
-    el.innerHTML = `<        ${_tpHeader}
-div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading team progress…</p></div>`;
+    el.innerHTML = `
+        <div class="empty-state">
+            <div class="spinner"></div>
+            <p class="text-secondary mt-4">Loading team progress…</p>
+        </div>
+    `;
 
     const { db: firestoreDb } = await import('../firebase.js');
-    const { collection: col, getDocs: gd } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const { collection: col, getDocs: gd } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
 
     let employees = [];
     try {
         const snap = await gd(col(firestoreDb, 'organisations', _orgId, 'users'));
-        employees = snap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
-            .filter(u => u.role === 'employee');
+        employees  = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.role === 'employee');
     } catch (err) {
         console.warn('LORE dashboard.js: Could not load employees for team progress.', err);
     }
@@ -1579,29 +1539,25 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                 <button class="btn btn-primary mt-6" id="progress-go-invite">Invite someone</button>
             </div>
         `;
-        document.getElementById('progress-go-invite')?.addEventListener('click', () => {
-            _activeSection = 'team'; _setActiveTab('team'); renderSection('team', { openInvite: true });
-        });
+        document.getElementById('progress-go-invite')?.addEventListener('click', () => _switchTeamSection('members'));
         return;
     }
 
-    // Sort: most recently active first, never-active last
     employees.sort((a, b) => {
         if (!a.lastTrainedAt && !b.lastTrainedAt) return 0;
         if (!a.lastTrainedAt) return 1;
         if (!b.lastTrainedAt) return -1;
-        const _ts = v => v?.toDate ? v.toDate() : new Date(v);
-        return _ts(b.lastTrainedAt) - _ts(a.lastTrainedAt);
+        const ts = v => v?.toDate ? v.toDate() : new Date(v);
+        return ts(b.lastTrainedAt) - ts(a.lastTrainedAt);
     });
 
-    const { getRankForXP } = await import('../engine/state.js');
+    const { getRankForXP } = await import('../engine/utils.js');
 
-    // Overall mastery: average accuracy across all domains for each Employee
     function overallMastery(mastery) {
         const domains = Object.values(mastery ?? {});
         if (domains.length === 0) return null;
-        const total   = domains.reduce((sum, d) => sum + (d.played ?? 0), 0);
-        const correct = domains.reduce((sum, d) => sum + (d.correct ?? 0), 0);
+        const total   = domains.reduce((s, d) => s + (d.played   ?? 0), 0);
+        const correct = domains.reduce((s, d) => s + (d.correct  ?? 0), 0);
         return total > 0 ? Math.round((correct / total) * 100) : null;
     }
 
@@ -1611,7 +1567,6 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                 <h3>Team progress</h3>
                 <p class="text-secondary text-sm">${employees.length} employee${employees.length !== 1 ? 's' : ''}</p>
             </div>
-
             ${employees.map(emp => {
                 const rank    = getRankForXP(emp.xp ?? 0);
                 const mastery = overallMastery(emp.domainMastery);
@@ -1619,25 +1574,20 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                     : mastery >= 70 ? 'var(--sage)'
                     : mastery >= 40 ? '#8C5A0A'
                     : 'var(--error)';
-
-                // Firestore Timestamps have a .toDate() method. Plain strings/numbers
-                // work with new Date() directly. Handle both cases.
-                const _toDate = v => v?.toDate ? v.toDate() : (v ? new Date(v) : null);
-                const lastActiveDate = _toDate(emp.lastTrainedAt);
-                const lastActive = lastActiveDate ? _relativeTime(lastActiveDate) : 'Never trained';
-                const isStale = lastActiveDate
-                    ? (Date.now() - lastActiveDate.getTime()) > 7 * 24 * 60 * 60 * 1000
-                    : true;
+                const toDate = v => v?.toDate ? v.toDate() : (v ? new Date(v) : null);
+                const lastDate   = toDate(emp.lastTrainedAt);
+                const lastActive = lastDate ? _relativeTime(lastDate) : 'Never trained';
+                const isStale    = lastDate ? (Date.now() - lastDate.getTime()) > 7 * 24 * 60 * 60 * 1000 : true;
 
                 return `
                     <div class="card" style="margin-bottom: var(--space-3); cursor: pointer;" id="emp-row-${emp.id}">
                         <div class="flex-between">
                             <div style="flex: 1;">
                                 <div class="flex-between">
-                                    <p style="font-weight: 500;">${emp.displayName ?? emp.email ?? 'Team member'}</p>
+                                    <p style="font-weight: 500;">${_esc(emp.displayName ?? emp.email ?? 'Team member')}</p>
                                     <span class="rank-badge" style="font-size: 10px;">${rank.name}</span>
                                 </div>
-                                <p class="text-secondary text-sm mt-1">${emp.roleTitle ?? ''}</p>
+                                <p class="text-secondary text-sm mt-1">${_esc(emp.roleTitle ?? '')}</p>
                                 <div style="display: flex; gap: var(--space-6); margin-top: var(--space-3); flex-wrap: wrap;">
                                     <div>
                                         <p class="text-xs text-secondary">Overall mastery</p>
@@ -1668,52 +1618,43 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
         </div>
     `;
 
-    // Each row navigates to the Employee's full profile view
     employees.forEach(emp => {
         document.getElementById(`emp-row-${emp.id}`)?.addEventListener('click', () => {
-            // Navigate using the ?employee=UID pattern that app.js handles
             window.location.href = `${window.location.pathname}?employee=${emp.id}`;
         });
     });
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Time to Readiness
-// Per-Employee progress narratives. Not a raw metric — a plain-language
-// read of where each Employee is in their development curve.
-// Generated by AI on demand, or shown as a skeleton if no sessions yet.
-//
-// The internal label is "Time to Competency". What the Manager sees is
-// always expressed as a progress narrative: "Adaeze has moved from
-// developing to mid-level in client management over 4 months."
+// TEAM SUB-SECTION: Time to Readiness
 // ---------------------------------------------------------------------------
 async function renderTimeToReadiness(el) {
-    const _ttrHeader = _sectionHeader(
-        'Time to readiness',
-        'Based on each person\'s current mastery and training pace, this estimates how long until they reach a useful level of capability in each skill area. It is a direction, not a guarantee — it helps you plan who will be ready for more complex work and when, so you can assign client work and responsibilities with more confidence.'
-    );
-    el.innerHTML = `<        ${_ttrHeader}
-div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+    el.innerHTML = `
+        <div class="empty-state">
+            <div class="spinner"></div>
+            <p class="text-secondary mt-4">Loading…</p>
+        </div>
+    `;
 
     const { db: firestoreDb } = await import('../firebase.js');
-    const { collection: col, getDocs: gd } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const { collection: col, getDocs: gd } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
 
     let employees = [];
     try {
         const snap = await gd(col(firestoreDb, 'organisations', _orgId, 'users'));
-        employees = snap.docs
-            .map(d => ({ id: d.id, ...d.data() }))
+        employees  = snap.docs.map(d => ({ id: d.id, ...d.data() }))
             .filter(u => u.role === 'employee' && (u.sessionsTotal ?? 0) > 0);
     } catch (err) {
-        console.warn('LORE dashboard.js: Could not load employees for TTC.', err);
+        console.warn('LORE dashboard.js: Could not load employees for time to readiness.', err);
     }
 
     if (employees.length === 0) {
         el.innerHTML = `
             <div class="empty-state">
                 <h3>No training data yet</h3>
-                <p class="mt-2">Progress narratives appear here once Employees have completed their first training sessions.</p>
+                <p class="mt-2">Progress narratives appear once Employees have completed their first sessions.</p>
             </div>
         `;
         return;
@@ -1727,15 +1668,16 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                 <div class="card" style="margin-bottom: var(--space-4);">
                     <div class="flex-between mb-3">
                         <div>
-                            <p style="font-weight: 500;">${emp.displayName ?? 'Team member'}</p>
-                            <p class="text-secondary text-sm">${emp.roleTitle ?? ''} · ${emp.sessionsTotal ?? 0} sessions</p>
+                            <p style="font-weight: 500;">${_esc(emp.displayName ?? 'Team member')}</p>
+                            <p class="text-secondary text-sm">${_esc(emp.roleTitle ?? '')} · ${emp.sessionsTotal ?? 0} sessions</p>
                         </div>
-                        <button class="btn btn-secondary" id="ttc-gen-${i}" style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
+                        <button class="btn btn-secondary" id="ttc-gen-${i}"
+                            style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
                             Generate
                         </button>
                     </div>
                     <p id="ttc-text-${i}" class="text-secondary text-sm" style="line-height: 1.8;">
-                        Click Generate to see a progress narrative for ${emp.displayName ?? 'this team member'}.
+                        Click Generate to see a progress narrative for ${_esc(emp.displayName ?? 'this team member')}.
                     </p>
                 </div>
             `).join('')}
@@ -1773,9 +1715,7 @@ Skill area performance: ${masteryLines}
 
 Write the progress narrative.`;
 
-            console.log('LORE dashboard.js: Generating TTC narrative for employee:', emp.id);
             const result = await generate(prompt, systemPrompt);
-
             btn.disabled    = false;
             btn.textContent = 'Regenerate';
 
@@ -1783,7 +1723,6 @@ Write the progress narrative.`;
                 if (textEl) textEl.textContent = 'Could not generate right now. Try again shortly.';
                 return;
             }
-
             if (textEl) {
                 textEl.textContent    = result.text;
                 textEl.style.color    = 'var(--ink)';
@@ -1794,40 +1733,30 @@ Write the progress narrative.`;
 }
 
 // ---------------------------------------------------------------------------
-// SECTION: Reviewer Activity
-// Shows what each Reviewer has contributed: scenarios reviewed, mentorship
-// notes written, documents processed. The Manager needs this to know whether
-// the extraction side of the system is producing at the rate expected.
-//
-// Data is read from the extractions collection grouped by reviewerId,
-// and from the tasks sub-collection completion counts.
+// TEAM SUB-SECTION: Reviewer Activity
 // ---------------------------------------------------------------------------
 async function renderReviewerActivity(el) {
-    const _raHeader = _sectionHeader(
-        'Reviewer activity',
-        'Reviewers are your senior people — the ones whose instincts and experience LORE is trying to transfer to the rest of the team. This tab shows how actively they are contributing. When a Reviewer responds to a prompt, their answer gets processed into new training material. The more they contribute, the richer your team\'s training becomes.'
-    );
-    el.innerHTML = `<        ${_raHeader}
-div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4">Loading…</p></div>`;
+    el.innerHTML = `
+        <div class="empty-state">
+            <div class="spinner"></div>
+            <p class="text-secondary mt-4">Loading…</p>
+        </div>
+    `;
 
     const { db: firestoreDb } = await import('../firebase.js');
-    const {
-        collection: col,
-        query: q,
-        where: wh,
-        getDocs: gd,
-    } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const { collection: col, query: q, where: wh, getDocs: gd } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
 
-    // Load all Reviewers and all extractions in parallel
-    let reviewers = [];
+    let reviewers      = [];
     let allExtractions = [];
     try {
         const [reviewerSnap, extractionSnap] = await Promise.all([
             gd(q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))),
             gd(col(firestoreDb, 'organisations', _orgId, 'extractions')),
         ]);
-        reviewers       = reviewerSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        allExtractions  = extractionSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        reviewers      = reviewerSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        allExtractions = extractionSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     } catch (err) {
         console.warn('LORE dashboard.js: Could not load Reviewer activity data.', err);
     }
@@ -1840,32 +1769,22 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                 <button class="btn btn-primary mt-6" id="reviewer-go-invite">Invite a Reviewer</button>
             </div>
         `;
-        document.getElementById('reviewer-go-invite')?.addEventListener('click', () => {
-            _activeSection = 'team'; _setActiveTab('team'); renderSection('team', { openInvite: true });
-        });
+        document.getElementById('reviewer-go-invite')?.addEventListener('click', () => _switchTeamSection('members'));
         return;
     }
 
-    // Group extractions by reviewerId and sourceType
     const activityByReviewer = {};
     reviewers.forEach(r => {
-        activityByReviewer[r.id] = {
-            scenario_review:  0,
-            mentorship_note:  0,
-            document:         0,
-            approved:         0,
-        };
+        activityByReviewer[r.id] = { scenario_review: 0, mentorship_note: 0, document_chunk: 0, approved: 0 };
     });
 
     allExtractions.forEach(ext => {
         if (ext.reviewerId && activityByReviewer[ext.reviewerId]) {
-            const type = ext.sourceType ?? 'document';
+            const type = ext.sourceType ?? 'document_chunk';
             if (activityByReviewer[ext.reviewerId][type] !== undefined) {
                 activityByReviewer[ext.reviewerId][type]++;
             }
-            if (ext.status === 'approved') {
-                activityByReviewer[ext.reviewerId].approved++;
-            }
+            if (ext.status === 'approved') activityByReviewer[ext.reviewerId].approved++;
         }
     });
 
@@ -1873,7 +1792,6 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
         <div>
             <h3 style="margin-bottom: var(--space-2);">Reviewer activity</h3>
             <p class="text-secondary text-sm mb-6">Contributions from each Reviewer — scenarios reviewed, mentorship notes, and approved recipes they helped build.</p>
-
             ${reviewers.map(r => {
                 const activity = activityByReviewer[r.id];
                 const total    = (activity.scenario_review ?? 0) + (activity.mentorship_note ?? 0);
@@ -1881,8 +1799,8 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
                     <div class="card" style="margin-bottom: var(--space-4);">
                         <div class="flex-between mb-4">
                             <div>
-                                <p style="font-weight: 500;">${r.displayName ?? r.email ?? 'Reviewer'}</p>
-                                <p class="text-secondary text-sm mt-1">${r.roleTitle ?? ''}</p>
+                                <p style="font-weight: 500;">${_esc(r.displayName ?? r.email ?? 'Reviewer')}</p>
+                                <p class="text-secondary text-sm mt-1">${_esc(r.roleTitle ?? '')}</p>
                             </div>
                             <span class="chip chip-${total > 0 ? 'correct' : 'pending'}">${total > 0 ? 'Active' : 'No contributions yet'}</span>
                         </div>
@@ -1907,28 +1825,11 @@ div class="empty-state"><div class="spinner"></div><p class="text-secondary mt-4
     `;
 }
 
-// ---------------------------------------------------------------------------
-// Relative time helper — converts a Date to "2 days ago", "just now", etc.
-// Used in Team Progress to show last active without exposing raw timestamps.
-// ---------------------------------------------------------------------------
-function _relativeTime(date) {
-    const diff = Date.now() - date.getTime();
-    const mins  = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days  = Math.floor(diff / 86400000);
 
-    if (mins  <  2) return 'Just now';
-    if (mins  < 60) return `${mins} minutes ago`;
-    if (hours <  2) return '1 hour ago';
-    if (hours < 24) return `${hours} hours ago`;
-    if (days  <  2) return 'Yesterday';
-    if (days  <  7) return `${days} days ago`;
-    return `${Math.floor(days / 7)} week${Math.floor(days / 7) !== 1 ? 's' : ''} ago`;
-}
+// =============================================================================
+// SHARED HELPERS
+// =============================================================================
 
-// ---------------------------------------------------------------------------
-// Loading state — shown while data is being fetched on init.
-// ---------------------------------------------------------------------------
 function renderLoading(container, message) {
     container.innerHTML = `
         <div class="empty-state">
@@ -1938,47 +1839,23 @@ function renderLoading(container, message) {
     `;
 }
 
-// ---------------------------------------------------------------------------
-// Populate one or more <select> elements with the org's Reviewer list.
-// Called after rendering any UI that contains a Reviewer assignment dropdown.
-// selectIds: array of element IDs to populate.
-// ---------------------------------------------------------------------------
-async function _loadReviewersForSelects(selectIds) {
-    const { db: firestoreDb } = await import('../firebase.js');
-    const { collection: col, query: q, where: wh, getDocs: gd } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-
-    try {
-        const snap = await gd(
-            q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer'))
-        );
-        const reviewers = snap.docs.map(d => ({
-            id:   d.id,
-            name: d.data().displayName ?? d.data().email ?? d.id,
-        }));
-
-        selectIds.forEach(id => {
-            const el = document.getElementById(id);
-            if (!el) return;
-            reviewers.forEach(r => {
-                const opt = document.createElement('option');
-                opt.value       = r.id;
-                opt.textContent = r.name;
-                el.appendChild(opt);
-            });
-        });
-        console.log('LORE dashboard.js: Loaded', reviewers.length, 'Reviewers into selects:', selectIds);
-    } catch (err) {
-        console.warn('LORE dashboard.js: Could not load Reviewers for selects.', err);
-    }
+function _relativeTime(date) {
+    const diff  = Date.now() - date.getTime();
+    const mins  = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days  = Math.floor(diff / 86400000);
+    if (mins  <  2) return 'Just now';
+    if (mins  < 60) return `${mins} minutes ago`;
+    if (hours <  2) return '1 hour ago';
+    if (hours < 24) return `${hours} hours ago`;
+    if (days  <  2) return 'Yesterday';
+    if (days  <  7) return `${days} days ago`;
+    return `${Math.floor(days / 7)} week${Math.floor(days / 7) !== 1 ? 's' : ''} ago`;
 }
 
-// ---------------------------------------------------------------------------
-// HTML-escape helper — prevents XSS when interpolating user-supplied data
-// into innerHTML. Used on all Manager-editable fields.
-// ---------------------------------------------------------------------------
+// HTML-escape helper — prevents XSS when interpolating user-supplied data into innerHTML.
 function _esc(str) {
-    return String(str)
+    return String(str ?? '')
         .replace(/&/g, '&amp;')
         .replace(/"/g, '&quot;')
         .replace(/</g, '&lt;')

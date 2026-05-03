@@ -104,6 +104,7 @@ const SEEDS = {
     'Retail & Consumer': ['Customer Experience', 'Merchandising', 'Supplier Management', 'Operations', 'Sales Execution'],
     'Media & Creative':  ['Brief Interpretation', 'Client Management', 'Creative Direction', 'Production', 'Pitching'],
     'Non-profit':        ['Programme Delivery', 'Funder Relations', 'Community Engagement', 'Impact Measurement', 'Partnerships'],
+    'Construction & Engineering': ['Site Management', 'Contract Administration', 'Health & Safety', 'Stakeholder Coordination', 'Technical Delivery'],
     'Other':             ['Leadership', 'Communication', 'Problem Solving', 'Stakeholder Management', 'Decision Making'],
 };
 
