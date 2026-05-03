@@ -273,7 +273,7 @@ async function _chooseScenarioType(orgId, employeeUid, scenarioTypes) {
 // The Reviewer never knows why they are being asked. They see a mentorship
 // prompt framed as "what would you tell them?" — not "this Employee failed."
 // ---------------------------------------------------------------------------
-export async function evaluateResponse(response, scenario, recipe, orgId, employeeUid, secondsTaken) {
+export async function evaluateResponse(response, scenario, recipe, orgId, employeeUid, secondsTaken, seniority, roleTitle) {
     console.log('LORE scenarios.js: Evaluating response — scenario id:', scenario?.id, 'recipe:', recipe?.skillName);
 
     const systemPrompt = `You are evaluating an employee's response to a professional training scenario.
@@ -330,6 +330,17 @@ Expected outcome: ${recipe.expectedOutcome}`;
     if (parsed.verdict === 'missed' && orgId && scenario.domain) {
         _writeMentorshipTask(orgId, scenario, recipe, response, employeeUid)
             .catch(err => console.warn('LORE scenarios.js: Mentorship task write failed silently.', err));
+    }
+
+    // CORP-01 — Write the Employee's response to the permanent response corpus.
+    // Every response to every scenario is stored here, regardless of verdict.
+    // The corpus grows passively as people train and is the source material for
+    // flagHighSignalResponses() in analysis.js and deriveFromCorpus() in recipes.js.
+    // seniority and roleTitle are passed in from training.js via the state object.
+    // This write is non-blocking — a failure must not affect the Employee's result.
+    if (orgId && employeeUid && scenario.id) {
+        _writeResponseCorpus(orgId, employeeUid, scenario, recipe, response, parsed.verdict, secondsTaken, seniority, roleTitle)
+            .catch(err => console.warn('LORE scenarios.js: Response corpus write failed silently.', err));
     }
 
     return {
@@ -434,6 +445,55 @@ async function _writeMentorshipTask(orgId, scenario, recipe, employeeResponse, e
         } catch (err) {
             console.warn('LORE scenarios.js: Could not write mentorship task to Reviewer:', reviewerId, err);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal — write a permanent response corpus entry (CORP-01).
+//
+// Called after every evaluation, regardless of verdict. This is the write
+// that makes the training loop an extraction surface.
+//
+// Every field matters for downstream analysis:
+//   seniority and roleTitle     — used by flagHighSignalResponses() to find
+//                                 senior-correct responses worth extracting.
+//   verdict                     — the signal. Correct senior + missed junior = extract.
+//   responseLength, secondsTaken — used for cohort benchmarking in profile.js.
+//   flaggedForExtraction         — always starts false. Set by analysis.js.
+//   rawPrompt                   — the scenario text the Employee was responding to,
+//                                 stored here so deriveFromCorpus() has the full
+//                                 question context without a second Firestore read.
+// ---------------------------------------------------------------------------
+async function _writeResponseCorpus(orgId, uid, scenario, recipe, responseText, verdict, secondsTaken, seniority, roleTitle) {
+    try {
+        await addDoc(
+            collection(db, 'organisations', orgId, 'responses'),
+            {
+                orgId,
+                uid,
+                scenarioId:           scenario.id     ?? null,
+                recipeId:             recipe?.id       ?? null,
+                domain:               scenario.domain  ?? null,
+                scenarioType:         scenario.scenarioType ?? null,
+                // The scenario text the Employee was responding to.
+                // Stored as rawPrompt so corpus derivation has full question context.
+                rawPrompt:            scenario.text    ?? null,
+                seniority:            seniority        ?? null,
+                roleTitle:            roleTitle        ?? null,
+                responseText:         responseText     ?? '',
+                responseLength:       (responseText ?? '').length,
+                secondsTaken:         secondsTaken     ?? null,
+                verdict,
+                // flaggedForExtraction starts false.
+                // analysis.js sets this to true for high-signal senior responses.
+                // recipes.js reads this flag when deriveFromCorpus() is triggered.
+                flaggedForExtraction: false,
+                createdAt:            serverTimestamp(),
+            }
+        );
+        console.log('LORE scenarios.js: Response corpus entry written — verdict:', verdict, 'uid:', uid, 'scenario:', scenario.id);
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not write response corpus entry.', err);
     }
 }
 
