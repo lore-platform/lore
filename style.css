@@ -720,3 +720,33 @@ select.input {
         padding: var(--space-8);
     }
 }
+
+/* =============================================================================
+   Utility additions
+   Filling gaps used by dashboard.js and training.js that were not in the
+   original utility set. Pattern matches the existing utility classes above.
+   ============================================================================= */
+
+.mt-3  { margin-top:    var(--space-3); }
+.mb-3  { margin-bottom: var(--space-3); }
+
+/* --- First-run panel
+   The new-Manager first-run state sits within the normal .main layout and
+   uses .card for its container. No structural additions needed — the panel
+   is self-contained within the existing card and empty-state patterns. --- */
+
+/* --- Due Today section header
+   The count badge in the Due Today header is rendered with inline styles
+   in training.js (ember background, white text, pill shape). The section
+   divider uses a border-top inline style. No additional classes needed. --- */
+
+/* --- Three-step missed verdict flow
+   Step 1 and Step 2 use .card with an inline ember border-left.
+   Step 3 (recovery micro-scenario) uses .card and .input.
+   The flaw pattern block in Step 2 uses an inline background tint.
+   No structural classes needed beyond what already exists. --- */
+
+/* --- Chunking progress indicator
+   Uses the existing .xp-bar-track and .xp-bar-fill classes with an
+   inline width transition. The "Processing chunk N of N" text uses
+   .text-secondary and .text-sm. No additional classes needed. --- */
