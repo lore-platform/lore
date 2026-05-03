@@ -87,6 +87,26 @@ const DEMO = {
     reviewerName:  'David Osei',
 };
 
+// ---------------------------------------------------------------------------
+// Industry domain seeds — provisional skill area names written at provisioning
+// time for every new org. The Manager can rename or delete them from the
+// dashboard. These are starting points, not permanent labels.
+// Moved here from dashboard.js so provisioning owns the write, not the UI.
+// [TUNING TARGET] Expand or refine per industry as LORE grows.
+// ---------------------------------------------------------------------------
+const SEEDS = {
+    'Consulting':        ['Client Engagement', 'Stakeholder Management', 'Proposal Development', 'Delivery Excellence', 'Commercial Judgement'],
+    'Financial Services':['Risk Assessment', 'Client Advisory', 'Regulatory Navigation', 'Portfolio Management', 'Deal Execution'],
+    'Technology':        ['Product Thinking', 'Technical Communication', 'Delivery Management', 'Stakeholder Alignment', 'Incident Response'],
+    'Healthcare':        ['Clinical Judgement', 'Patient Communication', 'Protocol Navigation', 'Team Coordination', 'Documentation'],
+    'Legal':             ['Client Counsel', 'Matter Management', 'Risk Identification', 'Negotiation', 'Document Drafting'],
+    'Education':         ['Learner Engagement', 'Curriculum Design', 'Assessment', 'Parent Communication', 'Classroom Management'],
+    'Retail & Consumer': ['Customer Experience', 'Merchandising', 'Supplier Management', 'Operations', 'Sales Execution'],
+    'Media & Creative':  ['Brief Interpretation', 'Client Management', 'Creative Direction', 'Production', 'Pitching'],
+    'Non-profit':        ['Programme Delivery', 'Funder Relations', 'Community Engagement', 'Impact Measurement', 'Partnerships'],
+    'Other':             ['Leadership', 'Communication', 'Problem Solving', 'Stakeholder Management', 'Decision Making'],
+};
+
 // Session-only — entered at runtime, never stored
 let _adminSecret  = null;
 let _adminEmail   = null;
@@ -639,6 +659,30 @@ document.getElementById('provision-submit').addEventListener('click', async () =
         provisionLog('Writing org to Firestore…');
         await writeOrgDocs(orgId, orgName, industry, 'admin-tool');
         provisionLog('✓ Org documents written');
+
+        // Step 5b: Write provisional domain seeds for the selected industry.
+        // Every provisioned org arrives with a starting set of skill areas.
+        // The Manager can rename or delete these from the dashboard — they are
+        // labelled provisional so it is clear they are not confirmed knowledge.
+        // Seeds come from the SEEDS constant at the top of this file.
+        const industrySeeds = SEEDS[industry] ?? SEEDS['Other'];
+        provisionLog(`Seeding ${industrySeeds.length} provisional domains for industry: ${industry}…`);
+        for (const seedName of industrySeeds) {
+            try {
+                await addDoc(collection(db, 'organisations', orgId, 'domains'), {
+                    name:        seedName,
+                    description: '',
+                    recipeIds:   [],
+                    reviewerIds: [],
+                    provisional: true,
+                    confirmedAt: serverTimestamp(),
+                });
+            } catch (err) {
+                // Non-fatal — a missing seed domain does not block provisioning
+                console.warn('LORE admin.js: Could not write provisional domain:', seedName, err);
+            }
+        }
+        provisionLog(`✓ ${industrySeeds.length} provisional domains written`);
 
         // Step 6: Write manager user document
         provisionLog('Writing manager profile…');

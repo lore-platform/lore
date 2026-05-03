@@ -224,10 +224,13 @@ function renderScenarioReview(container, prompt, progress) {
         // Stage the Reviewer's correction as a raw extraction
         console.log('LORE tasks.js: Staging scenario review extraction.');
         await createExtraction(_orgId, {
-            sourceType:  'scenario_review',
-            rawContent:  text,
-            reviewerId:  _uid,
-            contextNote: `Scenario review. Original scenario text: ${(prompt.scenarioText ?? '').slice(0, 200)}`,
+            sourceType: 'scenario_review',
+            rawContent: text,
+            reviewerId: _uid,
+            // rawPrompt stores the exact scenario text the Reviewer was reacting to.
+            // This gives the extraction pipeline full question context — the Reviewer's
+            // correction is only interpretable alongside what they were correcting.
+            rawPrompt:  prompt.scenarioText ?? '',
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
@@ -297,10 +300,14 @@ function renderMentorshipNote(container, prompt, progress) {
 
         // Stage the mentorship note as a raw extraction
         await createExtraction(_orgId, {
-            sourceType:  'mentorship_note',
-            rawContent:  text,
-            reviewerId:  _uid,
-            contextNote: `Mentorship note. Scenario: ${(prompt.scenarioText ?? '').slice(0, 200)}. Employee response: ${(prompt.employeeResponse ?? '').slice(0, 200)}`,
+            sourceType: 'mentorship_note',
+            rawContent: text,
+            reviewerId: _uid,
+            // rawPrompt combines the scenario and the employee response so the
+            // extraction pipeline has the full context the Reviewer was coaching on.
+            // Concatenated here because both together form the question that prompted
+            // the Reviewer's expert answer.
+            rawPrompt:  `Scenario: ${prompt.scenarioText ?? ''}\n\nEmployee response: ${prompt.employeeResponse ?? ''}`,
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
