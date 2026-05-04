@@ -26,8 +26,8 @@
 
 import { getRecipe, saveToLibrary } from '../engine/recipes.js';
 import {
-    fetchOrGenerateScenario,
-    prePullNextScenario,
+    getNextScenario,
+    prePullNext,
     clearPrePull,
     evaluateResponse,
 } from '../engine/scenarios.js';
@@ -360,7 +360,7 @@ async function _startNextDueItem(container) {
     }
 
     // Fetch or generate a scenario for this specific recipe
-    const scenario = await fetchOrGenerateScenario(
+    const scenario = await getNextScenario(
         _orgId,
         _activeDomain.name,
         { seniority: _state.seniority ?? 'mid', uid: _uid, recipeId: dueItem.recipeId }
@@ -387,7 +387,7 @@ async function _startNextDueItem(container) {
 async function startSession(container) {
     renderLoading(container, 'Getting your next scenario…');
 
-    const scenario = await fetchOrGenerateScenario(
+    const scenario = await getNextScenario(
         _orgId,
         _activeDomain.name,
         { seniority: _state.seniority ?? 'mid', uid: _uid }
@@ -531,7 +531,7 @@ async function handleSubmit(container, response, scenario, isDueItem) {
 
     // Pre-pull the next scenario while the Employee reads the result screen.
     // This runs in the background — the result renders immediately.
-    prePullNextScenario(_orgId, _activeDomain?.name, {
+    prePullNext(_orgId, _activeDomain?.name, {
         seniority: _state.seniority ?? 'mid',
         uid: _uid,
     });
