@@ -1138,21 +1138,30 @@ async function runDemoSeedFlow() {
         await setClaims(empUid, DEMO.orgId, 'employee');
         demoTick('Employee claims set');
 
+        // Read back the domain IDs that were just written so we can assign them
+        // to the interactive employee. Without assignedDomains the new training
+        // view shows a holding screen — this ensures the demo employee can train
+        // immediately after signing in.
+        const demoDomainSnap = await getDocs(collection(db, 'organisations', DEMO.orgId, 'domains'));
+        const demoDomainIds  = demoDomainSnap.docs.map(d => d.id);
+
         await setDoc(doc(db, 'organisations', DEMO.orgId, 'users', empUid), {
-            displayName:   DEMO.employeeName,
-            email:         DEMO.employeeEmail,
-            role:          'employee',
-            roleTitle:     'Consultant',
-            seniority:     'junior',
-            orgId:         DEMO.orgId,
-            xp:            0,
-            streak:        0,
-            sessionsTotal: 0,
-            domainMastery: {},
-            lastTrainedAt: null,
-            createdAt:     serverTimestamp(),
-            isDemo:        true,
-            isInteractive: true,
+            displayName:     DEMO.employeeName,
+            email:           DEMO.employeeEmail,
+            role:            'employee',
+            roleTitle:       'Consultant',
+            seniority:       'junior',
+            orgId:           DEMO.orgId,
+            xp:              0,
+            streak:          0,
+            sessionsTotal:   0,
+            domainMastery:   {},
+            lastTrainedAt:   null,
+            assignedDomains: demoDomainIds,
+            handoverFrom:    {},
+            createdAt:       serverTimestamp(),
+            isDemo:          true,
+            isInteractive:   true,
         });
 
         demoLog('Creating interactive Reviewer Auth account…');
@@ -1437,12 +1446,12 @@ async function loadDemoCreds() {
                             <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.managerPassword}</code></td>
                         </tr>
                         <tr style="border-bottom:1px solid rgba(44,36,22,0.05);">
-                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Employee</td>
+                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Employee<br><span style="font-weight:400;color:var(--warm-grey);">${DEMO.employeeName}</span></td>
                             <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.employeeEmail}</code></td>
                             <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.sharedPassword}</code></td>
                         </tr>
                         <tr>
-                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Reviewer</td>
+                            <td style="padding:var(--space-2) var(--space-2) var(--space-2) 0;font-weight:500;">Reviewer<br><span style="font-weight:400;color:var(--warm-grey);">${DEMO.reviewerName}</span></td>
                             <td style="padding:var(--space-2);"><code style="user-select:all;">${creds.reviewerEmail}</code></td>
                             <td style="padding:var(--space-2) 0 var(--space-2) var(--space-2);"><code style="user-select:all;">${creds.sharedPassword}</code></td>
                         </tr>

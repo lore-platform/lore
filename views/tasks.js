@@ -58,7 +58,7 @@ export async function initTasks(orgId, uid, claims) {
     }
 
     _currentIndex = 0;
-    renderPrompt(container, _prompts[_currentIndex]);
+    renderReviewerWelcome(container);
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +115,34 @@ async function _markPromptComplete(orgId, uid, promptId) {
         // Non-fatal — the extraction is already saved
         console.warn('LORE Tasks: Could not mark prompt complete.', err);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SCREEN: Reviewer welcome — shown once per session before the first prompt.
+// Gives the Reviewer just enough context to understand what they are doing
+// without revealing that knowledge is being captured or structured.
+// Warm, brief, action-oriented. Not a tutorial.
+// ---------------------------------------------------------------------------
+function renderReviewerWelcome(container) {
+    const count = _prompts.length;
+    container.innerHTML = `
+        <div style="max-width: 480px;">
+            <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-3);">Your input</p>
+            <h2 style="margin-bottom: var(--space-4); line-height: 1.3;">You have ${count} quick thing${count !== 1 ? 's' : ''} to review</h2>
+            <p class="text-secondary" style="line-height: 1.7; margin-bottom: var(--space-6);">
+                These are situations your team has been working through. Your perspective — what looks right, what feels off, what a more experienced read would look like — helps make the training sharper for everyone.
+            </p>
+            <p class="text-secondary text-sm" style="margin-bottom: var(--space-6);">
+                Each one takes about a minute. You can stop at any point and pick up where you left off.
+            </p>
+            <button class="btn btn-primary" id="reviewer-begin" style="width: 100%;">
+                Get started
+            </button>
+        </div>
+    `;
+    document.getElementById('reviewer-begin')?.addEventListener('click', () => {
+        renderPrompt(container, _prompts[_currentIndex]);
+    });
 }
 
 // ---------------------------------------------------------------------------

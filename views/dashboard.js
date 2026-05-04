@@ -337,15 +337,15 @@ function renderKnowledgeTab(container) {
         <div>
             <!-- Summary header -->
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-6);">
-                <div class="card" style="text-align: center;">
+                <div class="card stat-card">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Recipes</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600;">${_recipes.length}</p>
                 </div>
-                <div class="card" style="text-align: center;">
+                <div class="card stat-card">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Skill areas confirmed</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600;">${confirmedDomains}</p>
                 </div>
-                <div class="card" style="text-align: center; cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
+                <div class="card stat-card" style="cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Pending review</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
                 </div>

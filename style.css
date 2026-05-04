@@ -146,6 +146,16 @@ p {
     margin-top: var(--space-4);
 }
 
+/* Stat cards in the dashboard summary header use a text-align:center
+   inline style. This ensures the content inside stacks and centres
+   correctly regardless of card height differences. */
+.stat-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
 /* --- Buttons --- */
 .btn {
     display: inline-flex;
@@ -329,6 +339,13 @@ select.input {
 .empty-state h3 {
     color: var(--warm-grey);
     margin-bottom: var(--space-2);
+}
+
+/* Ensure all text inside empty-state inherits centred alignment,
+   including paragraphs with a max-width constraint. */
+.empty-state p {
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* --- Auth screen --- */
