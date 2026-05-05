@@ -482,20 +482,28 @@ async function deleteOrg(orgId, orgData, manager, logEl = null) {
     };
 
     // 1. Delete Firebase Auth account(s).
-    // First delete the manager. Then look for interactive demo accounts if this
-    // is the lore-demo org (they have email addresses stored on their user docs).
+    // Delete ALL users in this org — Manager, Employees, and Reviewers.
+    // Previously only interactive (isInteractive: true) accounts were deleted,
+    // leaving regular invited users' Auth accounts orphaned after org deletion.
+    // This caused email-already-in-use errors if a new invite was generated for
+    // the same email after the org was re-provisioned.
     const authToDelete = [];
     if (manager?.uid) authToDelete.push({ uid: manager.uid, label: 'Manager Auth' });
 
-    // For any org, also check for users with isInteractive flag (interactive demo accounts)
     try {
         const usersSnap = await getDocs(collection(db, 'organisations', orgId, 'users'));
         usersSnap.docs.forEach(d => {
-            if (d.data().isInteractive && d.id !== manager?.uid) {
-                authToDelete.push({ uid: d.id, label: `${d.data().role ?? 'User'} Auth (${d.data().email ?? d.id})` });
-            }
+            // Skip the manager — already added above
+            if (d.id === manager?.uid) return;
+            const data = d.data();
+            authToDelete.push({
+                uid:   d.id,
+                label: `${data.role ?? 'User'} Auth (${data.email ?? data.displayName ?? d.id})`,
+            });
         });
-    } catch { /* non-fatal */ }
+    } catch (err) {
+        _dlog(`Could not enumerate org users for Auth deletion: ${err.message}`, 'err');
+    }
 
     for (const account of authToDelete) {
         try {

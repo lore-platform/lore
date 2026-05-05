@@ -164,6 +164,7 @@ export function friendlyAuthError(code) {
         'auth/email-already-in-use':   'An account with that email already exists.',
         'auth/weak-password':          'Your password needs to be at least 8 characters.',
         'auth/network-request-failed': 'Check your connection and try again.',
+        'auth/operation-not-allowed':  'This sign-in method is not enabled. Contact your administrator.',
     };
     return map[code] || 'Something went wrong. Please try again.';
 }

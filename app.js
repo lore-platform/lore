@@ -270,6 +270,21 @@ onAuthChange(async (user) => {
     if (!user) {
         console.log('LORE app.js: Auth state — no user. Routing to auth screen.');
         clearState();
+
+        // Guard: if an invite redemption is in progress, do not re-render.
+        // createUserWithEmailAndPassword() can fire a transient null auth state
+        // on failure, which would wipe the invite form and swallow the error.
+        // The invite submit handler owns error display in that flow.
+        const urlParams       = new URLSearchParams(window.location.search);
+        const inviteParam     = urlParams.get('invite');
+        const inviteSubmitBtn = document.getElementById('invite-submit');
+        if (inviteParam && inviteSubmitBtn) {
+            inviteSubmitBtn.disabled    = false;
+            inviteSubmitBtn.textContent = 'Accept invite';
+            console.log('LORE app.js: Null auth state during invite flow — not re-rendering.');
+            return;
+        }
+
         // Reset the sign-in form so credentials from the previous session are
         // not still visible after sign-out. Without this the inputs stay populated
         // and the button may still show "Signing in…" from the last attempt.
