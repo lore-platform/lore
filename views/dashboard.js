@@ -2341,19 +2341,83 @@ async function _parsePdfLocally(file) {
 
         console.log('LORE dashboard.js: _parsePdfLocally — PDF loaded, pages:', pdf.numPages);
 
-        // Extract text from every page and join with newlines.
-        // Each page's text items are sorted by vertical position then concatenated.
+        // Extract text from every page using position-aware line reconstruction.
+        //
+        // PDF.js returns text as a flat list of items, each with:
+        //   item.str       — the text string for this span
+        //   item.transform — a 6-element matrix where transform[5] is the y-coordinate
+        //                    (vertical position from the bottom of the page)
+        //   item.height    — the font height of this span in points
+        //
+        // Without using position data, all spans are concatenated into a wall of text
+        // with no line breaks or paragraph spacing. The fix:
+        //
+        //   1. Sort items by descending y (PDF coordinates start from bottom-left,
+        //      so a higher y value means higher on the page — we want top to bottom).
+        //   2. Compare each item's y position to the previous item's y.
+        //      If the y difference exceeds one line height, it is a new line (\n).
+        //      If the y difference exceeds roughly 2.5 line heights, it is a new
+        //      paragraph (\n\n). These thresholds catch headings, section breaks,
+        //      and blank lines without being sensitive to minor baseline shifts
+        //      between characters on the same line.
+        //   3. Items on the same line are joined with a space.
+        //
+        // [TUNING TARGET] LINE_BREAK_THRESHOLD and PARA_BREAK_THRESHOLD — adjust
+        // if extracted text has too many or too few paragraph breaks for typical
+        // documents in this org's industry.
+        const LINE_BREAK_THRESHOLD = 1.2;  // y-gap > 1.2× line height = new line
+        const PARA_BREAK_THRESHOLD = 2.5;  // y-gap > 2.5× line height = paragraph
+
         const pageTexts = [];
         for (let i = 1; i <= pdf.numPages; i++) {
             const page    = await pdf.getPage(i);
             const content = await page.getTextContent();
-            // items is an array of text spans — join with spaces, preserving line breaks
-            const pageText = content.items
-                .map(item => item.str)
-                .join(' ')
-                .replace(/ {2,}/g, ' ')
-                .trim();
-            if (pageText) pageTexts.push(pageText);
+
+            // Filter out empty strings and items with no position data
+            const items = content.items.filter(item => item.str && item.transform);
+
+            if (items.length === 0) continue;
+
+            // Sort top-to-bottom (descending y coordinate)
+            items.sort((a, b) => b.transform[5] - a.transform[5]);
+
+            // Walk items, inserting line or paragraph breaks based on y-gap
+            let pageText = '';
+            let prevY    = null;
+            let prevH    = null;
+
+            for (const item of items) {
+                const y    = item.transform[5];
+                // Use item.height if available, fall back to a reasonable default
+                const h    = (item.height && item.height > 0) ? item.height : 10;
+
+                if (prevY === null) {
+                    // First item on the page — no preceding context
+                    pageText += item.str;
+                } else {
+                    const gap         = prevY - y; // positive = moved down the page
+                    const lineHeight  = prevH ?? h;
+
+                    if (gap > lineHeight * PARA_BREAK_THRESHOLD) {
+                        // Large gap — paragraph break
+                        pageText += '\n\n' + item.str;
+                    } else if (gap > lineHeight * LINE_BREAK_THRESHOLD) {
+                        // Normal gap — new line
+                        pageText += '\n' + item.str;
+                    } else {
+                        // Same line — join with a space (only if not already spaced)
+                        const needsSpace = pageText.length > 0
+                            && !pageText.endsWith(' ')
+                            && !item.str.startsWith(' ');
+                        pageText += (needsSpace ? ' ' : '') + item.str;
+                    }
+                }
+
+                prevY = y;
+                prevH = h;
+            }
+
+            if (pageText.trim()) pageTexts.push(pageText.trim());
         }
 
         const fullText = pageTexts.join('\n\n');
