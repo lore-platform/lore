@@ -131,12 +131,20 @@ export default {
         // Converts a base64-encoded file to clean plain text using Gemini's
         // native document and vision understanding.
         //
+        // AI fallback chain (both within this Worker):
+        //   1. gemini-2.5-flash     — primary model, best quality
+        //   2. gemini-2.5-flash-lite — fallback on 429 or 500, separate endpoint
+        //      so a demand spike on Flash is less likely to affect Flash Lite
+        //
+        // If both AI models fail, the Worker returns { ok: false, error: 'AI_BUSY' }
+        // and dashboard.js attempts local in-browser parsing as a further fallback.
+        //
         // Supported MIME types:
         //   application/pdf         — digital PDFs and scanned PDFs (via vision)
         //   image/jpeg              — scanned pages, photos of documents
         //   image/png               — scanned pages, screenshots
         //   image/webp              — scanned pages
-        //   text/plain              — plain text files (no AI call needed)
+        //   text/plain              — plain text files (no AI call needed — decoded directly)
         //
         // DOCX is not sent here — dashboard.js extracts DOCX XML client-side
         // and sends the resulting plain text through the normal paste flow.
@@ -467,20 +475,23 @@ function pemToArrayBuffer(pem) {
 
 // =============================================================================
 // parseDocument handler
-// Converts a base64-encoded file to plain text using Gemini Flash's native
-// document and vision understanding. No third-party libraries — Gemini handles
-// PDF structure, multi-column layouts, tables, and scanned pages natively.
+// Converts a base64-encoded file to plain text using Gemini's native document
+// and vision understanding. No third-party libraries — Gemini handles PDF
+// structure, multi-column layouts, tables, and scanned pages natively.
 //
-// The prompt instructs Gemini to transcribe faithfully rather than summarise —
-// this is important because the extraction pipeline downstream will do the
-// semantic work. We want the raw content intact.
+// AI fallback chain:
+//   1. gemini-2.5-flash      — primary, best quality
+//   2. gemini-2.5-flash-lite — fallback on 429 or 500. Separate endpoint so
+//      a demand spike on Flash is unlikely to affect Flash Lite simultaneously.
 //
-// Plain text files bypass Gemini entirely and are decoded directly — no token
-// cost and no latency. All other types are sent to Gemini as inline data parts.
+// If both fail, returns { ok: false, error: 'AI_BUSY' } so dashboard.js can
+// attempt in-browser local parsing as a further fallback.
+//
+// Plain text files bypass both models — decoded directly with no AI cost.
 //
 // Size limit: Gemini inline data accepts files up to ~20MB base64-encoded.
-// Files larger than this should be rejected with a clear message before the
-// Worker call is made — see dashboard.js _validateFile().
+// Files larger than this should be rejected before the Worker call is made —
+// see dashboard.js _validateFile().
 // =============================================================================
 async function handleParseDocument(body, env, corsHeaders) {
     const { fileBase64, mimeType, fileName } = body;
@@ -523,10 +534,32 @@ async function handleParseDocument(body, env, corsHeaders) {
         }
     }
 
-    // PDF and image types — send to Gemini as an inline data part.
-    // The system prompt instructs faithful transcription, not summarisation.
-    // We ask Gemini to preserve structure (headings, lists, table content)
-    // so the extraction pipeline has the clearest possible input to work from.
+    // PDF and image types — try Gemini Flash first, then Flash Lite as fallback.
+    console.log('LORE Worker: parseDocument — sending to Gemini. mimeType:', mimeType, 'fileName:', fileName ?? 'unknown');
+
+    const parseResult = await tryGeminiParse(fileBase64, mimeType, fileName, env.GEMINI_API_KEY);
+
+    if (!parseResult.ok) {
+        // Both models failed — return AI_BUSY so the browser knows to attempt
+        // local in-browser parsing rather than showing a generic error.
+        console.error('LORE Worker: parseDocument — all AI models failed. Returning AI_BUSY.');
+        return json({ ok: false, error: 'AI_BUSY' }, 503, corsHeaders);
+    }
+
+    console.log('LORE Worker: parseDocument — success. text length:', parseResult.text.length, 'partial:', parseResult.partial ?? false, 'model:', parseResult.model);
+    return json(parseResult, 200, corsHeaders);
+}
+
+// ---------------------------------------------------------------------------
+// tryGeminiParse — attempts document parsing with gemini-2.5-flash first.
+// On 429 (quota) or 500 (server error), retries once with gemini-2.5-flash-lite.
+// Returns { ok: true, text, partial?, model } or { ok: false, error }.
+//
+// The system prompt instructs faithful transcription rather than summarisation —
+// the extraction pipeline downstream does the semantic work, so we want the
+// raw content intact with structure preserved.
+// ---------------------------------------------------------------------------
+async function tryGeminiParse(fileBase64, mimeType, fileName, apiKey) {
     const systemPrompt = `You are a document transcription assistant.
 Your job is to extract and return the complete text content of the document provided.
 Rules:
@@ -540,94 +573,100 @@ Rules:
 
     const prompt = `Transcribe the complete text content of this document. Return plain text only.`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+    // Model chain — primary then fallback.
+    // [TUNING TARGET] Add or reorder models here if the available Gemini lineup changes.
+    const models = [
+        'gemini-2.5-flash',      // Primary — best quality for document vision
+        'gemini-2.5-flash-lite', // Fallback — separate endpoint, lighter demand
+    ];
 
-    const requestBody = {
-        contents: [
-            {
-                role:  'user',
-                parts: [
-                    // Inline file data — Gemini reads the file bytes natively
-                    {
-                        inlineData: {
-                            mimeType: mimeType,
-                            data:     fileBase64,
+    for (const model of models) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+        const requestBody = {
+            contents: [
+                {
+                    role:  'user',
+                    parts: [
+                        // Inline file data — Gemini reads the file bytes natively
+                        {
+                            inlineData: {
+                                mimeType: mimeType,
+                                data:     fileBase64,
+                            },
                         },
-                    },
-                    // Text prompt follows the file part
-                    { text: prompt },
-                ],
+                        // Text prompt follows the file part
+                        { text: prompt },
+                    ],
+                },
+            ],
+            systemInstruction: {
+                parts: [{ text: systemPrompt }],
             },
-        ],
-        systemInstruction: {
-            parts: [{ text: systemPrompt }],
-        },
-        generationConfig: {
-            // High token limit — long documents need room to be transcribed in full.
-            // [TUNING TARGET] Reduce if Worker costs become a concern.
-            maxOutputTokens: 8192,
-            // Temperature 0 — transcription should be deterministic, not creative.
-            temperature: 0,
-        },
-    };
+            generationConfig: {
+                // High token limit — long documents need room to be transcribed in full.
+                // [TUNING TARGET] Reduce if Worker costs become a concern.
+                maxOutputTokens: 8192,
+                // Temperature 0 — transcription should be deterministic, not creative.
+                temperature: 0,
+            },
+        };
 
-    console.log('LORE Worker: parseDocument — sending to Gemini. mimeType:', mimeType, 'fileName:', fileName ?? 'unknown');
+        console.log(`LORE Worker: tryGeminiParse — trying model: ${model}`);
 
-    try {
-        const res = await fetch(url, {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify(requestBody),
-        });
+        try {
+            const res = await fetch(url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(requestBody),
+            });
 
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            // 429 means quota — surface this distinctly so the browser can show
-            // a meaningful message rather than a generic failure
-            if (res.status === 429) {
-                console.warn('LORE Worker: parseDocument — Gemini quota hit.');
-                return json({ ok: false, error: 'QUOTA', quota: true }, 429, corsHeaders);
+            // 429 and 500 are transient — try the next model in the chain.
+            // Any other non-OK status (400, 403) is a permanent error — stop immediately.
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                if (res.status === 429 || res.status === 500) {
+                    console.warn(`LORE Worker: tryGeminiParse — model ${model} returned ${res.status}, trying next.`);
+                    continue;
+                }
+                console.error(`LORE Worker: tryGeminiParse — model ${model} permanent error:`, res.status, err);
+                return { ok: false, error: err.error?.message ?? 'GEMINI_ERROR' };
             }
-            console.error('LORE Worker: parseDocument — Gemini error:', res.status, err);
-            return json({ ok: false, error: err.error?.message ?? 'GEMINI_ERROR' }, 500, corsHeaders);
+
+            const data = await res.json();
+            const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+            if (!text || text.trim().length === 0) {
+                // Empty response — treat as transient and try the next model
+                console.warn(`LORE Worker: tryGeminiParse — model ${model} returned empty text.`);
+                continue;
+            }
+
+            // finishReason check — RECITATION or SAFETY means the model refused.
+            // Return what we have with a partial flag rather than failing entirely.
+            const finishReason = data.candidates?.[0]?.finishReason;
+            const partial      = finishReason === 'MAX_TOKENS';
+
+            if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+                console.warn(`LORE Worker: tryGeminiParse — model ${model} finishReason: ${finishReason}`);
+                return { ok: true, text, partial: true, finishReason, model };
+            }
+
+            if (partial) {
+                console.warn(`LORE Worker: tryGeminiParse — model ${model} hit MAX_TOKENS. Partial content returned.`);
+            }
+
+            return { ok: true, text, partial, model };
+
+        } catch (err) {
+            // Network-level failure — try the next model
+            console.warn(`LORE Worker: tryGeminiParse — model ${model} network error: ${err.message}`);
+            continue;
         }
-
-        const data = await res.json();
-
-        // Extract the transcribed text from the response
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-
-        if (!text || text.trim().length === 0) {
-            // Gemini returned a response but no text content — likely a blank document
-            // or a file whose content is entirely images with no readable text
-            console.warn('LORE Worker: parseDocument — Gemini returned empty text. fileName:', fileName ?? 'unknown');
-            return json({ ok: false, error: 'EMPTY_DOCUMENT' }, 200, corsHeaders);
-        }
-
-        // finishReason check — RECITATION or SAFETY means Gemini refused to transcribe.
-        // This is rare for document transcription but worth handling gracefully.
-        const finishReason = data.candidates?.[0]?.finishReason;
-        if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
-            console.warn('LORE Worker: parseDocument — unexpected finishReason:', finishReason);
-            // Return whatever text we did get, but flag the reason so the browser
-            // can show a partial-content warning if appropriate
-            return json({ ok: true, text, partial: true, finishReason }, 200, corsHeaders);
-        }
-
-        // MAX_TOKENS means the document was too long for a single response.
-        // We return what we have and set partial: true so dashboard.js can warn the Manager.
-        const partial = finishReason === 'MAX_TOKENS';
-        if (partial) {
-            console.warn('LORE Worker: parseDocument — MAX_TOKENS hit. Partial content returned. fileName:', fileName ?? 'unknown');
-        }
-
-        console.log('LORE Worker: parseDocument — success. text length:', text.length, 'partial:', partial);
-        return json({ ok: true, text, partial }, 200, corsHeaders);
-
-    } catch (err) {
-        console.error('LORE Worker: parseDocument — fetch failed:', err.message);
-        return json({ ok: false, error: 'NETWORK_ERROR' }, 500, corsHeaders);
     }
+
+    // All models exhausted
+    return { ok: false, error: 'ALL_MODELS_FAILED' };
 }
 
 // =============================================================================

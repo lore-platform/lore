@@ -2258,6 +2258,120 @@ async function _extractDocxText(file) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Local fallback: plain text
+// Decodes a .txt file directly in the browser — no network call, no AI.
+// This mirrors what the Worker does for text/plain, so plain text files
+// always succeed even when both AI models are unavailable.
+// Returns the decoded string or null on failure.
+// ---------------------------------------------------------------------------
+async function _parseTextFileLocally(file) {
+    try {
+        const buffer = await file.arrayBuffer();
+        const text   = new TextDecoder('utf-8').decode(new Uint8Array(buffer));
+        console.log('LORE dashboard.js: _parseTextFileLocally — decoded, length:', text.length);
+        return text || null;
+    } catch (err) {
+        console.warn('LORE dashboard.js: _parseTextFileLocally — failed:', err.message);
+        return null;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local fallback: PDF text extraction via PDF.js
+// Used when both Gemini models are unavailable (AI_BUSY from Worker).
+// Loads PDF.js from cdnjs on demand — not bundled, only fetched when needed.
+// Works reliably for digital PDFs (text-layer PDFs). Does not work for
+// scanned PDFs, which are image-only and have no embedded text layer.
+// For scanned PDFs the extraction will return empty or near-empty text,
+// which the caller treats as a failure and surfaces a clear message.
+//
+// PDF.js is loaded lazily — only on first call. Subsequent calls reuse
+// the already-loaded library via the _pdfjsLib module-level cache.
+//
+// Returns the extracted text string or null on failure.
+// ---------------------------------------------------------------------------
+let _pdfjsLib = null; // Module-level cache — set on first successful load
+
+async function _parsePdfLocally(file) {
+    // Load PDF.js from cdnjs if not already loaded
+    if (!_pdfjsLib) {
+        try {
+            await new Promise((resolve, reject) => {
+                // Check if already present on window (e.g. loaded by another call)
+                if (window.pdfjsLib) { _pdfjsLib = window.pdfjsLib; resolve(); return; }
+
+                const script = document.createElement('script');
+                script.src   = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+                script.type  = 'module';
+                script.onload  = () => {
+                    // pdf.min.mjs exposes pdfjsLib on window when loaded as a classic
+                    // module script. If not, import() is the alternative path.
+                    _pdfjsLib = window.pdfjsLib ?? null;
+                    resolve();
+                };
+                script.onerror = () => reject(new Error('PDF.js failed to load'));
+                document.head.appendChild(script);
+            });
+        } catch (err) {
+            console.warn('LORE dashboard.js: _parsePdfLocally — could not load PDF.js:', err.message);
+            return null;
+        }
+    }
+
+    // PDF.js may expose itself differently depending on load method.
+    // Try window.pdfjsLib as the primary reference.
+    const pdfjs = _pdfjsLib ?? window.pdfjsLib;
+    if (!pdfjs) {
+        console.warn('LORE dashboard.js: _parsePdfLocally — PDF.js not available after load.');
+        return null;
+    }
+
+    try {
+        // Set the worker source — required by PDF.js for parsing.
+        // The worker script must match the library version.
+        if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+            pdfjs.GlobalWorkerOptions.workerSrc =
+                'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+        }
+
+        const buffer   = await file.arrayBuffer();
+        const loadTask = pdfjs.getDocument({ data: new Uint8Array(buffer) });
+        const pdf      = await loadTask.promise;
+
+        console.log('LORE dashboard.js: _parsePdfLocally — PDF loaded, pages:', pdf.numPages);
+
+        // Extract text from every page and join with newlines.
+        // Each page's text items are sorted by vertical position then concatenated.
+        const pageTexts = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page    = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            // items is an array of text spans — join with spaces, preserving line breaks
+            const pageText = content.items
+                .map(item => item.str)
+                .join(' ')
+                .replace(/ {2,}/g, ' ')
+                .trim();
+            if (pageText) pageTexts.push(pageText);
+        }
+
+        const fullText = pageTexts.join('\n\n');
+        if (!fullText.trim()) {
+            // No text layer — likely a scanned PDF
+            console.warn('LORE dashboard.js: _parsePdfLocally — no text layer found. Possibly a scanned PDF.');
+            return null;
+        }
+
+        console.log('LORE dashboard.js: _parsePdfLocally — extracted', fullText.length, 'chars from', pdf.numPages, 'pages.');
+        return fullText;
+
+    } catch (err) {
+        console.warn('LORE dashboard.js: _parsePdfLocally — extraction failed:', err.message);
+        return null;
+    }
+}
+
 // Shared upload handler — onComplete is called after a successful extraction pipeline run.
 //
 // Two flows:
@@ -2318,7 +2432,21 @@ function _attachUploadHandlers(onComplete) {
 
     // ---------------------------------------------------------------------------
     // Internal: handle a selected or dropped file.
-    // Validates, extracts text (DOCX or Worker), pre-populates the textarea.
+    //
+    // Parsing fallback chain per file type:
+    //
+    //   plain text  → local decode directly (no Worker, no AI, always works)
+    //   DOCX        → local ZIP/XML extraction (no Worker, no AI, always works)
+    //   PDF         → Worker (Gemini Flash → Flash Lite) → PDF.js local fallback
+    //   images      → Worker (Gemini Flash → Flash Lite) → clear message, no local fallback
+    //
+    // The Worker returns { ok: false, error: 'AI_BUSY' } when both Gemini models
+    // are unavailable. That is the signal to attempt local parsing.
+    //
+    // For images, there is no reliable local fallback — Tesseract.js is too slow
+    // and inaccurate to offer a good experience. The Manager is told clearly that
+    // our processing system is temporarily busy and invited to try again shortly
+    // or paste the text directly.
     // ---------------------------------------------------------------------------
     async function _handleFileSelected(file) {
         const statusEl  = document.getElementById('file-parse-status');
@@ -2341,7 +2469,7 @@ function _attachUploadHandlers(onComplete) {
         // Pre-fill the document name from the file name (without extension)
         const nameWithoutExt = file.name.replace(/\.[^.]+$/, '');
         if (nameInput && !nameInput.value.trim()) {
-            nameInput.value     = nameWithoutExt;
+            nameInput.value      = nameWithoutExt;
             _uploadState.docName = nameWithoutExt;
         }
 
@@ -2355,14 +2483,33 @@ function _attachUploadHandlers(onComplete) {
         const mimeType = _resolveMimeType(file);
         let extractedText = null;
 
-        // ---------------------------------------------------------------------------
+        // -----------------------------------------------------------------------
+        // Plain text — decode locally, no Worker or AI call needed.
+        // This always works regardless of AI availability.
+        // -----------------------------------------------------------------------
+        if (mimeType === 'text/plain') {
+            extractedText = await _parseTextFileLocally(file);
+            if (!extractedText) {
+                if (statusEl) {
+                    statusEl.textContent = 'Could not read this text file. Try pasting the content directly.';
+                    statusEl.style.color = 'var(--error)';
+                }
+                return;
+            }
+            if (statusEl) {
+                statusEl.textContent   = `Read successfully · ${_wordCount(extractedText)} words`;
+                statusEl.style.color   = 'var(--sage)';
+                statusEl.style.display = 'block';
+            }
+        }
+
+        // -----------------------------------------------------------------------
         // DOCX — extract text client-side from the ZIP/XML structure.
         // No Worker call needed — avoids sending binary DOCX to Gemini, which
         // handles DOCX less reliably than PDF. Client-side XML extraction is
-        // more predictable for this format.
-        // ---------------------------------------------------------------------------
-        if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-            if (statusEl) statusEl.textContent = 'Extracting text from Word document…';
+        // more predictable for this format and always works locally.
+        // -----------------------------------------------------------------------
+        else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
             extractedText = await _extractDocxText(file);
             if (!extractedText) {
                 if (statusEl) {
@@ -2371,10 +2518,24 @@ function _attachUploadHandlers(onComplete) {
                 }
                 return;
             }
-        } else {
-            // ---------------------------------------------------------------------------
-            // PDF, images, plain text — read as base64, send to Worker parseDocument.
-            // ---------------------------------------------------------------------------
+            if (statusEl) {
+                statusEl.textContent   = `Extracted successfully · ${_wordCount(extractedText)} words`;
+                statusEl.style.color   = 'var(--sage)';
+                statusEl.style.display = 'block';
+            }
+        }
+
+        // -----------------------------------------------------------------------
+        // PDF and images — try Worker first (Gemini Flash → Flash Lite),
+        // then fall back to local parsing if the Worker returns AI_BUSY.
+        // -----------------------------------------------------------------------
+        else {
+            const isPdf   = mimeType === 'application/pdf';
+            const isImage = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(mimeType);
+
+            if (statusEl) statusEl.textContent = 'Reading your document — this usually takes 10–20 seconds…';
+
+            // Read file as base64 for the Worker call
             let fileBase64;
             try {
                 fileBase64 = await _fileToBase64(file);
@@ -2387,16 +2548,17 @@ function _attachUploadHandlers(onComplete) {
                 return;
             }
 
-            if (statusEl) statusEl.textContent = 'Sending to LORE for reading — this usually takes 10–20 seconds…';
-
-            // Ping the Worker to avoid cold-start timeout on the real call
+            // Ping the Worker to reduce cold-start timeout risk on the real call
             await fetch('https://lore-worker.slop-runner.workers.dev', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ mode: 'ping' }),
             }).catch(() => {});
 
-            let parseResult;
+            // --- Worker call ---
+            let parseResult = null;
+            let workerFailed = false;
+
             try {
                 const res = await fetch('https://lore-worker.slop-runner.workers.dev', {
                     method:  'POST',
@@ -2410,52 +2572,80 @@ function _attachUploadHandlers(onComplete) {
                 });
                 parseResult = await res.json().catch(() => ({}));
             } catch (err) {
-                console.warn('LORE dashboard.js: parseDocument Worker call failed:', err.message);
-                if (statusEl) {
-                    statusEl.textContent = 'Could not reach LORE right now. Check your connection and try again, or paste the text directly.';
-                    statusEl.style.color = 'var(--error)';
-                }
-                return;
+                console.warn('LORE dashboard.js: parseDocument Worker call failed (network):', err.message);
+                workerFailed = true;
             }
 
-            if (!parseResult.ok) {
-                // Map Worker error codes to friendly messages
-                let msg;
-                if (parseResult.error === 'QUOTA') {
-                    msg = 'LORE is busy right now. Try again in a moment, or paste the text directly.';
-                } else if (parseResult.error === 'EMPTY_DOCUMENT') {
-                    msg = 'No readable text was found in this file. If it is a scanned document, try a higher-quality scan, or paste the text directly.';
-                } else if (parseResult.unsupported) {
-                    msg = 'This file type is not supported. Use PDF, plain text, or an image.';
+            const aiBusy = workerFailed || !parseResult?.ok;
+
+            if (!aiBusy) {
+                // Worker succeeded
+                extractedText = parseResult.text;
+
+                // Partial content warning — document was too long for a single pass
+                if (parseResult.partial) {
+                    if (statusEl) {
+                        statusEl.textContent = 'This document is very long — only part of it came through. Review the text below and remove irrelevant sections before continuing.';
+                        statusEl.style.color   = '#8C5A0A'; // amber — warning, not error
+                        statusEl.style.display = 'block';
+                    }
                 } else {
-                    msg = 'Could not read this file. Try a different format or paste the text directly.';
+                    if (statusEl) {
+                        statusEl.textContent   = `Read successfully · ${_wordCount(extractedText)} words extracted`;
+                        statusEl.style.color   = 'var(--sage)';
+                        statusEl.style.display = 'block';
+                    }
                 }
-                if (statusEl) {
-                    statusEl.textContent = msg;
-                    statusEl.style.color = 'var(--error)';
-                }
-                return;
-            }
 
-            extractedText = parseResult.text;
-
-            // If Gemini hit MAX_TOKENS, the content is partial — warn the Manager clearly
-            if (parseResult.partial) {
-                if (statusEl) {
-                    statusEl.textContent = 'This document is very long — only part of it came through. Review the text below and remove any irrelevant sections before continuing.';
-                    statusEl.style.color = '#8C5A0A'; // amber — warning, not error
-                    statusEl.style.display = 'block';
-                }
             } else {
-                if (statusEl) {
-                    statusEl.textContent   = `Read successfully · ${_wordCount(extractedText)} words extracted`;
-                    statusEl.style.color   = 'var(--sage)';
-                    statusEl.style.display = 'block';
+                // Worker returned AI_BUSY or network failed — attempt local fallback
+                console.warn('LORE dashboard.js: Worker unavailable, attempting local fallback. mimeType:', mimeType);
+
+                if (isPdf) {
+                    // PDF.js local fallback
+                    if (statusEl) {
+                        statusEl.textContent = 'Our processing system is currently handling a high volume of requests — reading your PDF locally instead…';
+                        statusEl.style.color = '#8C5A0A';
+                    }
+
+                    extractedText = await _parsePdfLocally(file);
+
+                    if (!extractedText) {
+                        // PDF.js returned nothing — likely a scanned PDF with no text layer.
+                        // At this point there is genuinely no local fallback for scanned PDFs.
+                        if (statusEl) {
+                            statusEl.textContent = 'Our processing system is currently handling a high volume of requests and local reading could not extract text from this file — it may be a scanned document. Please try again shortly, or paste the text directly.';
+                            statusEl.style.color = 'var(--error)';
+                        }
+                        return;
+                    }
+
+                    if (statusEl) {
+                        statusEl.textContent   = `Read locally · ${_wordCount(extractedText)} words extracted · Note: our processing system was temporarily busy`;
+                        statusEl.style.color   = '#8C5A0A'; // amber — success but via fallback, worth noting
+                        statusEl.style.display = 'block';
+                    }
+
+                } else if (isImage) {
+                    // No local fallback for images — surface a clear, honest message
+                    if (statusEl) {
+                        statusEl.textContent = 'Our processing system is currently handling a high volume of requests and cannot read image files locally. Please try again shortly, or paste the text directly.';
+                        statusEl.style.color = 'var(--error)';
+                    }
+                    return;
+
+                } else {
+                    // Unsupported type that slipped through — should not happen but handle gracefully
+                    if (statusEl) {
+                        statusEl.textContent = 'Could not read this file. Try a different format or paste the text directly.';
+                        statusEl.style.color = 'var(--error)';
+                    }
+                    return;
                 }
             }
         }
 
-        // Populate the textarea with the extracted text so the Manager can review it
+        // Populate the textarea with the extracted text for Manager review
         if (textArea) {
             textArea.value       = extractedText;
             _uploadState.docText = extractedText;
@@ -2465,14 +2655,7 @@ function _attachUploadHandlers(onComplete) {
             metaEl.style.display = 'block';
         }
 
-        // For DOCX — set the success status after text is in the textarea
-        if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' && statusEl) {
-            statusEl.textContent   = `Extracted successfully · ${_wordCount(extractedText)} words`;
-            statusEl.style.color   = 'var(--sage)';
-            statusEl.style.display = 'block';
-        }
-
-        console.log('LORE dashboard.js: File parsed successfully — name:', file.name, 'words:', _wordCount(extractedText));
+        console.log('LORE dashboard.js: File parsed — name:', file.name, 'words:', _wordCount(extractedText), 'mimeType:', mimeType);
     }
 
     // ---------------------------------------------------------------------------
