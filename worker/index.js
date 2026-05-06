@@ -551,13 +551,25 @@ async function handleParseDocument(body, env, corsHeaders) {
 }
 
 // ---------------------------------------------------------------------------
-// tryGeminiParse — attempts document parsing with gemini-2.5-flash first.
-// On 429 (quota) or 500 (server error), retries once with gemini-2.5-flash-lite.
-// Returns { ok: true, text, partial?, model } or { ok: false, error }.
+// tryGeminiParse — uploads the file to the Gemini File API, then calls
+// generateContent referencing the uploaded file URI.
 //
-// The system prompt instructs faithful transcription rather than summarisation —
-// the extraction pipeline downstream does the semantic work, so we want the
-// raw content intact with structure preserved.
+// Why File API instead of inline base64:
+//   Google explicitly recommends the File API for PDF parsing. Inline base64
+//   works for images but is less reliable for PDFs in practice — the File API
+//   path uses a different internal processing pipeline that handles PDF
+//   structure, text layers, and multi-page documents more consistently.
+//   Files are stored temporarily (48 hours) and do not count against token
+//   input limits — only the generateContent call does.
+//
+// Flow:
+//   1. Upload file bytes to generativelanguage.googleapis.com/upload/v1beta/files
+//      → receive a file URI
+//   2. Call generateContent with the file URI as a fileData part
+//   3. On 429 or 500, retry with gemini-2.5-flash-lite
+//   4. Delete the uploaded file after use (best-effort, non-fatal if it fails)
+//
+// Returns { ok: true, text, partial?, model } or { ok: false, error }.
 // ---------------------------------------------------------------------------
 async function tryGeminiParse(fileBase64, mimeType, fileName, apiKey) {
     const systemPrompt = `You are a document transcription assistant.
@@ -573,12 +585,79 @@ Rules:
 
     const prompt = `Transcribe the complete text content of this document. Return plain text only.`;
 
-    // Model chain — primary then fallback.
+    // Step 1: Upload the file to the Gemini File API.
+    // Convert base64 back to raw bytes for the multipart upload.
+    let fileUri  = null;
+    let uploadedFileName = null; // The File API's internal resource name — used for deletion
+
+    try {
+        const fileBytes = Uint8Array.from(atob(fileBase64), c => c.charCodeAt(0));
+        const numBytes  = fileBytes.length;
+
+        // Multipart upload — metadata part + binary part separated by a boundary.
+        // The File API accepts application/octet-stream as the upload content type
+        // and stores the file with the declared mimeType for Gemini to read.
+        const boundary = '----LoreFileBoundary';
+        const metadataPart = JSON.stringify({ file: { displayName: fileName ?? 'document' } });
+
+        // Build the multipart body manually — no FormData in Workers
+        const encoder   = new TextEncoder();
+        const metaBytes = encoder.encode(
+            `--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n${metadataPart}\r\n` +
+            `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
+        );
+        const closing   = encoder.encode(`\r\n--${boundary}--`);
+
+        // Concatenate: metadata + file bytes + closing boundary
+        const body = new Uint8Array(metaBytes.length + numBytes + closing.length);
+        body.set(metaBytes, 0);
+        body.set(fileBytes, metaBytes.length);
+        body.set(closing,   metaBytes.length + numBytes);
+
+        const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=multipart&key=${apiKey}`;
+
+        console.log('LORE Worker: tryGeminiParse — uploading file to File API. size:', numBytes, 'bytes, mimeType:', mimeType);
+
+        const uploadRes = await fetch(uploadUrl, {
+            method:  'POST',
+            headers: {
+                'Content-Type': `multipart/related; boundary=${boundary}`,
+                'X-Goog-Upload-Protocol': 'multipart',
+            },
+            body,
+        });
+
+        if (!uploadRes.ok) {
+            const err = await uploadRes.json().catch(() => ({}));
+            console.error('LORE Worker: tryGeminiParse — File API upload failed:', uploadRes.status, err);
+            return { ok: false, error: 'FILE_UPLOAD_FAILED' };
+        }
+
+        const uploadData     = await uploadRes.json();
+        fileUri              = uploadData.file?.uri ?? null;
+        uploadedFileName     = uploadData.file?.name ?? null; // e.g. "files/abc123"
+
+        if (!fileUri) {
+            console.error('LORE Worker: tryGeminiParse — File API returned no URI.');
+            return { ok: false, error: 'FILE_UPLOAD_FAILED' };
+        }
+
+        console.log('LORE Worker: tryGeminiParse — file uploaded. URI:', fileUri);
+
+    } catch (err) {
+        console.error('LORE Worker: tryGeminiParse — File API upload threw:', err.message);
+        return { ok: false, error: 'FILE_UPLOAD_FAILED' };
+    }
+
+    // Step 2: Call generateContent with the uploaded file URI.
+    // Try gemini-2.5-flash first, fall back to gemini-2.5-flash-lite on 429/500.
     // [TUNING TARGET] Add or reorder models here if the available Gemini lineup changes.
     const models = [
         'gemini-2.5-flash',      // Primary — best quality for document vision
         'gemini-2.5-flash-lite', // Fallback — separate endpoint, lighter demand
     ];
+
+    let parseResult = { ok: false, error: 'ALL_MODELS_FAILED' };
 
     for (const model of models) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -588,11 +667,11 @@ Rules:
                 {
                     role:  'user',
                     parts: [
-                        // Inline file data — Gemini reads the file bytes natively
+                        // Reference the uploaded file by URI — File API path
                         {
-                            inlineData: {
+                            fileData: {
                                 mimeType: mimeType,
-                                data:     fileBase64,
+                                fileUri:  fileUri,
                             },
                         },
                         // Text prompt follows the file part
@@ -612,7 +691,7 @@ Rules:
             },
         };
 
-        console.log(`LORE Worker: tryGeminiParse — trying model: ${model}`);
+        console.log(`LORE Worker: tryGeminiParse — calling generateContent. model: ${model}`);
 
         try {
             const res = await fetch(url, {
@@ -630,7 +709,8 @@ Rules:
                     continue;
                 }
                 console.error(`LORE Worker: tryGeminiParse — model ${model} permanent error:`, res.status, err);
-                return { ok: false, error: err.error?.message ?? 'GEMINI_ERROR' };
+                parseResult = { ok: false, error: err.error?.message ?? 'GEMINI_ERROR' };
+                break;
             }
 
             const data = await res.json();
@@ -649,14 +729,16 @@ Rules:
 
             if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
                 console.warn(`LORE Worker: tryGeminiParse — model ${model} finishReason: ${finishReason}`);
-                return { ok: true, text, partial: true, finishReason, model };
+                parseResult = { ok: true, text, partial: true, finishReason, model };
+                break;
             }
 
             if (partial) {
                 console.warn(`LORE Worker: tryGeminiParse — model ${model} hit MAX_TOKENS. Partial content returned.`);
             }
 
-            return { ok: true, text, partial, model };
+            parseResult = { ok: true, text, partial, model };
+            break;
 
         } catch (err) {
             // Network-level failure — try the next model
@@ -665,8 +747,17 @@ Rules:
         }
     }
 
-    // All models exhausted
-    return { ok: false, error: 'ALL_MODELS_FAILED' };
+    // Step 3: Delete the uploaded file — best-effort, non-fatal.
+    // Files auto-expire after 48 hours anyway, but explicit deletion is good practice
+    // and avoids accumulating files in the account during heavy use.
+    if (uploadedFileName) {
+        const deleteUrl = `https://generativelanguage.googleapis.com/v1beta/${uploadedFileName}?key=${apiKey}`;
+        fetch(deleteUrl, { method: 'DELETE' }).catch(err => {
+            console.warn('LORE Worker: tryGeminiParse — file deletion failed (non-fatal):', err.message);
+        });
+    }
+
+    return parseResult;
 }
 
 // =============================================================================
