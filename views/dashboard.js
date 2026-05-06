@@ -4,11 +4,19 @@
 // extraction pipeline, domain management, and team progress.
 //
 // Two tabs only:
-//   Knowledge Base — summary header, approved recipes, review queue,
-//                    document upload with chunking progress, corpus analysis
-//                    action (CORP-03), domains section (DOMAIN-02).
+//   Knowledge Base — summary header, three sub-sections:
+//                    Add knowledge (default) — upload form, inline review queue,
+//                    corpus analysis action (CORP-03).
+//                    Recipes — approved recipes browsable by domain.
+//                    Skill areas — domain management (DOMAIN-02).
 //   Team           — employee list with track assignment (IA-02), team
 //                    progress, time to readiness, Reviewer activity.
+//
+// Knowledge Base sub-nav order and defaults:
+//   Add knowledge (default) | Recipes | Skill areas
+//   The review queue lives inline below the upload form in Add knowledge —
+//   not as a separate tab. This keeps the upload-first flow intact while
+//   giving the Manager immediate sight of what is waiting for review.
 //
 // First-run state: new orgs (non-demo) land on a focused panel with only
 // the document upload and a brief value statement. Normal dashboard renders
@@ -56,9 +64,15 @@ let _clusters = [];
 // Which top-level tab is active: 'knowledge' | 'team'
 let _activeTab = 'knowledge';
 
-// Which sub-section within each tab is active
-let _activeKnowledgeSection = 'recipes';
-let _activeTeamSection      = 'progress';
+// Which sub-section within the Knowledge Base tab is active.
+// Default is 'upload' — the upload-first principle means the Manager always
+// lands on the Add knowledge section, not the recipe list.
+// 'upload' | 'recipes' | 'domains'
+let _activeKnowledgeSection = 'upload';
+
+// Which sub-section within the Team tab is active.
+// 'members' | 'progress' | 'ttc' | 'reviewer'
+let _activeTeamSection = 'progress';
 
 // Upload state — persisted across tab switches so an in-progress or completed
 // extraction is not lost when the Manager clicks to another tab and back.
@@ -148,8 +162,8 @@ async function _checkOrgHasContent(orgId) {
     );
     try {
         const [docsSnap, extSnap] = await Promise.all([
-            getDocs(query(collection(db, 'organisations', orgId, 'documents'),    limit(1))),
-            getDocs(query(collection(db, 'organisations', orgId, 'extractions'),  limit(1))),
+            getDocs(query(collection(db, 'organisations', orgId, 'documents'),   limit(1))),
+            getDocs(query(collection(db, 'organisations', orgId, 'extractions'), limit(1))),
         ]);
         return !docsSnap.empty || !extSnap.empty;
     } catch (err) {
@@ -325,7 +339,16 @@ function _setActiveTabStyle(activeId) {
 
 // =============================================================================
 // KNOWLEDGE BASE TAB
-// Sub-sections: recipes, queue, upload, domains
+//
+// Three sub-sections, in this order:
+//   Add knowledge (default) — upload form + inline review queue + corpus analysis
+//   Recipes                 — approved recipes browsable by domain
+//   Skill areas             — domain management
+//
+// The review queue is not a separate tab. It lives below the upload form in
+// Add knowledge so the Manager sees pending extractions immediately after upload
+// without having to navigate away. This reinforces the upload → review → approve
+// flow as a single continuous action.
 // =============================================================================
 
 function renderKnowledgeTab(container) {
@@ -335,28 +358,27 @@ function renderKnowledgeTab(container) {
 
     container.innerHTML = `
         <div>
-            <!-- Summary header -->
+            <!-- Summary header — stat-card class centres content vertically (style.css) -->
             <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-6);">
-                <div class="card stat-card">
+                <div class="card stat-card" style="text-align: center;">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Recipes</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600;">${_recipes.length}</p>
                 </div>
-                <div class="card stat-card">
+                <div class="card stat-card" style="text-align: center;">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Skill areas confirmed</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600;">${confirmedDomains}</p>
                 </div>
-                <div class="card stat-card" style="cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
+                <div class="card stat-card" style="text-align: center; cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Pending review</p>
                     <p style="font-size: var(--text-2xl); font-weight: 600; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
                 </div>
             </div>
 
-            <!-- Knowledge Base sub-navigation -->
-            <div style="display: flex; gap: var(--space-2); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                ${_kbNavTab('recipes', 'Recipes')}
-                ${_kbNavTab('queue',   `Review queue${pendingCount > 0 ? ` <span class="queue-badge">${pendingCount}</span>` : ''}`)}
-                ${_kbNavTab('upload',  'Add knowledge')}
-                ${_kbNavTab('domains', 'Skill areas')}
+            <!-- Knowledge Base sub-navigation — three tabs with descriptions -->
+            <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
+                ${_kbNavTab('upload',  'Add knowledge',  'Upload documents and review extracted content')}
+                ${_kbNavTab('recipes', 'Recipes',        'Browse your approved knowledge base')}
+                ${_kbNavTab('domains', 'Skill areas',    'Organise recipes into training tracks')}
             </div>
 
             <!-- Sub-section content -->
@@ -364,13 +386,13 @@ function renderKnowledgeTab(container) {
         </div>
     `;
 
-    // Clicking the pending card navigates to the review queue
+    // Clicking the pending stat card jumps to Add knowledge (where the queue lives)
     document.getElementById('kb-pending-card')?.addEventListener('click', () => {
-        if (pendingCount > 0) _switchKbSection('queue');
+        if (pendingCount > 0) _switchKbSection('upload');
     });
 
     // Sub-nav handlers
-    ['recipes', 'queue', 'upload', 'domains'].forEach(s => {
+    ['upload', 'recipes', 'domains'].forEach(s => {
         document.getElementById(`kb-tab-${s}`)?.addEventListener('click', () => {
             _switchKbSection(s);
         });
@@ -379,13 +401,19 @@ function renderKnowledgeTab(container) {
     _switchKbSection(_activeKnowledgeSection);
 }
 
-function _kbNavTab(id, label) {
+// Each sub-nav button shows a label and a one-line description beneath it.
+// The description gives the Manager enough context to know which section to
+// go to without clicking around.
+function _kbNavTab(id, label, description) {
     return `
         <button
             id="kb-tab-${id}"
             class="btn btn-secondary"
-            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4);"
-        >${label}</button>
+            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4); display: flex; flex-direction: column; align-items: flex-start; height: auto; white-space: normal; text-align: left; gap: var(--space-1);"
+        >
+            <span style="font-weight: 600;">${label}</span>
+            <span style="font-size: var(--text-xs); color: var(--warm-grey); font-weight: 400;">${description}</span>
+        </button>
     `;
 }
 
@@ -393,15 +421,20 @@ function _switchKbSection(section) {
     _activeKnowledgeSection = section;
 
     // Update sub-nav active styles
-    ['recipes', 'queue', 'upload', 'domains'].forEach(s => {
+    ['upload', 'recipes', 'domains'].forEach(s => {
         const btn = document.getElementById(`kb-tab-${s}`);
         if (!btn) return;
         if (s === section) {
             btn.style.background = 'rgba(44,36,22,0.08)';
-            btn.style.fontWeight = '600';
+            btn.style.borderColor = 'rgba(44,36,22,0.3)';
+            // Darken the description text slightly when active
+            const desc = btn.querySelector('span:last-child');
+            if (desc) desc.style.color = 'var(--ink)';
         } else {
-            btn.style.background = '';
-            btn.style.fontWeight = '';
+            btn.style.background  = '';
+            btn.style.borderColor = '';
+            const desc = btn.querySelector('span:last-child');
+            if (desc) desc.style.color = '';
         }
     });
 
@@ -409,17 +442,529 @@ function _switchKbSection(section) {
     if (!el) return;
 
     switch (section) {
-        case 'recipes': renderKbRecipes(el);  break;
-        case 'queue':   renderKbQueue(el);    break;
         case 'upload':  renderKbUpload(el);   break;
+        case 'recipes': renderKbRecipes(el);  break;
         case 'domains': renderKbDomains(el);  break;
-        default:        renderKbRecipes(el);
+        default:        renderKbUpload(el);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// KB SUB-SECTION: Add knowledge
+// Upload form at the top. Corpus analysis action below it (CORP-03).
+// Inline review queue below that — so the Manager never has to navigate away
+// to see what is waiting for their review after an upload.
+// ---------------------------------------------------------------------------
+function renderKbUpload(el) {
+    // In-progress spinner during document processing
+    if (_uploadState.inProgress) {
+        const progress = _uploadState.chunkProgress;
+        el.innerHTML = `
+            <div class="card">
+                <div class="empty-state">
+                    <div class="spinner"></div>
+                    <p class="text-secondary mt-4">Reading <strong>${_uploadState.docName || 'your document'}</strong>…</p>
+                    ${progress ? `
+                        <p class="text-secondary text-sm mt-2">Processing chunk ${progress.current} of ${progress.total}</p>
+                        <div class="xp-bar-track" style="width: 200px; margin: var(--space-3) auto 0;">
+                            <div class="xp-bar-fill" style="width: ${Math.round((progress.current / progress.total) * 100)}%; background: var(--ember); transition: width 0.4s ease;"></div>
+                        </div>
+                    ` : `
+                        <p class="text-secondary text-sm mt-2">This usually takes 10–20 seconds.</p>
+                    `}
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    // Aha moment — shown after a successful upload before reverting to the form.
+    // Gives the Manager a clear signal that something real just happened.
+    if (_uploadState.result) {
+        const result = _uploadState.result;
+        let resultHtml;
+
+        if (!result.ok) {
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--error); margin-bottom: var(--space-6);">
+                    <p style="font-weight: 500;">Could not process the document</p>
+                    <p class="text-secondary text-sm mt-2">${_uploadState.errorMsg || 'Please try again shortly.'}</p>
+                    <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Try again</button>
+                </div>`;
+        } else if (result.extractionsCreated === 0) {
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--ember); margin-bottom: var(--space-6);">
+                    <p style="font-weight: 500;">No clear training moments found</p>
+                    <p class="text-secondary text-sm mt-2">This document does not appear to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook.</p>
+                    <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Upload another document</button>
+                </div>`;
+        } else {
+            // Aha moment — extraction success. Warm, specific, action-oriented.
+            resultHtml = `
+                <div class="card" style="border-left: 3px solid var(--sage); margin-bottom: var(--space-6);">
+                    <p style="font-weight: 500; color: var(--sage);">Found ${result.extractionsCreated} training moment${result.extractionsCreated !== 1 ? 's' : ''} in &ldquo;${_esc(_uploadState.docName)}&rdquo;</p>
+                    <p class="text-secondary text-sm mt-2">
+                        Go through them below — approve the ones that feel right and they will become part of your knowledge base.
+                        You can edit any field before approving.
+                    </p>
+                    <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Add another document</button>
+                </div>`;
+        }
+
+        el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${_renderInlineQueue()}</div>`;
+
+        document.getElementById('upload-reset')?.addEventListener('click', () => {
+            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null };
+            renderKbUpload(el);
+        });
+
+        _attachInlineQueueHandlers(el);
+        _attachCorpusAnalysisHandlers();
+        return;
+    }
+
+    // Default: upload form + corpus analysis card + inline review queue
+    el.innerHTML = `
+        <div>
+            <div class="card" style="margin-bottom: var(--space-6);">
+                <h3 style="margin-bottom: var(--space-2);">Add a document</h3>
+                <p class="text-secondary text-sm mb-6" style="line-height: 1.6;">
+                    Paste in any document that captures how your team makes decisions — a retrospective,
+                    a playbook, a post-mortem. LORE reads it and finds the decision-making moments
+                    that become training scenarios.
+                </p>
+                ${_renderUploadForm()}
+            </div>
+            ${_renderCorpusAnalysisCard()}
+            ${_renderInlineQueue()}
+        </div>
+    `;
+
+    _attachUploadHandlers(async () => {
+        _pending = await getPendingExtractions(_orgId);
+        renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
+    });
+
+    _attachInlineQueueHandlers(el);
+    _attachCorpusAnalysisHandlers();
+}
+
+// Corpus analysis card — shown in Add knowledge section (CORP-03).
+// Only renders the actionable state — visibility is determined by whether
+// flagged responses exist, checked asynchronously after render.
+function _renderCorpusAnalysisCard() {
+    return `
+        <div id="corpus-analysis-section" style="margin-bottom: var(--space-6); display: none;">
+            <div class="card" style="border-left: 3px solid var(--ember);">
+                <p style="font-weight: 500;">New patterns found in team responses</p>
+                <p class="text-secondary text-sm mt-2 mb-4">
+                    LORE has found response patterns from your senior team members that may contain useful knowledge.
+                    Run the analysis to extract them into your review queue below.
+                </p>
+                <button class="btn btn-primary" id="corpus-analysis-btn" style="font-size: var(--text-sm);">
+                    Find patterns in team responses
+                </button>
+                <p id="corpus-status" class="text-xs text-secondary mt-3"></p>
+            </div>
+        </div>
+    `;
+}
+
+function _attachCorpusAnalysisHandlers() {
+    // Check asynchronously whether flagged responses exist to decide visibility.
+    _checkFlaggedResponses().then(hasFlagged => {
+        const section = document.getElementById('corpus-analysis-section');
+        if (section) section.style.display = hasFlagged ? 'block' : 'none';
+    });
+
+    document.getElementById('corpus-analysis-btn')?.addEventListener('click', async () => {
+        const btn    = document.getElementById('corpus-analysis-btn');
+        const status = document.getElementById('corpus-status');
+        btn.disabled    = true;
+        btn.textContent = 'Analysing…';
+        if (status) status.textContent = 'Looking for patterns in team responses…';
+
+        // Step 1: Flag high-signal responses (senior-correct on junior-missed scenarios).
+        // This must run before deriveFromCorpus so there is something flagged to process.
+        await flagHighSignalResponses(_orgId);
+
+        // Step 2: Derive extractions from all flagged responses across all domains.
+        const result = await deriveFromCorpus(_orgId, null);
+        btn.disabled    = false;
+        btn.textContent = 'Find patterns in team responses';
+
+        if (status) {
+            status.textContent = result.ok && result.extractionsCreated > 0
+                ? `Found ${result.extractionsCreated} pattern${result.extractionsCreated !== 1 ? 's' : ''} — they appear in the review queue below.`
+                : result.ok
+                ? 'No new patterns found at this time.'
+                : 'Could not complete the analysis. Try again shortly.';
+        }
+
+        if (result.ok && result.extractionsCreated > 0) {
+            _pending = await getPendingExtractions(_orgId);
+            // Re-render the inline queue to show the new extractions
+            const kbEl = document.getElementById('kb-section-content');
+            if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+        }
+    });
+}
+
+// Inline review queue — rendered inside Add knowledge below the upload form.
+// The Manager reviews extractions in the same flow as uploading — no tab switch needed.
+function _renderInlineQueue() {
+    if (_pending.length === 0) {
+        return `
+            <div class="empty-state" style="padding: var(--space-8) var(--space-6);">
+                <h3>Nothing to review</h3>
+                <p class="mt-2">When you upload a document or a Reviewer contributes, extracted knowledge will appear here for your approval.</p>
+            </div>
+        `;
+    }
+
+    return `
+        <div>
+            <div class="flex-between" style="margin-bottom: var(--space-4);">
+                <h3>${_pending.length} item${_pending.length !== 1 ? 's' : ''} waiting for review</h3>
+            </div>
+            <div id="inline-queue-list">
+                ${_pending.map((ext, i) => _renderExtractionCard(ext, i)).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function _attachInlineQueueHandlers(parentEl) {
+    _pending.forEach((ext, i) => _attachExtractionHandlers(ext, i, parentEl));
+}
+
+// ---------------------------------------------------------------------------
+// Extraction card — used by the inline queue in Add knowledge.
+// Shows: source type and provenance, raw content verbatim, intermediate
+// knowledge representation (summary, situation, insight) as the primary
+// review surface, draft recipe fields as editable output, Reviewer assignment
+// at the extraction point (so the Manager can immediately route for review).
+// ---------------------------------------------------------------------------
+function _renderExtractionCard(ext, index) {
+    // PIPE-05: source type label includes provenance context
+    const sourceLabels = {
+        'scenario_review':   'Scenario feedback',
+        'mentorship_note':   'Mentorship note',
+        'document_chunk':    'Document',
+        'employee_response': 'Team response pattern',
+    };
+    const sourceLabel = sourceLabels[ext.sourceType] ?? 'Contribution';
+
+    // Provenance line — shows what the contributor was responding to.
+    // Truncated to 120 characters to keep the card scannable.
+    const provenanceLine = ext.rawPrompt
+        ? `<p class="text-xs text-secondary mt-1" style="font-style: italic;">${_esc(ext.rawPrompt.slice(0, 120))}${ext.rawPrompt.length > 120 ? '…' : ''}</p>`
+        : '';
+
+    const hasKnowledge = ext.knowledge && ext.knowledge.hasKnowledge !== false && ext.knowledge.summary;
+    const hasDraft     = ext.draft && ext.draft.skillName;
+
+    return `
+        <div class="card" style="margin-bottom: var(--space-6);" id="ext-card-${index}">
+
+            <!-- Source and provenance header -->
+            <div style="margin-bottom: var(--space-4);">
+                <div class="flex-between">
+                    <span class="chip chip-pending">${sourceLabel}</span>
+                    <span class="text-xs text-secondary">${ext.wordCount ? ext.wordCount + ' words' : ''}</span>
+                </div>
+                ${provenanceLine}
+            </div>
+
+            <!-- Raw content — verbatim, always shown -->
+            <div style="margin-bottom: var(--space-4);">
+                <p class="label mb-2">What was contributed</p>
+                <div style="background: rgba(44,36,22,0.04); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);">
+                    <p class="text-sm" style="line-height: 1.7; color: var(--ink);">${_esc(ext.rawContent ?? 'No content available')}</p>
+                </div>
+            </div>
+
+            <!-- Intermediate knowledge representation — shown when Stage 2 has run -->
+            ${hasKnowledge ? `
+                <div style="margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); background: rgba(95,127,95,0.04);">
+                    <p class="label mb-3" style="color: var(--sage);">What LORE understood</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Summary</p>
+                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.summary ?? '')}</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Situation</p>
+                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.situation ?? '')}</p>
+                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Insight</p>
+                    <p class="text-sm" style="line-height: 1.6;">${_esc(ext.knowledge.insight ?? '')}</p>
+                </div>
+            ` : ''}
+
+            <!-- Draft recipe fields — editable, shown when Stage 3 has run -->
+            ${hasDraft ? `
+                <div style="margin-bottom: var(--space-4);">
+                    <p class="label mb-3">Proposed recipe — edit before approving</p>
+                    <div class="auth-field">
+                        <label class="label mb-1">Skill name</label>
+                        <input class="input" id="draft-skill-${index}" value="${_esc(ext.draft.skillName ?? '')}" style="margin-bottom: var(--space-3);">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">When to use it</label>
+                        <textarea class="input" id="draft-trigger-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.trigger ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">What to do</label>
+                        <textarea class="input" id="draft-action-${index}" rows="3" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.actionSequence ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">What it produces</label>
+                        <textarea class="input" id="draft-outcome-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.expectedOutcome ?? '')}</textarea>
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">Assign to skill area</label>
+                        <input class="input" id="draft-domain-${index}"
+                            value="${_esc(ext.knowledge?.domain ?? ext.draft.domain ?? (_domains[0]?.name ?? ''))}"
+                            placeholder="Type a skill area name…">
+                    </div>
+
+                    <!-- Reviewer assignment at the extraction point (PIPE-05).
+                         The Manager can immediately route this approved recipe
+                         for Reviewer validation without going to the Recipes tab. -->
+                    <div class="auth-field" style="margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid rgba(44,36,22,0.08);">
+                        <label class="label mb-1">Send for Reviewer validation (optional)</label>
+                        <p class="text-secondary text-xs mb-2">Choose a Reviewer to receive this as a quality check after you approve it.</p>
+                        <select class="input" id="draft-reviewer-${index}">
+                            <option value="">No Reviewer — approve only</option>
+                        </select>
+                        <p id="reviewer-load-status-${index}" class="text-xs text-secondary mt-1"></p>
+                    </div>
+                </div>
+            ` : `
+                <!-- No draft yet — show a process button so the Manager can trigger extraction -->
+                <p class="text-xs text-secondary mb-3" id="process-status-${index}"></p>
+            `}
+
+            <div class="divider" style="margin: var(--space-4) 0;"></div>
+
+            <!-- Action buttons -->
+            <div style="display: flex; gap: var(--space-3);">
+                ${hasDraft ? `
+                    <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
+                        Add to knowledge base
+                    </button>
+                ` : `
+                    <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
+                        Extract knowledge
+                    </button>
+                `}
+                <button class="btn btn-secondary" id="reject-btn-${index}"
+                    style="font-size: var(--text-sm); color: var(--error);">
+                    Dismiss
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function _attachExtractionHandlers(ext, index, parentEl) {
+    // If the card has a draft, load the Reviewer dropdown asynchronously
+    if (ext.draft && ext.draft.skillName) {
+        _populateReviewerDropdown(index);
+    }
+
+    // Process button (raw → three-stage pipeline)
+    document.getElementById(`process-btn-${index}`)?.addEventListener('click', async () => {
+        const btn    = document.getElementById(`process-btn-${index}`);
+        const status = document.getElementById(`process-status-${index}`);
+        btn.disabled    = true;
+        btn.textContent = 'Extracting…';
+        if (status) status.textContent = 'Running extraction pipeline…';
+
+        const result = await processExtraction(_orgId, ext.id, ext);
+
+        if (!result.ok) {
+            const reason = result.reason === 'NO_KNOWLEDGE'
+                ? 'No clear expert decision logic found in this contribution.'
+                : 'Could not extract at this time. Try again shortly.';
+            if (status) status.textContent = reason;
+            btn.disabled    = false;
+            btn.textContent = 'Try again';
+            return;
+        }
+
+        // Re-fetch the updated extraction and re-render the card in place.
+        // outerHTML replacement keeps the card's DOM position stable.
+        const cardEl = document.getElementById(`ext-card-${index}`);
+        if (cardEl) {
+            const updatedExt = { ...ext, knowledge: result.knowledge, draft: result.draft, status: 'processed' };
+            _pending[index]  = updatedExt;
+            cardEl.outerHTML = _renderExtractionCard(updatedExt, index);
+            _attachExtractionHandlers(updatedExt, index, parentEl);
+        }
+    });
+
+    // Approve button (draft → live recipe)
+    document.getElementById(`approve-btn-${index}`)?.addEventListener('click', async () => {
+        const btn = document.getElementById(`approve-btn-${index}`);
+        btn.disabled    = true;
+        btn.textContent = 'Saving…';
+
+        const draft = {
+            skillName:       document.getElementById(`draft-skill-${index}`)?.value?.trim()   ?? ext.draft?.skillName,
+            trigger:         document.getElementById(`draft-trigger-${index}`)?.value?.trim() ?? ext.draft?.trigger,
+            actionSequence:  document.getElementById(`draft-action-${index}`)?.value?.trim()  ?? ext.draft?.actionSequence,
+            expectedOutcome: document.getElementById(`draft-outcome-${index}`)?.value?.trim() ?? ext.draft?.expectedOutcome,
+            flawPattern:     ext.draft?.flawPattern ?? null,
+        };
+        const domain = document.getElementById(`draft-domain-${index}`)?.value?.trim()
+            ?? (_domains[0]?.name ?? 'General');
+
+        const recipeId = await approveRecipe(_orgId, draft, ext.id, domain);
+
+        if (recipeId) {
+            // Dismiss bug fix: remove from local _pending array first, then re-render.
+            // Previously the array was mutated after re-render which caused stale badge counts
+            // and ghost cards on dismiss. Splicing before re-render keeps all counts in sync.
+            _pending.splice(index, 1);
+            _recipes = await getAllApprovedRecipes(_orgId);
+
+            // If a Reviewer was selected, queue a scenario review task for them.
+            const reviewerSelect = document.getElementById(`draft-reviewer-${index}`);
+            const reviewerId     = reviewerSelect?.value ?? '';
+            if (reviewerId && recipeId) {
+                // We need a scenario for this recipe to send. If none exists yet,
+                // the Reviewer assignment is silently skipped — the Manager can
+                // send for review from the Recipes tab once scenarios are generated.
+                await _tryQueueReviewerTask(_orgId, recipeId, reviewerId);
+            }
+
+            // Re-render the full Knowledge Base tab to update summary header counts
+            renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
+        } else {
+            btn.disabled    = false;
+            btn.textContent = 'Add to knowledge base';
+        }
+    });
+
+    // Reject / Dismiss button
+    // Dismiss bug fix: update _pending array before re-rendering the queue.
+    // Previously the queue was re-rendered first, leaving a stale badge on the
+    // summary header and potentially showing ghost cards until the next page load.
+    document.getElementById(`reject-btn-${index}`)?.addEventListener('click', async () => {
+        await rejectExtraction(_orgId, ext.id);
+        // Remove from local array first, then re-render so counts are correct
+        _pending.splice(index, 1);
+        const kbContent = document.getElementById('kb-section-content');
+        if (kbContent) renderKbUpload(kbContent);
+        // Also update the summary header to reflect the new pending count
+        _refreshSummaryHeader();
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Populate the Reviewer dropdown for a given extraction card.
+// Loads Reviewer users from Firestore asynchronously after card render.
+// ---------------------------------------------------------------------------
+async function _populateReviewerDropdown(index) {
+    const select   = document.getElementById(`draft-reviewer-${index}`);
+    const statusEl = document.getElementById(`reviewer-load-status-${index}`);
+    if (!select) return;
+
+    const { db } = await import('../firebase.js');
+    const { collection, query, where, getDocs } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
+
+    try {
+        const snap = await getDocs(
+            query(collection(db, 'organisations', _orgId, 'users'), where('role', '==', 'reviewer'))
+        );
+        if (snap.empty) {
+            if (statusEl) statusEl.textContent = 'No Reviewers in your team yet.';
+            return;
+        }
+        snap.forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d.id;
+            opt.textContent = d.data().displayName ?? d.data().email ?? d.id;
+            select.appendChild(opt);
+        });
+    } catch (err) {
+        console.warn('LORE dashboard.js: Could not load Reviewers for dropdown.', err);
+        if (statusEl) statusEl.textContent = 'Could not load Reviewers.';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Try to queue a Reviewer task for a newly approved recipe.
+// Looks for an existing scenario for this recipe and sends it for review.
+// If no scenario exists yet, fails silently — the Manager can retry from
+// the Recipes tab once scenarios have been generated.
+// ---------------------------------------------------------------------------
+async function _tryQueueReviewerTask(orgId, recipeId, reviewerId) {
+    const { db } = await import('../firebase.js');
+    const { collection, query, where, limit, getDocs } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
+    try {
+        const snap = await getDocs(
+            query(
+                collection(db, 'organisations', orgId, 'scenarios'),
+                where('recipeId', '==', recipeId),
+                limit(1)
+            )
+        );
+        if (snap.empty) {
+            console.log('LORE dashboard.js: No scenario found for recipe yet — Reviewer assignment skipped.');
+            return;
+        }
+        const scenarioId = snap.docs[0].id;
+        const result     = await queueScenarioReview(orgId, scenarioId, reviewerId);
+        if (result.ok) {
+            console.log('LORE dashboard.js: Scenario review queued — scenarioId:', scenarioId, 'reviewerId:', reviewerId);
+        } else {
+            console.warn('LORE dashboard.js: Could not queue scenario review.', result.error);
+        }
+    } catch (err) {
+        console.warn('LORE dashboard.js: _tryQueueReviewerTask failed.', err);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Refresh only the summary header counts without re-rendering the whole tab.
+// Called after a dismiss so the pending badge updates immediately.
+// ---------------------------------------------------------------------------
+function _refreshSummaryHeader() {
+    const confirmedDomains = _domains.filter(d => !d.provisional).length;
+    const pendingCount     = _pending.length;
+
+    // Update recipe count
+    const recipeCountEl = document.querySelector('#dashboard-tab-content .stat-card:nth-child(1) p:last-child');
+    if (recipeCountEl) recipeCountEl.textContent = _recipes.length;
+
+    // Update pending count and its colour
+    const pendingEl    = document.querySelector('#dashboard-tab-content .stat-card:nth-child(3) p:last-child');
+    const pendingCard  = document.getElementById('kb-pending-card');
+    if (pendingEl) {
+        pendingEl.textContent = pendingCount;
+        pendingEl.style.color = pendingCount > 0 ? 'var(--ember)' : 'var(--ink)';
+    }
+    if (pendingCard) {
+        pendingCard.style.cursor = pendingCount > 0 ? 'pointer' : 'default';
+    }
+
+    // Update the sub-nav queue badge if it exists
+    const queueBadge = document.querySelector('#kb-tab-upload .queue-badge');
+    if (queueBadge) {
+        if (pendingCount > 0) {
+            queueBadge.textContent = pendingCount;
+        } else {
+            queueBadge.remove();
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // KB SUB-SECTION: Recipes
-// All approved recipes browsable by domain.
+// All approved recipes, browsable by domain.
+// Includes send-for-review panel for routing individual scenarios to Reviewers.
 // ---------------------------------------------------------------------------
 function renderKbRecipes(el) {
     if (_recipes.length === 0) {
@@ -529,7 +1074,7 @@ function _renderRecipeCard(r) {
     return `
         <div class="card" style="margin-bottom: var(--space-3);">
             <div class="flex-between">
-                <p style="font-weight: 500;">${r.skillName}</p>
+                <p style="font-weight: 500;">${_esc(r.skillName)}</p>
                 <div style="display: flex; gap: var(--space-2);">
                     <button class="btn btn-secondary" id="recipe-review-${r.id}"
                         style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
@@ -544,14 +1089,14 @@ function _renderRecipeCard(r) {
             <div id="recipe-detail-${r.id}" style="display: none; margin-top: var(--space-4);">
                 <div class="divider" style="margin: var(--space-3) 0;"></div>
                 <p class="label mb-1">When to use it</p>
-                <p class="text-sm text-secondary">${r.trigger}</p>
+                <p class="text-sm text-secondary">${_esc(r.trigger)}</p>
                 <p class="label mt-4 mb-1">What to do</p>
-                <p class="text-sm text-secondary">${r.actionSequence}</p>
+                <p class="text-sm text-secondary">${_esc(r.actionSequence)}</p>
                 <p class="label mt-4 mb-1">What it produces</p>
-                <p class="text-sm text-secondary">${r.expectedOutcome}</p>
+                <p class="text-sm text-secondary">${_esc(r.expectedOutcome)}</p>
                 ${r.flawPattern ? `
                     <p class="label mt-4 mb-1">What less experienced people tend to do</p>
-                    <p class="text-sm text-secondary">${r.flawPattern}</p>
+                    <p class="text-sm text-secondary">${_esc(r.flawPattern)}</p>
                 ` : ''}
             </div>
             <!-- Send for review panel -->
@@ -573,395 +1118,18 @@ function _renderRecipeCard(r) {
 }
 
 // ---------------------------------------------------------------------------
-// KB SUB-SECTION: Review Queue (PIPE-05)
-// Cards now show: source type and provenance, raw content verbatim,
-// intermediate knowledge representation (summary, situation, insight) as
-// the primary review surface, draft recipe fields below as editable output.
-// ---------------------------------------------------------------------------
-function renderKbQueue(el) {
-    if (_pending.length === 0) {
-        el.innerHTML = `
-            <div class="empty-state">
-                <h3>Nothing to review</h3>
-                <p class="mt-2">When Reviewers contribute or you upload a document, extracted knowledge will appear here for your approval.</p>
-            </div>
-        `;
-        return;
-    }
-
-    el.innerHTML = `
-        <div>
-            <p class="text-secondary text-sm mb-6">${_pending.length} item${_pending.length !== 1 ? 's' : ''} waiting for your review</p>
-            <div id="queue-list">
-                ${_pending.map((ext, i) => _renderExtractionCard(ext, i)).join('')}
-            </div>
-        </div>
-    `;
-
-    _pending.forEach((ext, i) => _attachExtractionHandlers(ext, i, el));
-}
-
-function _renderExtractionCard(ext, index) {
-    // PIPE-05: source type label includes provenance context
-    const sourceLabels = {
-        'scenario_review':  'Scenario feedback',
-        'mentorship_note':  'Mentorship note',
-        'document_chunk':   'Document',
-        'employee_response':'Team response pattern',
-    };
-    const sourceLabel = sourceLabels[ext.sourceType] ?? 'Contribution';
-
-    // Provenance line — shows what the contributor was responding to
-    const provenanceLine = ext.rawPrompt
-        ? `<p class="text-xs text-secondary mt-1" style="font-style: italic;">${_esc(ext.rawPrompt.slice(0, 120))}${ext.rawPrompt.length > 120 ? '…' : ''}</p>`
-        : '';
-
-    const hasKnowledge = ext.knowledge && ext.knowledge.hasKnowledge !== false && ext.knowledge.summary;
-    const hasDraft     = ext.draft && ext.draft.skillName;
-
-    return `
-        <div class="card" style="margin-bottom: var(--space-6);" id="ext-card-${index}">
-
-            <!-- Source and provenance header -->
-            <div style="margin-bottom: var(--space-4);">
-                <div class="flex-between">
-                    <span class="chip chip-pending">${sourceLabel}</span>
-                    <span class="text-xs text-secondary">${ext.wordCount ? ext.wordCount + ' words' : ''}</span>
-                </div>
-                ${provenanceLine}
-            </div>
-
-            <!-- Raw content — verbatim, always shown -->
-            <div style="margin-bottom: var(--space-4);">
-                <p class="label mb-2">What was contributed</p>
-                <div style="background: rgba(44,36,22,0.04); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);">
-                    <p class="text-sm" style="line-height: 1.7; color: var(--ink);">${_esc(ext.rawContent ?? 'No content available')}</p>
-                </div>
-            </div>
-
-            <!-- Intermediate knowledge representation — shown when Stage 2 has run -->
-            ${hasKnowledge ? `
-                <div style="margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); background: rgba(95,127,95,0.04);">
-                    <p class="label mb-3" style="color: var(--sage);">What LORE understood</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Summary</p>
-                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.summary ?? '')}</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Situation</p>
-                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.situation ?? '')}</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Insight</p>
-                    <p class="text-sm" style="line-height: 1.6;">${_esc(ext.knowledge.insight ?? '')}</p>
-                </div>
-            ` : ''}
-
-            <!-- Draft recipe fields — editable, shown when Stage 3 has run -->
-            ${hasDraft ? `
-                <div style="margin-bottom: var(--space-4);">
-                    <p class="label mb-3">Proposed recipe — edit before approving</p>
-                    <div class="auth-field">
-                        <label class="label mb-1">Skill name</label>
-                        <input class="input" id="draft-skill-${index}" value="${_esc(ext.draft.skillName ?? '')}" style="margin-bottom: var(--space-3);">
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">When to use it</label>
-                        <textarea class="input" id="draft-trigger-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.trigger ?? '')}</textarea>
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">What to do</label>
-                        <textarea class="input" id="draft-action-${index}" rows="3" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.actionSequence ?? '')}</textarea>
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">What it produces</label>
-                        <textarea class="input" id="draft-outcome-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.expectedOutcome ?? '')}</textarea>
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">Assign to skill area</label>
-                        <input class="input" id="draft-domain-${index}"
-                            value="${_esc(ext.knowledge?.domain ?? ext.draft.domain ?? (_domains[0]?.name ?? ''))}"
-                            placeholder="Type a skill area name…">
-                    </div>
-                </div>
-            ` : `
-                <!-- No draft yet — show the raw content status and a process button -->
-                <p class="text-xs text-secondary mb-3" id="process-status-${index}"></p>
-            `}
-
-            <div class="divider" style="margin: var(--space-4) 0;"></div>
-
-            <!-- Action buttons -->
-            <div style="display: flex; gap: var(--space-3);">
-                ${hasDraft ? `
-                    <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
-                        Add to knowledge base
-                    </button>
-                ` : `
-                    <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
-                        Extract knowledge
-                    </button>
-                `}
-                <button class="btn btn-secondary" id="reject-btn-${index}"
-                    style="font-size: var(--text-sm); color: var(--error);">
-                    Dismiss
-                </button>
-            </div>
-        </div>
-    `;
-}
-
-function _attachExtractionHandlers(ext, index, el) {
-    // Process button (raw → three-stage pipeline)
-    document.getElementById(`process-btn-${index}`)?.addEventListener('click', async () => {
-        const btn    = document.getElementById(`process-btn-${index}`);
-        const status = document.getElementById(`process-status-${index}`);
-        btn.disabled    = true;
-        btn.textContent = 'Extracting…';
-        if (status) status.textContent = 'Running extraction pipeline…';
-
-        const result = await processExtraction(_orgId, ext.id, ext);
-
-        if (!result.ok) {
-            const reason = result.reason === 'NO_KNOWLEDGE'
-                ? 'No clear expert decision logic found in this contribution.'
-                : 'Could not extract at this time. Try again shortly.';
-            if (status) status.textContent = reason;
-            btn.disabled    = false;
-            btn.textContent = 'Try again';
-            return;
-        }
-
-        // Re-fetch the updated extraction and re-render the card in place
-        const cardEl = document.getElementById(`ext-card-${index}`);
-        if (cardEl) {
-            const updatedExt = { ...ext, knowledge: result.knowledge, draft: result.draft, status: 'processed' };
-            _pending[index]  = updatedExt;
-            cardEl.outerHTML = _renderExtractionCard(updatedExt, index);
-            _attachExtractionHandlers(updatedExt, index, el);
-        }
-    });
-
-    // Approve button (draft → live recipe)
-    document.getElementById(`approve-btn-${index}`)?.addEventListener('click', async () => {
-        const btn = document.getElementById(`approve-btn-${index}`);
-        btn.disabled    = true;
-        btn.textContent = 'Saving…';
-
-        const draft = {
-            skillName:       document.getElementById(`draft-skill-${index}`)?.value?.trim()   ?? ext.draft?.skillName,
-            trigger:         document.getElementById(`draft-trigger-${index}`)?.value?.trim() ?? ext.draft?.trigger,
-            actionSequence:  document.getElementById(`draft-action-${index}`)?.value?.trim()  ?? ext.draft?.actionSequence,
-            expectedOutcome: document.getElementById(`draft-outcome-${index}`)?.value?.trim() ?? ext.draft?.expectedOutcome,
-            flawPattern:     ext.draft?.flawPattern ?? null,
-        };
-        const domain = document.getElementById(`draft-domain-${index}`)?.value?.trim()
-            ?? (_domains[0]?.name ?? 'General');
-
-        const recipeId = await approveRecipe(_orgId, draft, ext.id, domain);
-
-        if (recipeId) {
-            _pending.splice(index, 1);
-            _recipes = await getAllApprovedRecipes(_orgId);
-            // Re-render the full Knowledge Base tab to update the summary header counts
-            renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
-        } else {
-            btn.disabled    = false;
-            btn.textContent = 'Add to knowledge base';
-        }
-    });
-
-    // Reject button
-    document.getElementById(`reject-btn-${index}`)?.addEventListener('click', async () => {
-        await rejectExtraction(_orgId, ext.id);
-        _pending.splice(index, 1);
-        renderKbQueue(document.getElementById('kb-section-content'));
-    });
-}
-
-// ---------------------------------------------------------------------------
-// KB SUB-SECTION: Upload (Add knowledge)
-// Document upload with chunking progress indicator (PIPE-05).
-// ---------------------------------------------------------------------------
-function renderKbUpload(el) {
-    if (_uploadState.inProgress) {
-        const progress = _uploadState.chunkProgress;
-        el.innerHTML = `
-            <div class="card">
-                <div class="empty-state">
-                    <div class="spinner"></div>
-                    <p class="text-secondary mt-4">Reading <strong>${_uploadState.docName || 'your document'}</strong>…</p>
-                    ${progress ? `
-                        <p class="text-secondary text-sm mt-2">Processing chunk ${progress.current} of ${progress.total}</p>
-                        <div class="xp-bar-track" style="width: 200px; margin: var(--space-3) auto 0;">
-                            <div class="xp-bar-fill" style="width: ${Math.round((progress.current / progress.total) * 100)}%; background: var(--ember); transition: width 0.4s ease;"></div>
-                        </div>
-                    ` : `
-                        <p class="text-secondary text-sm mt-2">This usually takes 10–20 seconds.</p>
-                    `}
-                </div>
-            </div>
-        `;
-        return;
-    }
-
-    if (_uploadState.result) {
-        const result = _uploadState.result;
-        let resultHtml;
-        if (!result.ok) {
-            resultHtml = `
-                <div class="card" style="border-left: 3px solid var(--error);">
-                    <p style="font-weight: 500;">Could not process the document</p>
-                    <p class="text-secondary text-sm mt-2">${_uploadState.errorMsg || 'Please try again shortly.'}</p>
-                </div>`;
-        } else if (result.extractionsCreated === 0) {
-            resultHtml = `
-                <div class="card" style="border-left: 3px solid var(--ember);">
-                    <p style="font-weight: 500;">No clear training moments found</p>
-                    <p class="text-secondary text-sm mt-2">This document does not appear to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook.</p>
-                </div>`;
-        } else {
-            resultHtml = `
-                <div class="card" style="border-left: 3px solid var(--sage);">
-                    <p style="font-weight: 500; color: var(--sage);">Found ${result.extractionsCreated} training moment${result.extractionsCreated !== 1 ? 's' : ''} in "${_esc(_uploadState.docName)}"</p>
-                    <p class="text-secondary text-sm mt-2">They are in your review queue. Go through them and add the ones that feel right to your knowledge base.</p>
-                    <div style="display: flex; gap: var(--space-3); margin-top: var(--space-4);">
-                        <button class="btn btn-primary" id="go-to-queue" style="font-size: var(--text-sm);">Open review queue</button>
-                        <button class="btn btn-secondary" id="upload-another" style="font-size: var(--text-sm);">Add another document</button>
-                    </div>
-                </div>`;
-        }
-
-        el.innerHTML = `<div style="margin-top: var(--space-2);">${resultHtml}</div>`;
-
-        document.getElementById('go-to-queue')?.addEventListener('click', () => _switchKbSection('queue'));
-        document.getElementById('upload-another')?.addEventListener('click', () => {
-            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null };
-            renderKbUpload(el);
-        });
-        return;
-    }
-
-    // Default: upload form
-    el.innerHTML = `
-        <div class="card">
-            <h3 style="margin-bottom: var(--space-2);">Add a document</h3>
-            <p class="text-secondary text-sm mb-6" style="line-height: 1.6;">
-                Paste in any document that captures how your team makes decisions — a retrospective,
-                a playbook, a post-mortem. LORE reads it and finds the decision-making moments
-                that become training scenarios.
-            </p>
-            ${_renderUploadForm()}
-        </div>
-        <div id="upload-result" style="margin-top: var(--space-6);"></div>
-    `;
-
-    _attachUploadHandlers(async () => {
-        _pending = await getPendingExtractions(_orgId);
-        renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
-    });
-}
-
-// Shared upload form markup — used in both first-run and normal upload sections.
-function _renderUploadForm() {
-    return `
-        <div class="auth-field">
-            <label class="label" for="doc-name">Document name</label>
-            <input class="input" id="doc-name" type="text"
-                placeholder="e.g. Q3 Project Retrospective"
-                value="${_esc(_uploadState.docName)}">
-        </div>
-        <div class="auth-field mt-4">
-            <label class="label" for="doc-text">Document content</label>
-            <textarea class="input" id="doc-text" rows="12"
-                placeholder="Paste the document text here…"
-                style="resize: vertical;">${_esc(_uploadState.docText)}</textarea>
-        </div>
-        <button class="btn btn-primary mt-4" id="process-doc">Find training moments</button>
-        <div id="upload-result" style="margin-top: var(--space-4);"></div>
-    `;
-}
-
-// Shared upload handler — onComplete is called after a successful upload.
-function _attachUploadHandlers(onComplete) {
-    document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
-    document.getElementById('doc-text')?.addEventListener('input', e => { _uploadState.docText = e.target.value; });
-
-    document.getElementById('process-doc')?.addEventListener('click', async () => {
-        const name = document.getElementById('doc-name')?.value?.trim();
-        const text = document.getElementById('doc-text')?.value?.trim();
-
-        if (!name || !text) {
-            const resultEl = document.getElementById('upload-result');
-            if (resultEl) resultEl.innerHTML = '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
-            return;
-        }
-
-        _uploadState.inProgress    = true;
-        _uploadState.docName       = name;
-        _uploadState.docText       = text;
-        _uploadState.result        = null;
-        _uploadState.errorMsg      = '';
-        _uploadState.chunkProgress = null;
-
-        const btn = document.getElementById('process-doc');
-        if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
-
-        // Re-render the upload section to show the in-progress spinner
-        const kbContent = document.getElementById('kb-section-content');
-        if (kbContent) renderKbUpload(kbContent);
-
-        // Progress callback — updates chunkProgress and re-renders the spinner
-        const onProgress = (current, total) => {
-            _uploadState.chunkProgress = { current, total };
-            const kbEl = document.getElementById('kb-section-content');
-            if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
-        };
-
-        // processDocument now accepts uid and an onProgress callback
-        const result = await processDocument(_orgId, _uid, text, name, onProgress);
-
-        _uploadState.inProgress    = false;
-        _uploadState.chunkProgress = null;
-        _uploadState.result        = result;
-        if (!result.ok) _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
-
-        if (result.ok && result.extractionsCreated > 0) {
-            await onComplete();
-        }
-
-        const kbEl = document.getElementById('kb-section-content');
-        if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
-    });
-}
-
-// ---------------------------------------------------------------------------
-// KB SUB-SECTION: Domains (DOMAIN-02)
-// "Create a skill area" (manual) always shown first.
-// "Suggest skill areas from recipes" (AI clustering) shown only when
-// recipe count >= 3.
-// Provisional seeds shown as dismissible chips.
+// KB SUB-SECTION: Skill areas (DOMAIN-02)
+// Manual domain creation always shown first.
+// AI clustering shown only when recipe count >= 3.
+// Provisional seeds shown as dismissible cards.
 // ---------------------------------------------------------------------------
 function renderKbDomains(el) {
     const confirmed   = _domains.filter(d => !d.provisional);
     const provisional = _domains.filter(d =>  d.provisional);
     const canCluster  = _recipes.length >= 3;
 
-    // Check whether there are flagged responses to show the corpus analysis action
-    _checkFlaggedResponses().then(hasFlagged => {
-        const corpusBtn = document.getElementById('corpus-analysis-btn');
-        if (corpusBtn) corpusBtn.style.display = hasFlagged ? 'block' : 'none';
-    });
-
     el.innerHTML = `
         <div>
-            <!-- CORP-03: Corpus analysis action — shown only when flagged responses exist -->
-            <div id="corpus-analysis-section" style="margin-bottom: var(--space-6); display: none;">
-                <div class="card" style="border-left: 3px solid var(--ember);">
-                    <p style="font-weight: 500;">New patterns found in team responses</p>
-                    <p class="text-secondary text-sm mt-2 mb-4">LORE has found response patterns from your senior team members that may contain useful knowledge. Run the analysis to extract them into your review queue.</p>
-                    <button class="btn btn-primary" id="corpus-analysis-btn" style="font-size: var(--text-sm);">
-                        Find patterns in team responses
-                    </button>
-                    <p id="corpus-status" class="text-xs text-secondary mt-3"></p>
-                </div>
-            </div>
-
             <!-- Manual domain creation — always first -->
             <div class="card" style="margin-bottom: var(--space-6);">
                 <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>
@@ -1035,12 +1203,6 @@ function renderKbDomains(el) {
         </div>
     `;
 
-    // Show corpus analysis section if there are flagged responses
-    _checkFlaggedResponses().then(hasFlagged => {
-        const section = document.getElementById('corpus-analysis-section');
-        if (section) section.style.display = hasFlagged ? 'block' : 'none';
-    });
-
     // Create domain handler
     document.getElementById('create-domain-btn')?.addEventListener('click', async () => {
         const name  = document.getElementById('new-domain-name')?.value?.trim();
@@ -1085,40 +1247,11 @@ function renderKbDomains(el) {
         }
     });
 
-    // Corpus analysis handler
-    document.getElementById('corpus-analysis-btn')?.addEventListener('click', async () => {
-        const btn    = document.getElementById('corpus-analysis-btn');
-        const status = document.getElementById('corpus-status');
-        btn.disabled    = true;
-        btn.textContent = 'Analysing…';
-        if (status) status.textContent = 'Looking for patterns in team responses…';
-
-        // Step 1: Flag high-signal responses (senior-correct on junior-missed scenarios).
-        // This must run before deriveFromCorpus so there is something flagged to process.
-        await flagHighSignalResponses(_orgId);
-
-        // Step 2: Derive extractions from all flagged responses across all domains.
-        const result = await deriveFromCorpus(_orgId, null);
-        btn.disabled    = false;
-        btn.textContent = 'Find patterns in team responses';
-
-        if (status) {
-            status.textContent = result.ok && result.extractionsCreated > 0
-                ? `Found ${result.extractionsCreated} pattern${result.extractionsCreated !== 1 ? 's' : ''} — check your review queue.`
-                : result.ok
-                ? 'No new patterns found at this time.'
-                : 'Could not complete the analysis. Try again shortly.';
-        }
-
-        if (result.ok && result.extractionsCreated > 0) {
-            _pending = await getPendingExtractions(_orgId);
-        }
-    });
-
     // Dismiss provisional domain handlers
     provisional.forEach(d => {
         document.getElementById(`dismiss-provisional-${d.id}`)?.addEventListener('click', async () => {
             await deleteDomain(_orgId, d.id);
+            // Remove from local array before re-rendering so the card disappears immediately
             _domains = _domains.filter(x => x.id !== d.id);
             renderKbDomains(el);
         });
@@ -1175,8 +1308,11 @@ function _renderProposedClusters() {
     `;
 }
 
-// Check whether any unflagged responses exist to determine whether to show
-// the corpus analysis action. Returns a boolean.
+// ---------------------------------------------------------------------------
+// Check whether any flagged responses exist.
+// Used to determine visibility of the corpus analysis card in Add knowledge.
+// Returns a boolean.
+// ---------------------------------------------------------------------------
 async function _checkFlaggedResponses() {
     const { db } = await import('../firebase.js');
     const { collection, query, where, limit, getDocs } = await import(
@@ -1255,10 +1391,10 @@ function _switchTeamSection(section) {
     if (!el) return;
 
     switch (section) {
-        case 'members':  renderTeamMembers(el);        break;
-        case 'progress': renderTeamProgress(el);       break;
-        case 'ttc':      renderTimeToReadiness(el);    break;
-        case 'reviewer': renderReviewerActivity(el);   break;
+        case 'members':  renderTeamMembers(el);       break;
+        case 'progress': renderTeamProgress(el);      break;
+        case 'ttc':      renderTimeToReadiness(el);   break;
+        case 'reviewer': renderReviewerActivity(el);  break;
         default:         renderTeamMembers(el);
     }
 }
@@ -1472,7 +1608,7 @@ async function _loadTeamList(parentEl) {
                 btn.textContent = 'Saving…';
 
                 // Collect selected domain IDs
-                const checkedBoxes = document.querySelectorAll(`.track-domain-check-${u.id}:checked`);
+                const checkedBoxes    = document.querySelectorAll(`.track-domain-check-${u.id}:checked`);
                 const assignedDomains = Array.from(checkedBoxes).map(cb => cb.value);
 
                 // Handover field
@@ -1724,8 +1860,8 @@ Write the progress narrative.`;
                 return;
             }
             if (textEl) {
-                textEl.textContent    = result.text;
-                textEl.style.color    = 'var(--ink)';
+                textEl.textContent     = result.text;
+                textEl.style.color     = 'var(--ink)';
                 textEl.style.fontStyle = 'normal';
             }
         });
@@ -1837,6 +1973,79 @@ function renderLoading(container, message) {
             <p class="text-secondary mt-4">${message}</p>
         </div>
     `;
+}
+
+// Shared upload form markup — used in both first-run and normal upload sections.
+function _renderUploadForm() {
+    return `
+        <div class="auth-field">
+            <label class="label" for="doc-name">Document name</label>
+            <input class="input" id="doc-name" type="text"
+                placeholder="e.g. Q3 Project Retrospective"
+                value="${_esc(_uploadState.docName)}">
+        </div>
+        <div class="auth-field mt-4">
+            <label class="label" for="doc-text">Document content</label>
+            <textarea class="input" id="doc-text" rows="12"
+                placeholder="Paste the document text here…"
+                style="resize: vertical;">${_esc(_uploadState.docText)}</textarea>
+        </div>
+        <button class="btn btn-primary mt-4" id="process-doc">Find training moments</button>
+        <div id="upload-result" style="margin-top: var(--space-4);"></div>
+    `;
+}
+
+// Shared upload handler — onComplete is called after a successful upload.
+function _attachUploadHandlers(onComplete) {
+    document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
+    document.getElementById('doc-text')?.addEventListener('input', e => { _uploadState.docText = e.target.value; });
+
+    document.getElementById('process-doc')?.addEventListener('click', async () => {
+        const name = document.getElementById('doc-name')?.value?.trim();
+        const text = document.getElementById('doc-text')?.value?.trim();
+
+        if (!name || !text) {
+            const resultEl = document.getElementById('upload-result');
+            if (resultEl) resultEl.innerHTML = '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
+            return;
+        }
+
+        _uploadState.inProgress    = true;
+        _uploadState.docName       = name;
+        _uploadState.docText       = text;
+        _uploadState.result        = null;
+        _uploadState.errorMsg      = '';
+        _uploadState.chunkProgress = null;
+
+        const btn = document.getElementById('process-doc');
+        if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
+
+        // Re-render the upload section to show the in-progress spinner
+        const kbContent = document.getElementById('kb-section-content');
+        if (kbContent) renderKbUpload(kbContent);
+
+        // Progress callback — updates chunkProgress and re-renders the spinner
+        const onProgress = (current, total) => {
+            _uploadState.chunkProgress = { current, total };
+            const kbEl = document.getElementById('kb-section-content');
+            if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+        };
+
+        // processDocument accepts uid and an onProgress callback
+        const result = await processDocument(_orgId, _uid, text, name, onProgress);
+
+        _uploadState.inProgress    = false;
+        _uploadState.chunkProgress = null;
+        _uploadState.result        = result;
+        if (!result.ok) _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
+
+        if (result.ok && result.extractionsCreated > 0) {
+            await onComplete();
+        }
+
+        const kbEl = document.getElementById('kb-section-content');
+        if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+    });
 }
 
 function _relativeTime(date) {
