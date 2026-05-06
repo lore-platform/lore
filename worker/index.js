@@ -5,9 +5,14 @@
 // client-side — specifically, setting custom claims on user accounts.
 //
 // Routes:
-//   mode: 'classify'   → Gemini Flash-Lite (temp 0.2, tokens 1024)
-//   mode: 'generate'   → Gemini Flash (temp 0.7, tokens 4096)
-//   mode: 'setClaims'  → Firebase Admin SDK — sets orgId + role claims on a uid
+//   mode: 'classify'       → Gemini Flash-Lite (temp 0.2, tokens 1024)
+//   mode: 'generate'       → Gemini Flash (temp 0.7, tokens 4096)
+//   mode: 'setClaims'      → Firebase Admin SDK — sets orgId + role claims on a uid
+//   mode: 'parseDocument'  → Gemini Flash vision — converts a base64 file to plain text.
+//                            Accepts PDF (digital and scanned) and images (JPEG, PNG, WEBP).
+//                            DOCX is handled separately via XML extraction before this call.
+//                            Body: { mode, fileBase64, mimeType, fileName }
+//                            Returns: { ok: true, text, pageCount? } or { ok: false, error }
 //
 // Environment variables (set in Wrangler / Cloudflare dashboard — never in source):
 //   GEMINI_API_KEY       — Gemini API key
@@ -119,6 +124,28 @@ export default {
         // ---------------------------------------------------------------------------
         if (mode === 'redeemInviteClaims') {
             return handleRedeemInviteClaims(body, env, corsHeaders);
+        }
+
+        // ---------------------------------------------------------------------------
+        // Route: parseDocument
+        // Converts a base64-encoded file to clean plain text using Gemini's
+        // native document and vision understanding.
+        //
+        // Supported MIME types:
+        //   application/pdf         — digital PDFs and scanned PDFs (via vision)
+        //   image/jpeg              — scanned pages, photos of documents
+        //   image/png               — scanned pages, screenshots
+        //   image/webp              — scanned pages
+        //   text/plain              — plain text files (no AI call needed)
+        //
+        // DOCX is not sent here — dashboard.js extracts DOCX XML client-side
+        // and sends the resulting plain text through the normal paste flow.
+        //
+        // Body: { mode, fileBase64, mimeType, fileName }
+        // Returns: { ok: true, text } or { ok: false, error, unsupported? }
+        // ---------------------------------------------------------------------------
+        if (mode === 'parseDocument') {
+            return handleParseDocument(body, env, corsHeaders);
         }
 
         // ---------------------------------------------------------------------------
@@ -436,6 +463,171 @@ function pemToArrayBuffer(pem) {
     const view   = new Uint8Array(buffer);
     for (let i = 0; i < binary.length; i++) view[i] = binary.charCodeAt(i);
     return buffer;
+}
+
+// =============================================================================
+// parseDocument handler
+// Converts a base64-encoded file to plain text using Gemini Flash's native
+// document and vision understanding. No third-party libraries — Gemini handles
+// PDF structure, multi-column layouts, tables, and scanned pages natively.
+//
+// The prompt instructs Gemini to transcribe faithfully rather than summarise —
+// this is important because the extraction pipeline downstream will do the
+// semantic work. We want the raw content intact.
+//
+// Plain text files bypass Gemini entirely and are decoded directly — no token
+// cost and no latency. All other types are sent to Gemini as inline data parts.
+//
+// Size limit: Gemini inline data accepts files up to ~20MB base64-encoded.
+// Files larger than this should be rejected with a clear message before the
+// Worker call is made — see dashboard.js _validateFile().
+// =============================================================================
+async function handleParseDocument(body, env, corsHeaders) {
+    const { fileBase64, mimeType, fileName } = body;
+
+    if (!fileBase64 || !mimeType) {
+        return json({ ok: false, error: 'fileBase64 and mimeType are required' }, 400, corsHeaders);
+    }
+
+    // Supported MIME types for Gemini vision/document parsing.
+    // DOCX (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+    // is not listed here — it is handled client-side via XML extraction in dashboard.js.
+    const SUPPORTED_TYPES = [
+        'application/pdf',
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+        'text/plain',
+    ];
+
+    if (!SUPPORTED_TYPES.includes(mimeType)) {
+        return json({
+            ok:          false,
+            error:       `File type '${mimeType}' is not supported for parsing.`,
+            unsupported: true,
+        }, 400, corsHeaders);
+    }
+
+    // Plain text — decode directly, no AI call needed.
+    // atob works on base64 strings; TextDecoder handles non-ASCII characters correctly.
+    if (mimeType === 'text/plain') {
+        try {
+            const bytes = Uint8Array.from(atob(fileBase64), c => c.charCodeAt(0));
+            const text  = new TextDecoder('utf-8').decode(bytes);
+            console.log('LORE Worker: parseDocument — plain text decoded, length:', text.length);
+            return json({ ok: true, text, mimeType }, 200, corsHeaders);
+        } catch (err) {
+            console.error('LORE Worker: parseDocument — plain text decode failed:', err.message);
+            return json({ ok: false, error: 'Could not decode text file.' }, 500, corsHeaders);
+        }
+    }
+
+    // PDF and image types — send to Gemini as an inline data part.
+    // The system prompt instructs faithful transcription, not summarisation.
+    // We ask Gemini to preserve structure (headings, lists, table content)
+    // so the extraction pipeline has the clearest possible input to work from.
+    const systemPrompt = `You are a document transcription assistant.
+Your job is to extract and return the complete text content of the document provided.
+Rules:
+- Transcribe everything — do not summarise, paraphrase, or omit any content.
+- Preserve the logical structure: headings, bullet points, numbered lists, table content.
+- For tables, transcribe row by row with clear separation between cells.
+- If a page is a cover page or contains only a logo or image with no text, write "[Image page — no text content]".
+- If text is partially illegible due to scan quality, transcribe what you can and mark unclear sections with [illegible].
+- Do not add commentary, preamble, or any text that was not in the original document.
+- Return plain text only — no markdown formatting, no asterisks, no backticks.`;
+
+    const prompt = `Transcribe the complete text content of this document. Return plain text only.`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${env.GEMINI_API_KEY}`;
+
+    const requestBody = {
+        contents: [
+            {
+                role:  'user',
+                parts: [
+                    // Inline file data — Gemini reads the file bytes natively
+                    {
+                        inlineData: {
+                            mimeType: mimeType,
+                            data:     fileBase64,
+                        },
+                    },
+                    // Text prompt follows the file part
+                    { text: prompt },
+                ],
+            },
+        ],
+        systemInstruction: {
+            parts: [{ text: systemPrompt }],
+        },
+        generationConfig: {
+            // High token limit — long documents need room to be transcribed in full.
+            // [TUNING TARGET] Reduce if Worker costs become a concern.
+            maxOutputTokens: 8192,
+            // Temperature 0 — transcription should be deterministic, not creative.
+            temperature: 0,
+        },
+    };
+
+    console.log('LORE Worker: parseDocument — sending to Gemini. mimeType:', mimeType, 'fileName:', fileName ?? 'unknown');
+
+    try {
+        const res = await fetch(url, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(requestBody),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            // 429 means quota — surface this distinctly so the browser can show
+            // a meaningful message rather than a generic failure
+            if (res.status === 429) {
+                console.warn('LORE Worker: parseDocument — Gemini quota hit.');
+                return json({ ok: false, error: 'QUOTA', quota: true }, 429, corsHeaders);
+            }
+            console.error('LORE Worker: parseDocument — Gemini error:', res.status, err);
+            return json({ ok: false, error: err.error?.message ?? 'GEMINI_ERROR' }, 500, corsHeaders);
+        }
+
+        const data = await res.json();
+
+        // Extract the transcribed text from the response
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+
+        if (!text || text.trim().length === 0) {
+            // Gemini returned a response but no text content — likely a blank document
+            // or a file whose content is entirely images with no readable text
+            console.warn('LORE Worker: parseDocument — Gemini returned empty text. fileName:', fileName ?? 'unknown');
+            return json({ ok: false, error: 'EMPTY_DOCUMENT' }, 200, corsHeaders);
+        }
+
+        // finishReason check — RECITATION or SAFETY means Gemini refused to transcribe.
+        // This is rare for document transcription but worth handling gracefully.
+        const finishReason = data.candidates?.[0]?.finishReason;
+        if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+            console.warn('LORE Worker: parseDocument — unexpected finishReason:', finishReason);
+            // Return whatever text we did get, but flag the reason so the browser
+            // can show a partial-content warning if appropriate
+            return json({ ok: true, text, partial: true, finishReason }, 200, corsHeaders);
+        }
+
+        // MAX_TOKENS means the document was too long for a single response.
+        // We return what we have and set partial: true so dashboard.js can warn the Manager.
+        const partial = finishReason === 'MAX_TOKENS';
+        if (partial) {
+            console.warn('LORE Worker: parseDocument — MAX_TOKENS hit. Partial content returned. fileName:', fileName ?? 'unknown');
+        }
+
+        console.log('LORE Worker: parseDocument — success. text length:', text.length, 'partial:', partial);
+        return json({ ok: true, text, partial }, 200, corsHeaders);
+
+    } catch (err) {
+        console.error('LORE Worker: parseDocument — fetch failed:', err.message);
+        return json({ ok: false, error: 'NETWORK_ERROR' }, 500, corsHeaders);
+    }
 }
 
 // =============================================================================

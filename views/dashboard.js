@@ -83,6 +83,7 @@ let _uploadState = {
     result:        null,
     errorMsg:      '',
     chunkProgress: null,   // { current: N, total: N } during chunked processing
+    partial:       false,  // true if Gemini returned partial content (MAX_TOKENS hit)
 };
 
 // ---------------------------------------------------------------------------
@@ -1976,37 +1977,515 @@ function renderLoading(container, message) {
 }
 
 // Shared upload form markup — used in both first-run and normal upload sections.
+//
+// Two ways to add content:
+//   1. File upload — the Manager drops or selects a file. The browser reads it
+//      to base64 and sends it to the Worker's parseDocument mode. Gemini converts
+//      it to text and the textarea is pre-populated for the Manager to review.
+//   2. Paste — the Manager pastes raw text directly. Works exactly as before.
+//
+// The supported formats note is framed as capability, not limitation. It appears
+// once, quietly, so the Manager knows what to expect without being alarmed.
+//
+// [TUNING TARGET] MAX_FILE_BYTES — 15MB leaves headroom below Gemini's ~20MB
+// inline data limit while accounting for base64 encoding overhead (~33% expansion).
+const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB
+
 function _renderUploadForm() {
     return `
-        <div class="auth-field">
-            <label class="label" for="doc-name">Document name</label>
-            <input class="input" id="doc-name" type="text"
-                placeholder="e.g. Q3 Project Retrospective"
-                value="${_esc(_uploadState.docName)}">
+        <div>
+            <!-- Supported formats note — framed as capability, not warning.
+                 Shown once, quietly. Gives the Manager a mental model before they upload. -->
+            <div style="
+                background: rgba(44,36,22,0.04);
+                border-radius: var(--radius-md);
+                padding: var(--space-3) var(--space-4);
+                margin-bottom: var(--space-5);
+                display: flex;
+                gap: var(--space-3);
+                align-items: flex-start;
+            ">
+                <div style="flex: 1;">
+                    <p class="text-sm" style="font-weight: 500; margin-bottom: var(--space-1);">What works best</p>
+                    <p class="text-xs text-secondary" style="line-height: 1.6;">
+                        Digital PDFs and plain text files come through cleanly every time.
+                        Scanned documents and images usually work well too, though very blurry scans
+                        may have gaps. Word documents (.docx) are supported via text extraction.
+                        Files over 15MB are not supported — if your document is that large,
+                        paste the most relevant sections instead.
+                    </p>
+                </div>
+            </div>
+
+            <!-- File upload — drop zone or click to select -->
+            <div class="auth-field">
+                <label class="label" for="doc-file">Upload a file</label>
+                <div id="file-drop-zone" style="
+                    border: 2px dashed rgba(44,36,22,0.2);
+                    border-radius: var(--radius-md);
+                    padding: var(--space-6) var(--space-4);
+                    text-align: center;
+                    cursor: pointer;
+                    transition: border-color 0.15s ease, background 0.15s ease;
+                    position: relative;
+                ">
+                    <input type="file" id="doc-file"
+                        accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,.docx"
+                        style="position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;">
+                    <p class="text-sm text-secondary" id="file-drop-label">
+                        Drop a file here, or click to choose one
+                    </p>
+                    <p class="text-xs text-secondary mt-2" style="opacity: 0.7;">
+                        PDF · Word · Plain text · PNG · JPEG · WEBP · Up to 15MB
+                    </p>
+                </div>
+                <p id="file-parse-status" class="text-xs mt-2" style="display: none;"></p>
+            </div>
+
+            <!-- Divider between file upload and paste -->
+            <div style="
+                display: flex;
+                align-items: center;
+                gap: var(--space-4);
+                margin: var(--space-5) 0;
+            ">
+                <div style="flex: 1; height: 1px; background: rgba(44,36,22,0.1);"></div>
+                <p class="text-xs text-secondary">or paste text directly</p>
+                <div style="flex: 1; height: 1px; background: rgba(44,36,22,0.1);"></div>
+            </div>
+
+            <!-- Document name — used in the aha moment and for Firestore record -->
+            <div class="auth-field">
+                <label class="label" for="doc-name">Document name</label>
+                <input class="input" id="doc-name" type="text"
+                    placeholder="e.g. Q3 Project Retrospective"
+                    value="${_esc(_uploadState.docName)}">
+            </div>
+
+            <!-- Text area — pre-populated after file parsing, or filled by paste -->
+            <div class="auth-field mt-4">
+                <label class="label" for="doc-text">Document content</label>
+                <textarea class="input" id="doc-text" rows="12"
+                    placeholder="Paste the document text here…"
+                    style="resize: vertical;">${_esc(_uploadState.docText)}</textarea>
+                <p id="doc-text-meta" class="text-xs text-secondary mt-2" style="${_uploadState.docText ? '' : 'display: none;'}">
+                    ${_uploadState.docText ? _wordCount(_uploadState.docText) + ' words · Review before continuing' : ''}
+                </p>
+            </div>
+
+            <!-- Progress log — shown during extraction pipeline, hidden at rest -->
+            <div id="upload-progress-log" style="display: none; margin-top: var(--space-4);">
+                <div style="
+                    background: rgba(44,36,22,0.03);
+                    border: 1px solid rgba(44,36,22,0.08);
+                    border-radius: var(--radius-md);
+                    padding: var(--space-3) var(--space-4);
+                    max-height: 160px;
+                    overflow-y: auto;
+                " id="progress-log-inner"></div>
+            </div>
+
+            <button class="btn btn-primary mt-4" id="process-doc">Find training moments</button>
+            <div id="upload-result" style="margin-top: var(--space-4);"></div>
         </div>
-        <div class="auth-field mt-4">
-            <label class="label" for="doc-text">Document content</label>
-            <textarea class="input" id="doc-text" rows="12"
-                placeholder="Paste the document text here…"
-                style="resize: vertical;">${_esc(_uploadState.docText)}</textarea>
-        </div>
-        <button class="btn btn-primary mt-4" id="process-doc">Find training moments</button>
-        <div id="upload-result" style="margin-top: var(--space-4);"></div>
     `;
 }
 
-// Shared upload handler — onComplete is called after a successful upload.
-function _attachUploadHandlers(onComplete) {
-    document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
-    document.getElementById('doc-text')?.addEventListener('input', e => { _uploadState.docText = e.target.value; });
+// ---------------------------------------------------------------------------
+// Word count helper — used in the doc-text-meta line after file parsing.
+// Counts non-empty tokens split on whitespace.
+// ---------------------------------------------------------------------------
+function _wordCount(text) {
+    return text.trim().split(/\s+/).filter(Boolean).length;
+}
 
+// ---------------------------------------------------------------------------
+// File validation — run before sending to the Worker.
+// Returns { ok: true } or { ok: false, reason: string (user-facing) }.
+//
+// Checks:
+//   - File size under MAX_FILE_BYTES (15MB)
+//   - MIME type is one we can handle (either via Gemini or DOCX XML extraction)
+//
+// Note: MIME type from the browser's File object can sometimes be empty for
+// unusual file associations. We fall back to extension detection in that case.
+// ---------------------------------------------------------------------------
+function _validateFile(file) {
+    const SUPPORTED_EXTENSIONS = ['.pdf', '.txt', '.png', '.jpg', '.jpeg', '.webp', '.docx'];
+    const ext = '.' + file.name.split('.').pop().toLowerCase();
+
+    if (file.size > MAX_FILE_BYTES) {
+        return {
+            ok:     false,
+            reason: `This file is ${Math.round(file.size / (1024 * 1024))}MB — the limit is 15MB. Paste the most relevant sections instead.`,
+        };
+    }
+
+    const supportedMimes = [
+        'application/pdf',
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/webp',
+        'text/plain',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+
+    const mimeOk = supportedMimes.includes(file.type) || SUPPORTED_EXTENSIONS.includes(ext);
+    if (!mimeOk) {
+        return {
+            ok:     false,
+            reason: `${file.name} is not a supported file type. Use PDF, Word (.docx), plain text, or an image.`,
+        };
+    }
+
+    return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Derive the MIME type to send to the Worker.
+// The browser's File.type can be empty for some file associations, so we
+// fall back to extension-based detection.
+// ---------------------------------------------------------------------------
+function _resolveMimeType(file) {
+    if (file.type && file.type !== 'application/octet-stream') return file.type;
+    const ext = file.name.split('.').pop().toLowerCase();
+    const map = {
+        pdf:  'application/pdf',
+        txt:  'text/plain',
+        png:  'image/png',
+        jpg:  'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    };
+    return map[ext] ?? file.type;
+}
+
+// ---------------------------------------------------------------------------
+// DOCX client-side text extraction.
+// A DOCX file is a ZIP archive. The main document text lives in
+// word/document.xml inside the ZIP. We extract that XML and strip all
+// tags to get the raw text content — no library needed, just native
+// browser APIs (DecompressionStream, TextDecoder).
+//
+// Limitation: this approach strips all formatting, comments, and headers/footers.
+// For LORE's purposes — feeding plain text into the extraction pipeline —
+// that is exactly what we want.
+//
+// Returns the extracted text string, or null if extraction fails.
+// ---------------------------------------------------------------------------
+async function _extractDocxText(file) {
+    try {
+        // Read the file as an ArrayBuffer (DOCX is binary ZIP)
+        const buffer = await file.arrayBuffer();
+
+        // Use the browser's native DecompressionStream to walk the ZIP.
+        // We need to find the word/document.xml entry inside the ZIP.
+        // We do this by parsing the ZIP central directory manually.
+        // ZIP format: local file headers at the start, central directory at the end.
+        const bytes = new Uint8Array(buffer);
+
+        // Helper: read a little-endian uint16 from bytes at offset
+        const u16 = offset => bytes[offset] | (bytes[offset + 1] << 8);
+        // Helper: read a little-endian uint32 from bytes at offset
+        const u32 = offset => bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24);
+
+        // Walk local file entries until we find word/document.xml
+        let offset = 0;
+        while (offset < bytes.length - 4) {
+            // Local file header signature: 0x04034b50
+            if (u32(offset) !== 0x04034b50) break;
+
+            const compressionMethod = u16(offset + 8);
+            const compressedSize    = u32(offset + 18);
+            const fileNameLength    = u16(offset + 26);
+            const extraLength       = u16(offset + 28);
+            const fileNameBytes     = bytes.slice(offset + 30, offset + 30 + fileNameLength);
+            const entryName         = new TextDecoder().decode(fileNameBytes);
+            const dataOffset        = offset + 30 + fileNameLength + extraLength;
+
+            if (entryName === 'word/document.xml') {
+                const compressedData = bytes.slice(dataOffset, dataOffset + compressedSize);
+
+                let xmlText;
+                if (compressionMethod === 0) {
+                    // Stored — no compression
+                    xmlText = new TextDecoder('utf-8').decode(compressedData);
+                } else if (compressionMethod === 8) {
+                    // Deflate — use DecompressionStream
+                    const ds     = new DecompressionStream('deflate-raw');
+                    const writer = ds.writable.getWriter();
+                    const reader = ds.readable.getReader();
+                    writer.write(compressedData);
+                    writer.close();
+
+                    const chunks = [];
+                    let totalLen = 0;
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        totalLen += value.length;
+                    }
+                    const merged = new Uint8Array(totalLen);
+                    let pos = 0;
+                    for (const chunk of chunks) { merged.set(chunk, pos); pos += chunk.length; }
+                    xmlText = new TextDecoder('utf-8').decode(merged);
+                } else {
+                    // Unsupported compression — bail
+                    console.warn('LORE dashboard.js: DOCX entry uses unsupported compression method:', compressionMethod);
+                    return null;
+                }
+
+                // Strip XML tags — leave only text content.
+                // Paragraph tags (<w:p>) become newlines to preserve document structure.
+                const withNewlines = xmlText.replace(/<\/w:p>/g, '\n');
+                const plainText    = withNewlines.replace(/<[^>]+>/g, '').replace(/\r/g, '').trim();
+                return plainText || null;
+            }
+
+            offset = dataOffset + compressedSize;
+        }
+
+        // word/document.xml not found — not a valid DOCX
+        console.warn('LORE dashboard.js: word/document.xml not found in DOCX archive.');
+        return null;
+
+    } catch (err) {
+        console.warn('LORE dashboard.js: DOCX extraction failed:', err.message);
+        return null;
+    }
+}
+
+// Shared upload handler — onComplete is called after a successful extraction pipeline run.
+//
+// Two flows:
+//   A. File upload — file → validate → parse (Worker or DOCX extraction) →
+//      populate textarea → Manager reviews text → pipeline runs on confirm.
+//   B. Paste — textarea content used directly, no parse step.
+//
+// The progress log is appended to during pipeline processing so the Manager
+// always knows what stage is happening and how far along it is.
+function _attachUploadHandlers(onComplete) {
+    // Keep textarea and name input in sync with _uploadState
+    document.getElementById('doc-name')?.addEventListener('input', e => { _uploadState.docName = e.target.value; });
+    document.getElementById('doc-text')?.addEventListener('input', e => {
+        _uploadState.docText = e.target.value;
+        const metaEl = document.getElementById('doc-text-meta');
+        if (metaEl) {
+            if (_uploadState.docText.trim()) {
+                metaEl.textContent = _wordCount(_uploadState.docText) + ' words · Review before continuing';
+                metaEl.style.display = 'block';
+            } else {
+                metaEl.style.display = 'none';
+            }
+        }
+    });
+
+    // ---------------------------------------------------------------------------
+    // File input — drop zone drag-and-drop and click-to-select
+    // ---------------------------------------------------------------------------
+    const dropZone  = document.getElementById('file-drop-zone');
+    const fileInput = document.getElementById('doc-file');
+
+    if (dropZone) {
+        // Visual feedback on drag-over
+        dropZone.addEventListener('dragover', e => {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--ember)';
+            dropZone.style.background  = 'rgba(180,80,30,0.04)';
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = '';
+            dropZone.style.background  = '';
+        });
+        dropZone.addEventListener('drop', e => {
+            e.preventDefault();
+            dropZone.style.borderColor = '';
+            dropZone.style.background  = '';
+            const file = e.dataTransfer?.files?.[0];
+            if (file) _handleFileSelected(file);
+        });
+    }
+
+    if (fileInput) {
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files?.[0];
+            if (file) _handleFileSelected(file);
+        });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Internal: handle a selected or dropped file.
+    // Validates, extracts text (DOCX or Worker), pre-populates the textarea.
+    // ---------------------------------------------------------------------------
+    async function _handleFileSelected(file) {
+        const statusEl  = document.getElementById('file-parse-status');
+        const labelEl   = document.getElementById('file-drop-label');
+        const nameInput = document.getElementById('doc-name');
+        const textArea  = document.getElementById('doc-text');
+        const metaEl    = document.getElementById('doc-text-meta');
+
+        // Validate file type and size
+        const validation = _validateFile(file);
+        if (!validation.ok) {
+            if (statusEl) {
+                statusEl.textContent   = validation.reason;
+                statusEl.style.color   = 'var(--error)';
+                statusEl.style.display = 'block';
+            }
+            return;
+        }
+
+        // Pre-fill the document name from the file name (without extension)
+        const nameWithoutExt = file.name.replace(/\.[^.]+$/, '');
+        if (nameInput && !nameInput.value.trim()) {
+            nameInput.value     = nameWithoutExt;
+            _uploadState.docName = nameWithoutExt;
+        }
+
+        if (statusEl) {
+            statusEl.textContent   = `Reading ${file.name}…`;
+            statusEl.style.color   = 'var(--warm-grey)';
+            statusEl.style.display = 'block';
+        }
+        if (labelEl) labelEl.textContent = file.name;
+
+        const mimeType = _resolveMimeType(file);
+        let extractedText = null;
+
+        // ---------------------------------------------------------------------------
+        // DOCX — extract text client-side from the ZIP/XML structure.
+        // No Worker call needed — avoids sending binary DOCX to Gemini, which
+        // handles DOCX less reliably than PDF. Client-side XML extraction is
+        // more predictable for this format.
+        // ---------------------------------------------------------------------------
+        if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            if (statusEl) statusEl.textContent = 'Extracting text from Word document…';
+            extractedText = await _extractDocxText(file);
+            if (!extractedText) {
+                if (statusEl) {
+                    statusEl.textContent = 'Could not extract text from this Word document. Try saving it as a PDF and uploading that instead.';
+                    statusEl.style.color = 'var(--error)';
+                }
+                return;
+            }
+        } else {
+            // ---------------------------------------------------------------------------
+            // PDF, images, plain text — read as base64, send to Worker parseDocument.
+            // ---------------------------------------------------------------------------
+            let fileBase64;
+            try {
+                fileBase64 = await _fileToBase64(file);
+            } catch (err) {
+                console.warn('LORE dashboard.js: Could not read file as base64:', err.message);
+                if (statusEl) {
+                    statusEl.textContent = 'Could not read this file. Try a different format or paste the text directly.';
+                    statusEl.style.color = 'var(--error)';
+                }
+                return;
+            }
+
+            if (statusEl) statusEl.textContent = 'Sending to LORE for reading — this usually takes 10–20 seconds…';
+
+            // Ping the Worker to avoid cold-start timeout on the real call
+            await fetch('https://lore-worker.slop-runner.workers.dev', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ mode: 'ping' }),
+            }).catch(() => {});
+
+            let parseResult;
+            try {
+                const res = await fetch('https://lore-worker.slop-runner.workers.dev', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body:    JSON.stringify({
+                        mode: 'parseDocument',
+                        fileBase64,
+                        mimeType,
+                        fileName: file.name,
+                    }),
+                });
+                parseResult = await res.json().catch(() => ({}));
+            } catch (err) {
+                console.warn('LORE dashboard.js: parseDocument Worker call failed:', err.message);
+                if (statusEl) {
+                    statusEl.textContent = 'Could not reach LORE right now. Check your connection and try again, or paste the text directly.';
+                    statusEl.style.color = 'var(--error)';
+                }
+                return;
+            }
+
+            if (!parseResult.ok) {
+                // Map Worker error codes to friendly messages
+                let msg;
+                if (parseResult.error === 'QUOTA') {
+                    msg = 'LORE is busy right now. Try again in a moment, or paste the text directly.';
+                } else if (parseResult.error === 'EMPTY_DOCUMENT') {
+                    msg = 'No readable text was found in this file. If it is a scanned document, try a higher-quality scan, or paste the text directly.';
+                } else if (parseResult.unsupported) {
+                    msg = 'This file type is not supported. Use PDF, plain text, or an image.';
+                } else {
+                    msg = 'Could not read this file. Try a different format or paste the text directly.';
+                }
+                if (statusEl) {
+                    statusEl.textContent = msg;
+                    statusEl.style.color = 'var(--error)';
+                }
+                return;
+            }
+
+            extractedText = parseResult.text;
+
+            // If Gemini hit MAX_TOKENS, the content is partial — warn the Manager clearly
+            if (parseResult.partial) {
+                if (statusEl) {
+                    statusEl.textContent = 'This document is very long — only part of it came through. Review the text below and remove any irrelevant sections before continuing.';
+                    statusEl.style.color = '#8C5A0A'; // amber — warning, not error
+                    statusEl.style.display = 'block';
+                }
+            } else {
+                if (statusEl) {
+                    statusEl.textContent   = `Read successfully · ${_wordCount(extractedText)} words extracted`;
+                    statusEl.style.color   = 'var(--sage)';
+                    statusEl.style.display = 'block';
+                }
+            }
+        }
+
+        // Populate the textarea with the extracted text so the Manager can review it
+        if (textArea) {
+            textArea.value       = extractedText;
+            _uploadState.docText = extractedText;
+        }
+        if (metaEl) {
+            metaEl.textContent   = _wordCount(extractedText) + ' words · Review before continuing';
+            metaEl.style.display = 'block';
+        }
+
+        // For DOCX — set the success status after text is in the textarea
+        if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' && statusEl) {
+            statusEl.textContent   = `Extracted successfully · ${_wordCount(extractedText)} words`;
+            statusEl.style.color   = 'var(--sage)';
+            statusEl.style.display = 'block';
+        }
+
+        console.log('LORE dashboard.js: File parsed successfully — name:', file.name, 'words:', _wordCount(extractedText));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Process button — runs the extraction pipeline on whatever text is in the
+    // textarea, whether it came from a file or was pasted directly.
+    // ---------------------------------------------------------------------------
     document.getElementById('process-doc')?.addEventListener('click', async () => {
         const name = document.getElementById('doc-name')?.value?.trim();
         const text = document.getElementById('doc-text')?.value?.trim();
 
         if (!name || !text) {
             const resultEl = document.getElementById('upload-result');
-            if (resultEl) resultEl.innerHTML = '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and paste the content.</p>';
+            if (resultEl) resultEl.innerHTML = '<p class="text-secondary text-sm" style="color: var(--error);">Please enter a document name and add some content — either upload a file or paste text.</p>';
             return;
         }
 
@@ -2017,6 +2496,10 @@ function _attachUploadHandlers(onComplete) {
         _uploadState.errorMsg      = '';
         _uploadState.chunkProgress = null;
 
+        // Show the progress log and start appending entries
+        _showProgressLog();
+        _logProgress('Starting — reading your document…');
+
         const btn = document.getElementById('process-doc');
         if (btn) { btn.disabled = true; btn.textContent = 'Reading…'; }
 
@@ -2024,9 +2507,11 @@ function _attachUploadHandlers(onComplete) {
         const kbContent = document.getElementById('kb-section-content');
         if (kbContent) renderKbUpload(kbContent);
 
-        // Progress callback — updates chunkProgress and re-renders the spinner
+        // Progress callback — updates chunkProgress and appends a log entry.
+        // Called by processDocument() for each chunk processed.
         const onProgress = (current, total) => {
             _uploadState.chunkProgress = { current, total };
+            _logProgress(`Analysing section ${current} of ${total}…`);
             const kbEl = document.getElementById('kb-section-content');
             if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
         };
@@ -2037,7 +2522,15 @@ function _attachUploadHandlers(onComplete) {
         _uploadState.inProgress    = false;
         _uploadState.chunkProgress = null;
         _uploadState.result        = result;
-        if (!result.ok) _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
+
+        if (!result.ok) {
+            _uploadState.errorMsg = 'Could not process the document right now. Please try again shortly.';
+            _logProgress('Something went wrong — please try again.');
+        } else if (result.extractionsCreated > 0) {
+            _logProgress(`Done — found ${result.extractionsCreated} training moment${result.extractionsCreated !== 1 ? 's' : ''}.`);
+        } else {
+            _logProgress('Done — no clear training moments found in this document.');
+        }
 
         if (result.ok && result.extractionsCreated > 0) {
             await onComplete();
@@ -2046,6 +2539,52 @@ function _attachUploadHandlers(onComplete) {
         const kbEl = document.getElementById('kb-section-content');
         if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Read a File object as a base64-encoded string.
+// Returns a Promise that resolves to the base64 string (without the data URL
+// prefix — just the raw base64 bytes that the Worker's parseDocument expects).
+// ---------------------------------------------------------------------------
+function _fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload  = () => {
+            // result is a data URL: "data:<mimeType>;base64,<base64>"
+            // We only want the base64 part after the comma
+            const base64 = reader.result.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = () => reject(new Error('FileReader failed'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Progress log — append a timestamped entry to the visible log during pipeline
+// processing. Called from _attachUploadHandlers during extraction.
+// ---------------------------------------------------------------------------
+function _showProgressLog() {
+    const logEl = document.getElementById('upload-progress-log');
+    if (logEl) {
+        logEl.style.display = 'block';
+        const inner = document.getElementById('progress-log-inner');
+        if (inner) inner.innerHTML = '';
+    }
+}
+
+function _logProgress(message) {
+    const inner = document.getElementById('progress-log-inner');
+    if (!inner) return;
+    const now    = new Date();
+    const time   = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const entry  = document.createElement('p');
+    entry.className   = 'text-xs text-secondary';
+    entry.style.cssText = 'margin-bottom: var(--space-1); line-height: 1.5;';
+    entry.textContent = `${time} — ${message}`;
+    inner.appendChild(entry);
+    // Auto-scroll to latest entry
+    inner.scrollTop = inner.scrollHeight;
 }
 
 function _relativeTime(date) {
