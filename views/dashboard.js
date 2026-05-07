@@ -359,27 +359,29 @@ function renderKnowledgeTab(container) {
 
     container.innerHTML = `
         <div>
-            <!-- Summary header — compact stat row.
-                 stat-card class centres content vertically (style.css).
-                 Max-width prevents cards becoming oversized on wide screens.
-                 The pending card is clickable when items exist — it jumps to the queue. -->
+            <!-- Summary header — compact stat row, all three cards identical height.
+                 All three are clickable — Recipes and Skill areas jump to their sub-nav,
+                 To review jumps to Add knowledge where the queue lives.
+                 stat-card class centres content vertically (style.css). -->
             <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                <div class="card stat-card" style="
+                <div class="card stat-card" id="kb-recipes-card" style="
                     text-align: center;
                     padding: var(--space-4) var(--space-5);
                     min-width: 120px;
                     flex: 1;
                     max-width: 200px;
+                    cursor: pointer;
                 ">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Recipes</p>
                     <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${_recipes.length}</p>
                 </div>
-                <div class="card stat-card" style="
+                <div class="card stat-card" id="kb-domains-card" style="
                     text-align: center;
                     padding: var(--space-4) var(--space-5);
                     min-width: 120px;
                     flex: 1;
                     max-width: 200px;
+                    cursor: pointer;
                 ">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Skill areas</p>
                     <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${confirmedDomains}</p>
@@ -390,7 +392,7 @@ function renderKnowledgeTab(container) {
                     min-width: 120px;
                     flex: 1;
                     max-width: 200px;
-                    cursor: ${pendingCount > 0 ? 'pointer' : 'default'};
+                    cursor: pointer;
                     ${pendingCount > 0 ? 'border-color: rgba(180,80,30,0.25);' : ''}
                 ">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">To review</p>
@@ -410,10 +412,10 @@ function renderKnowledgeTab(container) {
         </div>
     `;
 
-    // Clicking the pending stat card jumps to Add knowledge (where the queue lives)
-    document.getElementById('kb-pending-card')?.addEventListener('click', () => {
-        if (pendingCount > 0) _switchKbSection('upload');
-    });
+    // Stat card click handlers — each jumps to its corresponding sub-section
+    document.getElementById('kb-recipes-card')?.addEventListener('click', () => _switchKbSection('recipes'));
+    document.getElementById('kb-domains-card')?.addEventListener('click', () => _switchKbSection('domains'));
+    document.getElementById('kb-pending-card')?.addEventListener('click', () => _switchKbSection('upload'));
 
     // Sub-nav handlers
     ['upload', 'recipes', 'domains'].forEach(s => {
@@ -917,12 +919,17 @@ function _renderExtractionCard(ext, index) {
     // Handles both the new newline format and the legacy ., separator.
     // ---------------------------------------------------------------------------
     function _parseSteps(raw) {
-        if (!raw) return [];
+        // Coerce to string — Firestore may return an array or other type
+        // if the extraction pipeline stored steps differently in older records.
+        const str = Array.isArray(raw)
+            ? raw.join('\n')
+            : String(raw ?? '');
+        if (!str.trim()) return [];
         // Split on newline first (new format from fixed extraction prompt)
-        let lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+        let lines = str.split('\n').map(s => s.trim()).filter(Boolean);
         // If only one line, check for legacy ., separator
         if (lines.length === 1) {
-            lines = raw.split('.,').map(s => s.trim()).filter(Boolean);
+            lines = str.split('.,').map(s => s.trim()).filter(Boolean);
         }
         // Strip leading "1. 2. 3." numbering if present — we re-number in the template
         return lines.map(line => line.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
