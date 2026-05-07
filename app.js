@@ -23,6 +23,14 @@ import { initDashboard } from './views/dashboard.js';
 import { initProfile }   from './views/profile.js';
 
 // ---------------------------------------------------------------------------
+// Tracks whether an invite redemption is actively in flight.
+// Set to true when the user clicks "Accept invite", reset to false on failure.
+// Used by onAuthChange to avoid wiping the invite form on a transient null
+// auth state that can fire mid-redemption.
+// ---------------------------------------------------------------------------
+let _inviteRedemptionInProgress = false;
+
+// ---------------------------------------------------------------------------
 // Read invite ID from URL if present.
 // Invite links look like: /?invite=INVITE_ID
 // ---------------------------------------------------------------------------
@@ -181,9 +189,11 @@ async function initAuth() {
             const btn = document.getElementById('invite-submit');
             btn.disabled    = true;
             btn.textContent = 'Setting up your account…';
+            _inviteRedemptionInProgress = true;
 
             const result = await redeemInvite(inviteId, name, password);
             if (!result.ok) {
+                _inviteRedemptionInProgress = false;
                 btn.disabled    = false;
                 btn.textContent = 'Accept invite';
                 showAuthError(result.error, 'invite');
@@ -284,13 +294,18 @@ onAuthChange(async (user) => {
         // createUserWithEmailAndPassword() can fire a transient null auth state
         // on failure, which would wipe the invite form and swallow the error.
         // The invite submit handler owns error display in that flow.
-        const urlParams       = new URLSearchParams(window.location.search);
-        const inviteParam     = urlParams.get('invite');
-        const inviteSubmitBtn = document.getElementById('invite-submit');
-        if (inviteParam && inviteSubmitBtn) {
-            inviteSubmitBtn.disabled    = false;
-            inviteSubmitBtn.textContent = 'Accept invite';
-            console.log('LORE app.js: Null auth state during invite flow — not re-rendering.');
+        const urlParams   = new URLSearchParams(window.location.search);
+        const inviteParam = urlParams.get('invite');
+        if (inviteParam && _inviteRedemptionInProgress) {
+            // A redemption is actively in flight — a transient null auth state
+            // can fire mid-way through createUserWithEmailAndPassword(). Do not
+            // wipe the invite form. The submit handler owns error display here.
+            const inviteSubmitBtn = document.getElementById('invite-submit');
+            if (inviteSubmitBtn) {
+                inviteSubmitBtn.disabled    = false;
+                inviteSubmitBtn.textContent = 'Accept invite';
+            }
+            console.log('LORE app.js: Null auth state during invite redemption — not re-rendering.');
             return;
         }
 

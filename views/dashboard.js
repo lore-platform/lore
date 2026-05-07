@@ -368,11 +368,11 @@ function renderKnowledgeTab(container) {
                     <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">Recipes</p>
                     <p style="font-size:var(--text-xl);font-weight:700;line-height:1;">${_recipes.length}</p>
                 </div>
-                <div class="card stat-card" id="kb-domains-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;">
+                <div class="card stat-card" id="kb-domains-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;margin-top:0;">
                     <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">Skill areas</p>
                     <p style="font-size:var(--text-xl);font-weight:700;line-height:1;">${confirmedDomains}</p>
                 </div>
-                <div class="card stat-card" id="kb-pending-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;border-color:${pendingCount > 0 ? 'rgba(180,80,30,0.25)' : 'rgba(44,36,22,0.08)'};">
+                <div class="card stat-card" id="kb-pending-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;margin-top:0;border-color:${pendingCount > 0 ? 'rgba(180,80,30,0.25)' : 'rgba(44,36,22,0.08)'};">
                     <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">To review</p>
                     <p style="font-size:var(--text-xl);font-weight:700;line-height:1;color:${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
                 </div>
@@ -2127,7 +2127,7 @@ function _attachInviteFormHandlers() {
 
 async function _loadTeamList(parentEl) {
     const { db } = await import('../firebase.js');
-    const { collection, getDocs } = await import(
+    const { collection, getDocs, query, where } = await import(
         'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
 
@@ -2135,10 +2135,30 @@ async function _loadTeamList(parentEl) {
     if (!listEl) return;
 
     try {
-        const snap  = await getDocs(collection(db, 'organisations', _orgId, 'users'));
-        const users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Load active members and pending invites in parallel.
+        // Pending invites are those created by this Manager, not yet redeemed.
+        const [usersSnap, invitesSnap] = await Promise.all([
+            getDocs(collection(db, 'organisations', _orgId, 'users')),
+            getDocs(query(
+                collection(db, 'invites'),
+                where('orgId',     '==', _orgId),
+                where('createdBy', '==', _uid),
+                where('redeemed',  '==', false),
+            )),
+        ]);
 
-        if (users.length === 0) {
+        const users   = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const invites = invitesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+        // Filter out invites that have expired — no point showing them as pending
+        const now            = new Date();
+        const pendingInvites = invites.filter(inv => {
+            if (!inv.expiresAt) return true;
+            const expiry = inv.expiresAt.toDate ? inv.expiresAt.toDate() : new Date(inv.expiresAt);
+            return expiry > now;
+        });
+
+        if (users.length === 0 && pendingInvites.length === 0) {
             listEl.innerHTML = `
                 <div class="empty-state">
                     <p class="text-secondary">No team members yet. Generate an invite link to add your first person.</p>
@@ -2147,7 +2167,65 @@ async function _loadTeamList(parentEl) {
             return;
         }
 
-        listEl.innerHTML = users.map(u => `
+        // Render pending invites as a separate section above or below active members.
+        // Each pending invite shows name, email, role, and a copyable invite link.
+        const inviteBase = 'https://lore-platform.github.io/lore/';
+        const pendingHtml = pendingInvites.length > 0 ? `
+            <div style="margin-bottom: var(--space-6);">
+                <p class="label" style="margin-bottom: var(--space-3); color: var(--warm-grey);">
+                    Invited — pending
+                </p>
+                ${pendingInvites.map(inv => {
+                    const inviteUrl = `${inviteBase}?invite=${inv.id}`;
+                    return `
+                        <div class="card" style="margin-bottom: var(--space-3); opacity: 0.85;">
+                            <div class="flex-between" style="margin-bottom: var(--space-3);">
+                                <div>
+                                    <p style="font-weight: 500;">${_esc(inv.displayName ?? inv.email ?? 'Invited person')}</p>
+                                    <p class="text-secondary text-sm mt-1">${_esc(inv.email ?? '')}${inv.roleTitle ? ' · ' + _esc(inv.roleTitle) : ''}</p>
+                                </div>
+                                <span class="chip chip-pending" style="font-size: var(--text-xs);">${_esc(inv.role ?? 'employee')}</span>
+                            </div>
+                            <div style="display: flex; gap: var(--space-2); align-items: center;">
+                                <input
+                                    class="input"
+                                    value="${_esc(inviteUrl)}"
+                                    readonly
+                                    style="flex: 1; font-size: var(--text-xs); color: var(--warm-grey); cursor: default;"
+                                    id="pending-invite-url-${inv.id}"
+                                >
+                                <button
+                                    class="btn btn-secondary"
+                                    id="copy-pending-${inv.id}"
+                                    style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); white-space: nowrap;"
+                                >Copy link</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        ` : '';
+
+        if (users.length === 0) {
+            listEl.innerHTML = pendingHtml + `
+                <div class="empty-state">
+                    <p class="text-secondary">No accepted team members yet.</p>
+                </div>
+            `;
+            // Attach copy handlers for pending invites
+            pendingInvites.forEach(inv => {
+                const inviteUrl = `${inviteBase}?invite=${inv.id}`;
+                document.getElementById(`copy-pending-${inv.id}`)?.addEventListener('click', () => {
+                    navigator.clipboard.writeText(inviteUrl).then(() => {
+                        const btn = document.getElementById(`copy-pending-${inv.id}`);
+                        if (btn) btn.textContent = 'Copied';
+                    });
+                });
+            });
+            return;
+        }
+
+        listEl.innerHTML = pendingHtml + users.map(u => `
             <div class="card" style="margin-bottom: var(--space-3);">
                 <div class="flex-between">
                     <div>
@@ -2192,6 +2270,17 @@ async function _loadTeamList(parentEl) {
                 </div>
             </div>
         `).join('');
+
+        // Attach copy handlers for pending invite links
+        pendingInvites.forEach(inv => {
+            const inviteUrl = `${inviteBase}?invite=${inv.id}`;
+            document.getElementById(`copy-pending-${inv.id}`)?.addEventListener('click', () => {
+                navigator.clipboard.writeText(inviteUrl).then(() => {
+                    const btn = document.getElementById(`copy-pending-${inv.id}`);
+                    if (btn) btn.textContent = 'Copied';
+                });
+            });
+        });
 
         // Attach track panel toggle and save handlers for each employee
         users.filter(u => u.role === 'employee').forEach(u => {
