@@ -486,10 +486,14 @@ Derive a Career Recipe from this knowledge. Return the JSON object.`;
 // domain: the skill area to assign this recipe to
 // Returns the new recipe ID or null.
 // ---------------------------------------------------------------------------
-export async function approveRecipe(orgId, draft, extractionId, domain) {
+export async function approveRecipe(orgId, draft, extractionId, domain, knowledge) {
     console.log('LORE recipes.js: Approving recipe — skill:', draft.skillName, 'domain:', domain);
     try {
-        // Write to the recipes collection — this is now live knowledge
+        // Write to the recipes collection — this is now live knowledge.
+        // knowledge.insight and knowledge.summary are saved alongside the recipe
+        // so the Manager can see what LORE understood about this skill in context,
+        // even after the extraction record is no longer in the review queue.
+        // The extractionId link is preserved so the raw source can always be fetched.
         const recipesRef = collection(db, 'organisations', orgId, 'recipes');
         const added = await addDoc(recipesRef, {
             skillName:       draft.skillName,
@@ -498,6 +502,9 @@ export async function approveRecipe(orgId, draft, extractionId, domain) {
             expectedOutcome: draft.expectedOutcome,
             flawPattern:     draft.flawPattern ?? null,
             domain,
+            // Knowledge context — persisted with the recipe for display and provenance
+            insight:         knowledge?.insight  ?? null,
+            summary:         knowledge?.summary  ?? null,
             approved:        true,
             approvedAt:      serverTimestamp(),
             extractionId:    extractionId ?? null,

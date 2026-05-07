@@ -393,7 +393,7 @@ function renderKnowledgeTab(container) {
                     flex: 1;
                     max-width: 200px;
                     cursor: pointer;
-                    ${pendingCount > 0 ? 'border-color: rgba(180,80,30,0.25);' : ''}
+                    border-color: ${pendingCount > 0 ? 'rgba(180,80,30,0.25)' : 'rgba(44,36,22,0.08)'};
                 ">
                     <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">To review</p>
                     <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
@@ -874,8 +874,15 @@ function _renderExtractionCard(ext, index) {
                     border-radius: var(--radius-md);
                     padding: var(--space-4);
                     border-left: 2px solid rgba(44,36,22,0.1);
+                    max-height: 320px;
+                    overflow-y: auto;
                 ">
-                    <p style="font-size: var(--text-xs); line-height: 1.8; color: var(--warm-grey);">${_esc(ext.rawContent ?? '')}</p>
+                    ${(ext.rawContent ?? '')
+                        .split(/\n\n+/)
+                        .filter(Boolean)
+                        .map(para => `<p style="font-size: var(--text-xs); line-height: 1.8; color: var(--warm-grey); margin-bottom: var(--space-3);">${_esc(para.trim())}</p>`)
+                        .join('') || `<p style="font-size: var(--text-xs); color: var(--warm-grey);">No content available.</p>`
+                    }
                 </div>
             </div>
         </div>
@@ -1273,7 +1280,7 @@ function _attachExtractionHandlers(ext, index, parentEl) {
         const domain = document.getElementById(`draft-domain-${index}`)?.value?.trim()
             ?? (_domains[0]?.name ?? 'General');
 
-        const recipeId = await approveRecipe(_orgId, draft, ext.id, domain);
+        const recipeId = await approveRecipe(_orgId, draft, ext.id, domain, ext.knowledge ?? null);
 
         if (recipeId) {
             // Dismiss bug fix: remove from local _pending array first, then re-render.
@@ -1456,7 +1463,6 @@ function renderKbRecipes(el) {
         </div>
     `;
 
-    // Attach expand/collapse and send-for-review handlers
     _recipes.forEach(r => {
         document.getElementById(`recipe-toggle-${r.id}`)?.addEventListener('click', () => {
             const detail = document.getElementById(`recipe-detail-${r.id}`);
@@ -1465,6 +1471,49 @@ function renderKbRecipes(el) {
                 const isVisible = detail.style.display !== 'none';
                 detail.style.display = isVisible ? 'none' : 'block';
                 btn.textContent = isVisible ? 'Show' : 'Hide';
+            }
+        });
+
+        // Source material — fetch raw content from the extraction on demand.
+        // The extraction record is linked via extractionId saved on the recipe.
+        // We fetch once and cache the result in the DOM so repeated clicks
+        // do not make repeated Firestore reads.
+        document.getElementById(`recipe-source-${r.id}`)?.addEventListener('click', async () => {
+            const contentEl = document.getElementById(`recipe-source-content-${r.id}`);
+            const textEl    = document.getElementById(`recipe-source-text-${r.id}`);
+            const btn       = document.getElementById(`recipe-source-${r.id}`);
+            if (!contentEl) return;
+
+            const isOpen = contentEl.style.display !== 'none';
+            contentEl.style.display = isOpen ? 'none' : 'block';
+            btn.textContent = isOpen ? 'See source material' : 'Hide source';
+            if (isOpen) return;
+
+            // Only fetch if not already loaded (textEl still says "Loading…")
+            if (textEl && textEl.textContent !== 'Loading…') return;
+
+            try {
+                const { db: firestoreDb } = await import('../firebase.js');
+                const { doc: fdoc, getDoc: fget } = await import(
+                    'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+                );
+                const snap = await fget(fdoc(firestoreDb, 'organisations', _orgId, 'extractions', r.extractionId));
+                if (snap.exists()) {
+                    const rawContent = snap.data().rawContent ?? '';
+                    if (textEl) {
+                        // Render as paragraphs — split on double newline for proper formatting
+                        textEl.innerHTML = rawContent
+                            .split(/\n\n+/)
+                            .filter(Boolean)
+                            .map(para => `<p style="margin-bottom: var(--space-3); line-height: 1.8;">${_esc(para.trim())}</p>`)
+                            .join('');
+                    }
+                } else {
+                    if (textEl) textEl.textContent = 'Source material not found.';
+                }
+            } catch (err) {
+                console.warn('LORE dashboard.js: Could not fetch source material for recipe:', r.id, err);
+                if (textEl) textEl.textContent = 'Could not load source material.';
             }
         });
 
@@ -1528,10 +1577,34 @@ function renderKbRecipes(el) {
 }
 
 function _renderRecipeCard(r) {
+    // Parse actionSequence into clean steps — same logic as the extraction card.
+    // Handles both the newline format (new) and the legacy ., separator (old).
+    function parseSteps(raw) {
+        const str = Array.isArray(raw) ? raw.join('\n') : String(raw ?? '');
+        if (!str.trim()) return [];
+        let lines = str.split('\n').map(s => s.trim()).filter(Boolean);
+        if (lines.length === 1) lines = str.split('.,').map(s => s.trim()).filter(Boolean);
+        return lines.map(l => l.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+    }
+    const steps = parseSteps(r.actionSequence);
+
     return `
-        <div class="card" style="margin-bottom: var(--space-3);">
-            <div class="flex-between">
-                <p style="font-weight: 500;">${_esc(r.skillName)}</p>
+        <div class="card" style="margin-bottom: var(--space-4); padding: 0; overflow: hidden;" id="recipe-card-${r.id}">
+
+            <!-- Card header -->
+            <div style="
+                padding: var(--space-4) var(--space-5);
+                background: rgba(44,36,22,0.025);
+                border-bottom: 1px solid rgba(44,36,22,0.07);
+                display: flex; justify-content: space-between; align-items: center;
+            ">
+                <span style="
+                    font-size: var(--text-xs);
+                    color: var(--warm-grey);
+                    padding: 2px var(--space-2);
+                    background: rgba(44,36,22,0.06);
+                    border-radius: var(--radius-sm);
+                ">${_esc(r.domain ?? 'Uncategorised')}</span>
                 <div style="display: flex; gap: var(--space-2);">
                     <button class="btn btn-secondary" id="recipe-review-${r.id}"
                         style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3);">
@@ -1543,22 +1616,113 @@ function _renderRecipeCard(r) {
                     </button>
                 </div>
             </div>
-            <div id="recipe-detail-${r.id}" style="display: none; margin-top: var(--space-4);">
-                <div class="divider" style="margin: var(--space-3) 0;"></div>
-                <p class="label mb-1">When to use it</p>
-                <p class="text-sm text-secondary">${_esc(r.trigger)}</p>
-                <p class="label mt-4 mb-1">What to do</p>
-                <p class="text-sm text-secondary">${_esc(r.actionSequence)}</p>
-                <p class="label mt-4 mb-1">What it produces</p>
-                <p class="text-sm text-secondary">${_esc(r.expectedOutcome)}</p>
-                ${r.flawPattern ? `
-                    <p class="label mt-4 mb-1">What less experienced people tend to do</p>
-                    <p class="text-sm text-secondary">${_esc(r.flawPattern)}</p>
-                ` : ''}
+
+            <!-- Brief body — collapsed by default, shown on toggle -->
+            <div style="padding: var(--space-5);">
+
+                <!-- Skill headline -->
+                <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--sage); font-weight: 600; margin-bottom: var(--space-1);">Skill</p>
+                <h3 style="font-size: var(--text-lg); font-weight: 700; margin-bottom: 0; line-height: 1.2;">${_esc(r.skillName)}</h3>
+
+                <!-- Expandable detail -->
+                <div id="recipe-detail-${r.id}" style="display: none; margin-top: var(--space-5);">
+
+                    <!-- Insight — shown if saved with the recipe -->
+                    ${r.insight ? `
+                        <div style="margin-bottom: var(--space-5);">
+                            <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm-grey); font-weight: 600; margin-bottom: var(--space-2);">What this is really about</p>
+                            <p style="
+                                font-size: var(--text-sm); line-height: 1.75;
+                                font-style: italic; color: var(--ink);
+                                border-left: 3px solid var(--sage);
+                                padding-left: var(--space-4);
+                                margin-bottom: ${r.summary ? 'var(--space-3)' : '0'};
+                            ">${_esc(r.insight)}</p>
+                            ${r.summary ? `<p style="font-size: var(--text-sm); line-height: 1.6; color: var(--warm-grey);">${_esc(r.summary)}</p>` : ''}
+                        </div>
+                    ` : ''}
+
+                    <div style="height: 1px; background: rgba(44,36,22,0.07); margin-bottom: var(--space-5);"></div>
+
+                    <!-- When it applies -->
+                    <div style="margin-bottom: var(--space-5);">
+                        <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm-grey); font-weight: 600; margin-bottom: var(--space-2);">When this applies</p>
+                        <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(r.trigger)}</p>
+                    </div>
+
+                    <!-- What to do — numbered steps -->
+                    <div style="margin-bottom: var(--space-5);">
+                        <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm-grey); font-weight: 600; margin-bottom: var(--space-3);">What to do</p>
+                        ${steps.length > 0
+                            ? `<ol style="padding: 0; margin: 0; list-style: none;">
+                                ${steps.map((step, si) => `
+                                    <li style="
+                                        display: flex; gap: var(--space-3);
+                                        padding: var(--space-2) 0;
+                                        ${si < steps.length - 1 ? 'border-bottom: 1px solid rgba(44,36,22,0.05);' : ''}
+                                    ">
+                                        <span style="font-size: var(--text-xs); font-weight: 700; color: var(--ember); min-width: 20px; padding-top: 2px;">${si + 1}</span>
+                                        <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink); margin: 0;">${_esc(step)}</p>
+                                    </li>
+                                `).join('')}
+                               </ol>`
+                            : `<p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(r.actionSequence ?? '')}</p>`
+                        }
+                    </div>
+
+                    <!-- What it produces -->
+                    <div style="
+                        margin-bottom: var(--space-5);
+                        padding: var(--space-4);
+                        background: rgba(61,139,110,0.05);
+                        border-radius: var(--radius-md);
+                        border: 1px solid rgba(61,139,110,0.12);
+                    ">
+                        <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--sage); font-weight: 600; margin-bottom: var(--space-2);">What it produces</p>
+                        <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(r.expectedOutcome)}</p>
+                    </div>
+
+                    <!-- Flaw pattern — what less experienced people tend to do -->
+                    ${r.flawPattern ? `
+                        <div style="
+                            margin-bottom: var(--space-5);
+                            padding: var(--space-4);
+                            background: rgba(180,80,30,0.04);
+                            border-radius: var(--radius-md);
+                            border: 1px solid rgba(180,80,30,0.1);
+                        ">
+                            <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--ember); font-weight: 600; margin-bottom: var(--space-2);">What less experienced people tend to do</p>
+                            <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(r.flawPattern)}</p>
+                        </div>
+                    ` : ''}
+
+                    <!-- Source material link — fetches raw content on demand -->
+                    ${r.extractionId ? `
+                        <div style="padding-top: var(--space-4); border-top: 1px solid rgba(44,36,22,0.07);">
+                            <button
+                                id="recipe-source-${r.id}"
+                                style="background: none; border: none; cursor: pointer; padding: 0; font-size: var(--text-xs); color: var(--warm-grey); text-decoration: underline; text-underline-offset: 2px;"
+                            >See source material</button>
+                            <div id="recipe-source-content-${r.id}" style="display: none; margin-top: var(--space-3);">
+                                <div style="
+                                    background: rgba(44,36,22,0.03);
+                                    border-left: 2px solid rgba(44,36,22,0.1);
+                                    border-radius: var(--radius-md);
+                                    padding: var(--space-4);
+                                    max-height: 320px;
+                                    overflow-y: auto;
+                                ">
+                                    <p id="recipe-source-text-${r.id}" class="text-xs text-secondary" style="line-height: 1.8;">Loading…</p>
+                                </div>
+                            </div>
+                        </div>
+                    ` : ''}
+
+                </div>
             </div>
-            <!-- Send for review panel -->
-            <div id="recipe-review-panel-${r.id}" style="display: none; margin-top: var(--space-4);">
-                <div class="divider" style="margin: var(--space-3) 0;"></div>
+
+            <!-- Send for review panel — hidden until button clicked -->
+            <div id="recipe-review-panel-${r.id}" style="display: none; padding: var(--space-5); border-top: 1px solid rgba(44,36,22,0.07);">
                 <p class="label mb-2">Send a scenario for review</p>
                 <p class="text-sm text-secondary mb-3">Choose a Reviewer and a scenario. They'll see it as a quality check — nothing else.</p>
                 <select class="input mb-3" id="review-reviewer-${r.id}" style="margin-bottom: var(--space-3);">
