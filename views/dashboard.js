@@ -364,39 +364,17 @@ function renderKnowledgeTab(container) {
                  To review jumps to Add knowledge where the queue lives.
                  stat-card class centres content vertically (style.css). -->
             <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                <div class="card stat-card" id="kb-recipes-card" style="
-                    text-align: center;
-                    padding: var(--space-4) var(--space-5);
-                    min-width: 120px;
-                    flex: 1;
-                    max-width: 200px;
-                    cursor: pointer;
-                ">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Recipes</p>
-                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${_recipes.length}</p>
+                <div class="card stat-card" id="kb-recipes-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;">
+                    <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">Recipes</p>
+                    <p style="font-size:var(--text-xl);font-weight:700;line-height:1;">${_recipes.length}</p>
                 </div>
-                <div class="card stat-card" id="kb-domains-card" style="
-                    text-align: center;
-                    padding: var(--space-4) var(--space-5);
-                    min-width: 120px;
-                    flex: 1;
-                    max-width: 200px;
-                    cursor: pointer;
-                ">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Skill areas</p>
-                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${confirmedDomains}</p>
+                <div class="card stat-card" id="kb-domains-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;">
+                    <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">Skill areas</p>
+                    <p style="font-size:var(--text-xl);font-weight:700;line-height:1;">${confirmedDomains}</p>
                 </div>
-                <div class="card stat-card" id="kb-pending-card" style="
-                    text-align: center;
-                    padding: var(--space-4) var(--space-5);
-                    min-width: 120px;
-                    flex: 1;
-                    max-width: 200px;
-                    cursor: pointer;
-                    border-color: ${pendingCount > 0 ? 'rgba(180,80,30,0.25)' : 'rgba(44,36,22,0.08)'};
-                ">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">To review</p>
-                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
+                <div class="card stat-card" id="kb-pending-card" style="text-align:center;padding:12px 20px!important;min-width:120px;flex:1;max-width:200px;cursor:pointer;border-color:${pendingCount > 0 ? 'rgba(180,80,30,0.25)' : 'rgba(44,36,22,0.08)'};">
+                    <p class="text-xs text-secondary" style="text-transform:uppercase;letter-spacing:0.07em;margin-bottom:var(--space-2);">To review</p>
+                    <p style="font-size:var(--text-xl);font-weight:700;line-height:1;color:${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
                 </div>
             </div>
 

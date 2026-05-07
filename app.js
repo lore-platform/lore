@@ -118,8 +118,17 @@ async function initAuth() {
         const invite = await readInvite(inviteId);
 
         if (!invite) {
-            // Invite not found, expired, or already redeemed
+            // Invite not found or already redeemed
             _showAuthScreen('screen-invite-invalid');
+            const msgEl = document.querySelector('#screen-invite-invalid p:last-child');
+            if (msgEl) msgEl.textContent = 'This invite link could not be found or has already been used. Ask your manager to send you a new one.';
+            return;
+        }
+        if (invite._expired) {
+            // Invite exists but has passed its 7-day expiry
+            _showAuthScreen('screen-invite-invalid');
+            const msgEl = document.querySelector('#screen-invite-invalid p:last-child');
+            if (msgEl) msgEl.textContent = 'This invite link has expired — invite links are valid for 7 days. Ask your manager to generate a new one.';
             return;
         }
 

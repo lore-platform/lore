@@ -231,6 +231,12 @@ export async function readInvite(inviteId) {
         if (!snap.exists()) return null;
         const data = snap.data();
         if (data.redeemed) return null;
+        // Check expiry here so initAuth can show a specific message rather than
+        // the generic invalid screen. We return a sentinel object with _expired:true
+        // rather than null so app.js can distinguish expired from not-found.
+        if (data.expiresAt && data.expiresAt.toDate() < new Date()) {
+            return { _expired: true };
+        }
         return data;
     } catch {
         return null;
