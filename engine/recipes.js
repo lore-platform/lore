@@ -410,7 +410,7 @@ Return a JSON object with exactly these fields:
 {
   "skillName": "Short name for this skill — three to six words, plain language",
   "trigger": "The specific situation that calls for this skill — one sentence, concrete and recognisable",
-  "actionSequence": "What a skilled person does when the trigger fires — two to four numbered steps, specific and sequential",
+  "actionSequence": "What a skilled person does when the trigger fires — two to four steps, each on its own line, formatted exactly as:\n1. First step\n2. Second step\n3. Third step\nDo not use commas or full stops to separate steps. Each step must be on its own line.",
   "expectedOutcome": "What successful application of this skill produces — one sentence",
   "flawPattern": "What a less experienced person typically does instead — one sentence, or null if not clear",
   "confidence": "high" | "medium" | "low"

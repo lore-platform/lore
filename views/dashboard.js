@@ -359,19 +359,42 @@ function renderKnowledgeTab(container) {
 
     container.innerHTML = `
         <div>
-            <!-- Summary header — stat-card class centres content vertically (style.css) -->
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-6);">
-                <div class="card stat-card" style="text-align: center;">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Recipes</p>
-                    <p style="font-size: var(--text-2xl); font-weight: 600;">${_recipes.length}</p>
+            <!-- Summary header — compact stat row.
+                 stat-card class centres content vertically (style.css).
+                 Max-width prevents cards becoming oversized on wide screens.
+                 The pending card is clickable when items exist — it jumps to the queue. -->
+            <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
+                <div class="card stat-card" style="
+                    text-align: center;
+                    padding: var(--space-4) var(--space-5);
+                    min-width: 120px;
+                    flex: 1;
+                    max-width: 200px;
+                ">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Recipes</p>
+                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${_recipes.length}</p>
                 </div>
-                <div class="card stat-card" style="text-align: center;">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Skill areas confirmed</p>
-                    <p style="font-size: var(--text-2xl); font-weight: 600;">${confirmedDomains}</p>
+                <div class="card stat-card" style="
+                    text-align: center;
+                    padding: var(--space-4) var(--space-5);
+                    min-width: 120px;
+                    flex: 1;
+                    max-width: 200px;
+                ">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">Skill areas</p>
+                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1;">${confirmedDomains}</p>
                 </div>
-                <div class="card stat-card" style="text-align: center; cursor: ${pendingCount > 0 ? 'pointer' : 'default'};" id="kb-pending-card">
-                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: var(--space-2);">Pending review</p>
-                    <p style="font-size: var(--text-2xl); font-weight: 600; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
+                <div class="card stat-card" id="kb-pending-card" style="
+                    text-align: center;
+                    padding: var(--space-4) var(--space-5);
+                    min-width: 120px;
+                    flex: 1;
+                    max-width: 200px;
+                    cursor: ${pendingCount > 0 ? 'pointer' : 'default'};
+                    ${pendingCount > 0 ? 'border-color: rgba(180,80,30,0.25);' : ''}
+                ">
+                    <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: var(--space-2);">To review</p>
+                    <p style="font-size: var(--text-xl); font-weight: 700; line-height: 1; color: ${pendingCount > 0 ? 'var(--ember)' : 'var(--ink)'};">${pendingCount}</p>
                 </div>
             </div>
 
@@ -479,8 +502,10 @@ function renderKbUpload(el) {
         return;
     }
 
-    // Aha moment — shown after a successful upload before reverting to the form.
-    // Gives the Manager a clear signal that something real just happened.
+    // Aha moment — shown after a successful extraction. This is the key value
+    // moment in the Manager's experience of LORE. It must feel like receiving
+    // a briefing from a senior analyst, not a system notification.
+    // Three states: success with findings, success with no findings, failure.
     if (_uploadState.result) {
         const result = _uploadState.result;
         let resultHtml;
@@ -492,34 +517,181 @@ function renderKbUpload(el) {
                     <p class="text-secondary text-sm mt-2">${_uploadState.errorMsg || 'Please try again shortly.'}</p>
                     <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Try again</button>
                 </div>`;
+
         } else if (result.extractionsCreated === 0) {
             resultHtml = `
-                <div class="card" style="border-left: 3px solid var(--ember); margin-bottom: var(--space-6);">
-                    <p style="font-weight: 500;">No clear training moments found</p>
-                    <p class="text-secondary text-sm mt-2">This document does not appear to contain the kind of specific decision logic LORE looks for. Try a retrospective, post-mortem, or playbook.</p>
-                    <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Upload another document</button>
+                <div class="card" style="margin-bottom: var(--space-6); padding: var(--space-8);">
+                    <div style="text-align: center; max-width: 480px; margin: 0 auto;">
+                        <!-- Visual mark — neutral, no knowledge found -->
+                        <div style="
+                            width: 56px; height: 56px;
+                            border-radius: 50%;
+                            background: rgba(140,123,106,0.12);
+                            display: flex; align-items: center; justify-content: center;
+                            margin: 0 auto var(--space-5);
+                        ">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="12" cy="12" r="10" stroke="var(--warm-grey)" stroke-width="1.5"/>
+                                <path d="M12 8v4M12 16h.01" stroke="var(--warm-grey)" stroke-width="1.5" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <p style="font-weight: 600; font-size: var(--text-lg); margin-bottom: var(--space-3);">Nothing transferable found in this document</p>
+                        <p class="text-secondary text-sm" style="line-height: 1.7;">
+                            LORE looks for moments of expert decision-making — the kind of
+                            judgement that takes years to develop and is rarely written down.
+                            This document does not appear to contain that kind of content.
+                            Documents that work well tend to be retrospectives, post-mortems,
+                            playbooks, or records of how specific situations were actually handled.
+                        </p>
+                        <button class="btn btn-secondary mt-6" id="upload-reset" style="font-size: var(--text-sm);">Try a different document</button>
+                    </div>
                 </div>`;
+
         } else {
-            // Aha moment — extraction success. Warm, specific, action-oriented.
+            // The aha moment. LORE found something real — this screen should feel
+            // like the consultant walking into the room with a prepared briefing.
+            // Visual flourish: a composed mark, a specific statement of what was found,
+            // and a quiet reveal of the skill names before the Manager dives into review.
+            const foundCount  = result.extractionsCreated;
+            const docName     = _uploadState.docName;
+
+            // Build a preview of the skill names if we have them from the pending queue.
+            // This makes the aha moment specific — the Manager sees names, not a count.
+            const skillNames  = _pending
+                .filter(ext => ext.draft?.skillName)
+                .map(ext => ext.draft.skillName)
+                .slice(0, foundCount);
+
+            const skillPreview = skillNames.length > 0
+                ? `<div style="margin: var(--space-6) 0; text-align: left; max-width: 420px; margin-left: auto; margin-right: auto;">
+                    ${skillNames.map(name => `
+                        <div style="
+                            display: flex; align-items: center; gap: var(--space-3);
+                            padding: var(--space-3) 0;
+                            border-bottom: 1px solid rgba(44,36,22,0.06);
+                        ">
+                            <div style="
+                                width: 6px; height: 6px; border-radius: 50%;
+                                background: var(--sage); flex-shrink: 0;
+                            "></div>
+                            <p style="font-size: var(--text-sm); font-weight: 500; color: var(--ink);">${_esc(name)}</p>
+                        </div>
+                    `).join('')}
+                   </div>`
+                : '';
+
             resultHtml = `
-                <div class="card" style="border-left: 3px solid var(--sage); margin-bottom: var(--space-6);">
-                    <p style="font-weight: 500; color: var(--sage);">Found ${result.extractionsCreated} training moment${result.extractionsCreated !== 1 ? 's' : ''} in &ldquo;${_esc(_uploadState.docName)}&rdquo;</p>
-                    <p class="text-secondary text-sm mt-2">
-                        Go through them below — approve the ones that feel right and they will become part of your knowledge base.
-                        You can edit any field before approving.
+                <div class="card" style="
+                    margin-bottom: var(--space-6);
+                    padding: var(--space-10) var(--space-8);
+                    text-align: center;
+                    border-top: 3px solid var(--sage);
+                    position: relative;
+                    overflow: hidden;
+                ">
+                    <!-- Background texture — subtle geometric mark, purely decorative -->
+                    <div aria-hidden="true" style="
+                        position: absolute;
+                        top: -40px; right: -40px;
+                        width: 200px; height: 200px;
+                        border-radius: 50%;
+                        background: radial-gradient(circle, rgba(61,139,110,0.06) 0%, transparent 70%);
+                        pointer-events: none;
+                    "></div>
+                    <div aria-hidden="true" style="
+                        position: absolute;
+                        bottom: -60px; left: -60px;
+                        width: 240px; height: 240px;
+                        border-radius: 50%;
+                        background: radial-gradient(circle, rgba(196,98,45,0.04) 0%, transparent 70%);
+                        pointer-events: none;
+                    "></div>
+
+                    <!-- The mark — a composed circle with a check, in LORE's sage -->
+                    <div style="
+                        width: 64px; height: 64px;
+                        border-radius: 50%;
+                        background: rgba(61,139,110,0.1);
+                        border: 1.5px solid rgba(61,139,110,0.25);
+                        display: flex; align-items: center; justify-content: center;
+                        margin: 0 auto var(--space-6);
+                    ">
+                        <svg width="26" height="26" viewBox="0 0 26 26" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M6 13.5L10.5 18L20 8" stroke="var(--sage)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+
+                    <!-- The statement — specific, confident, framed as discovery -->
+                    <p style="
+                        font-size: var(--text-xs);
+                        text-transform: uppercase;
+                        letter-spacing: 0.1em;
+                        color: var(--sage);
+                        font-weight: 600;
+                        margin-bottom: var(--space-3);
+                    ">Knowledge recovered</p>
+
+                    <h2 style="
+                        font-size: var(--text-2xl);
+                        font-weight: 700;
+                        line-height: 1.3;
+                        margin-bottom: var(--space-4);
+                        max-width: 480px;
+                        margin-left: auto;
+                        margin-right: auto;
+                    ">
+                        ${foundCount === 1
+                            ? `Inside &ldquo;${_esc(docName)}&rdquo;, LORE recovered one piece of expertise your organisation would have lost.`
+                            : `Inside &ldquo;${_esc(docName)}&rdquo;, LORE recovered ${foundCount} pieces of expertise your organisation would have lost.`
+                        }
+                    </h2>
+
+                    <p class="text-secondary" style="
+                        font-size: var(--text-sm);
+                        line-height: 1.7;
+                        max-width: 400px;
+                        margin: 0 auto;
+                    ">
+                        This is the kind of knowledge that lives in experienced people's heads
+                        and disappears when they leave. It is now part of your organisation's record.
                     </p>
-                    <button class="btn btn-secondary mt-4" id="upload-reset" style="font-size: var(--text-sm);">Add another document</button>
+
+                    <!-- Skill name preview — makes the moment specific, not just a count -->
+                    ${skillPreview}
+
+                    <button class="btn btn-primary mt-6" id="upload-review-btn" style="font-size: var(--text-sm);">
+                        Review what we found
+                    </button>
+                    <div style="margin-top: var(--space-3);">
+                        <button class="btn btn-secondary" id="upload-reset" style="font-size: var(--text-sm); color: var(--warm-grey);">
+                            Add another document
+                        </button>
+                    </div>
                 </div>`;
         }
 
-        el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${_renderInlineQueue()}</div>`;
+        el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${result.ok && result.extractionsCreated > 0 ? '' : ''}</div>`;
+
+        // "Review what we found" scrolls past the aha card to the queue below
+        document.getElementById('upload-review-btn')?.addEventListener('click', () => {
+            // Re-render with the queue visible below the aha card
+            el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${_renderInlineQueue()}</div>`;
+            document.getElementById('upload-reset')?.addEventListener('click', () => {
+                _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null, partial: false };
+                renderKbUpload(el);
+            });
+            _attachInlineQueueHandlers(el);
+            _attachCorpusAnalysisHandlers();
+            // Scroll to the queue
+            const queueEl = document.getElementById('inline-queue-list');
+            if (queueEl) queueEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
 
         document.getElementById('upload-reset')?.addEventListener('click', () => {
-            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null };
+            _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null, partial: false };
             renderKbUpload(el);
         });
 
-        _attachInlineQueueHandlers(el);
         _attachCorpusAnalysisHandlers();
         return;
     }
@@ -640,14 +812,33 @@ function _attachInlineQueueHandlers(parentEl) {
 }
 
 // ---------------------------------------------------------------------------
-// Extraction card — used by the inline queue in Add knowledge.
-// Shows: source type and provenance, raw content verbatim, intermediate
-// knowledge representation (summary, situation, insight) as the primary
-// review surface, draft recipe fields as editable output, Reviewer assignment
-// at the extraction point (so the Manager can immediately route for review).
+// Extraction card — the intelligence brief.
+//
+// Design principle: LORE's understanding is the deliverable. The card
+// presents extracted knowledge the way a senior analyst presents a finding —
+// with a clear headline, a structured insight, and a recommended action
+// expressed as clean steps. The Manager reads a finished piece of work.
+//
+// Interaction model:
+//   Read mode (default) — the card is a document, not a form. The Manager
+//   reads the skill name, the situation, the insight, and the action steps.
+//   A quiet "Edit" affordance allows any field to be changed before approving.
+//   Edit mode — inputs replace the read view for the field being changed.
+//   The raw source is collapsed behind "See source material" — always accessible
+//   but never the lead.
+//
+// actionSequence rendering:
+//   The extraction pipeline produces steps separated by newlines (fixed in
+//   recipes.js). At render time we also split on the legacy `.,` separator
+//   in case older extractions are present in Firestore, so both formats render
+//   correctly as a numbered list.
+//
+// Three card states:
+//   1. No pipeline run yet — source chip, collapsed raw content, Extract button.
+//   2. Processed, full brief — knowledge + recipe in read mode, approve/edit.
+//   3. Knowledge only, no draft — knowledge shown, re-run pipeline button.
 // ---------------------------------------------------------------------------
 function _renderExtractionCard(ext, index) {
-    // PIPE-05: source type label includes provenance context
     const sourceLabels = {
         'scenario_review':   'Scenario feedback',
         'mentorship_note':   'Mentorship note',
@@ -656,109 +847,335 @@ function _renderExtractionCard(ext, index) {
     };
     const sourceLabel = sourceLabels[ext.sourceType] ?? 'Contribution';
 
-    // Provenance line — shows what the contributor was responding to.
-    // Truncated to 120 characters to keep the card scannable.
-    const provenanceLine = ext.rawPrompt
-        ? `<p class="text-xs text-secondary mt-1" style="font-style: italic;">${_esc(ext.rawPrompt.slice(0, 120))}${ext.rawPrompt.length > 120 ? '…' : ''}</p>`
-        : '';
-
     const hasKnowledge = ext.knowledge && ext.knowledge.hasKnowledge !== false && ext.knowledge.summary;
     const hasDraft     = ext.draft && ext.draft.skillName;
 
-    return `
-        <div class="card" style="margin-bottom: var(--space-6);" id="ext-card-${index}">
+    // Provenance line — e.g. "Chunk 2 of 3 from document: meridian_playbook"
+    const provenanceLine = ext.rawPrompt
+        ? `<p class="text-xs text-secondary mt-1" style="font-style: italic;">${_esc(ext.rawPrompt.slice(0, 100))}${ext.rawPrompt.length > 100 ? '…' : ''}</p>`
+        : (ext.documentName ? `<p class="text-xs text-secondary mt-1">${_esc(ext.documentName)}</p>` : '');
 
-            <!-- Source and provenance header -->
-            <div style="margin-bottom: var(--space-4);">
-                <div class="flex-between">
+    // Raw content — collapsed by default. Always accessible.
+    const rawSection = `
+        <div style="margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid rgba(44,36,22,0.06);">
+            <button
+                id="raw-toggle-${index}"
+                style="
+                    background: none; border: none; cursor: pointer; padding: 0;
+                    font-size: var(--text-xs); color: var(--warm-grey);
+                    text-decoration: underline; text-underline-offset: 2px;
+                "
+            >See source material</button>
+            <div id="raw-content-${index}" style="display: none; margin-top: var(--space-3);">
+                <div style="
+                    background: rgba(44,36,22,0.03);
+                    border-radius: var(--radius-md);
+                    padding: var(--space-4);
+                    border-left: 2px solid rgba(44,36,22,0.1);
+                ">
+                    <p style="font-size: var(--text-xs); line-height: 1.8; color: var(--warm-grey);">${_esc(ext.rawContent ?? '')}</p>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // ---------------------------------------------------------------------------
+    // State 1: No pipeline run yet — the Manager needs to trigger extraction.
+    // Show a preview of the raw content (first 200 chars) and an Extract button.
+    // ---------------------------------------------------------------------------
+    if (!hasKnowledge && !hasDraft) {
+        const rawPreview = (ext.rawContent ?? '').slice(0, 200);
+        const isTrimmed  = (ext.rawContent ?? '').length > 200;
+
+        return `
+            <div class="card" style="margin-bottom: var(--space-5);" id="ext-card-${index}">
+                <div class="flex-between" style="margin-bottom: var(--space-3);">
                     <span class="chip chip-pending">${sourceLabel}</span>
                     <span class="text-xs text-secondary">${ext.wordCount ? ext.wordCount + ' words' : ''}</span>
                 </div>
                 ${provenanceLine}
-            </div>
-
-            <!-- Raw content — verbatim, always shown -->
-            <div style="margin-bottom: var(--space-4);">
-                <p class="label mb-2">What was contributed</p>
-                <div style="background: rgba(44,36,22,0.04); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4);">
-                    <p class="text-sm" style="line-height: 1.7; color: var(--ink);">${_esc(ext.rawContent ?? 'No content available')}</p>
+                <p style="
+                    font-size: var(--text-sm); line-height: 1.7;
+                    color: var(--warm-grey); margin-top: var(--space-3);
+                ">${_esc(rawPreview)}${isTrimmed ? '…' : ''}</p>
+                <p class="text-xs mt-3" id="process-status-${index}" style="color: var(--warm-grey);"></p>
+                <div style="display: flex; gap: var(--space-3); margin-top: var(--space-4);">
+                    <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
+                        Extract knowledge
+                    </button>
+                    <button class="btn btn-secondary" id="reject-btn-${index}"
+                        style="font-size: var(--text-sm); color: var(--warm-grey);">
+                        Dismiss
+                    </button>
                 </div>
             </div>
+        `;
+    }
 
-            <!-- Intermediate knowledge representation — shown when Stage 2 has run -->
-            ${hasKnowledge ? `
-                <div style="margin-bottom: var(--space-4); padding: var(--space-4); border: 1px solid rgba(44,36,22,0.1); border-radius: var(--radius-md); background: rgba(95,127,95,0.04);">
-                    <p class="label mb-3" style="color: var(--sage);">What LORE understood</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Summary</p>
-                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.summary ?? '')}</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Situation</p>
-                    <p class="text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">${_esc(ext.knowledge.situation ?? '')}</p>
-                    <p class="text-xs text-secondary" style="font-weight: 600; margin-bottom: var(--space-1);">Insight</p>
-                    <p class="text-sm" style="line-height: 1.6;">${_esc(ext.knowledge.insight ?? '')}</p>
+    // ---------------------------------------------------------------------------
+    // Parse actionSequence into clean steps for display.
+    // Handles both the new newline format and the legacy ., separator.
+    // ---------------------------------------------------------------------------
+    function _parseSteps(raw) {
+        if (!raw) return [];
+        // Split on newline first (new format from fixed extraction prompt)
+        let lines = raw.split('\n').map(s => s.trim()).filter(Boolean);
+        // If only one line, check for legacy ., separator
+        if (lines.length === 1) {
+            lines = raw.split('.,').map(s => s.trim()).filter(Boolean);
+        }
+        // Strip leading "1. 2. 3." numbering if present — we re-number in the template
+        return lines.map(line => line.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+    }
+
+    const steps = _parseSteps(ext.draft?.actionSequence ?? '');
+
+    // ---------------------------------------------------------------------------
+    // State 2 + 3: The intelligence brief — read mode.
+    // The skill name is the headline. The insight leads the body.
+    // Recipe fields display as a structured document, not a form.
+    // ---------------------------------------------------------------------------
+    const domainLabel = ext.knowledge?.domain ?? ext.draft?.domain ?? (_domains[0]?.name ?? '');
+
+    return `
+        <div class="card" style="
+            margin-bottom: var(--space-5);
+            padding: 0;
+            overflow: hidden;
+        " id="ext-card-${index}">
+
+            <!-- Card header — skill area badge + source chip -->
+            <div style="
+                padding: var(--space-4) var(--space-6);
+                background: rgba(44,36,22,0.025);
+                border-bottom: 1px solid rgba(44,36,22,0.07);
+                display: flex; justify-content: space-between; align-items: center;
+            ">
+                <div style="display: flex; align-items: center; gap: var(--space-3);">
+                    <span class="chip chip-pending">${sourceLabel}</span>
+                    ${domainLabel ? `<span style="
+                        font-size: var(--text-xs);
+                        color: var(--warm-grey);
+                        padding: 2px var(--space-2);
+                        background: rgba(44,36,22,0.06);
+                        border-radius: var(--radius-sm);
+                    ">${_esc(domainLabel)}</span>` : ''}
                 </div>
-            ` : ''}
+                <span class="text-xs text-secondary">${ext.wordCount ? ext.wordCount + ' words' : ''}</span>
+            </div>
 
-            <!-- Draft recipe fields — editable, shown when Stage 3 has run -->
-            ${hasDraft ? `
-                <div style="margin-bottom: var(--space-4);">
-                    <p class="label mb-3">Proposed recipe — edit before approving</p>
-                    <div class="auth-field">
+            <!-- Brief body -->
+            <div style="padding: var(--space-6);">
+
+                ${hasDraft ? `
+                    <!-- Skill headline — the name of the thing LORE found -->
+                    <div id="read-skillname-${index}">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--sage);
+                            font-weight: 600;
+                            margin-bottom: var(--space-2);
+                        ">Skill identified</p>
+                        <h3 style="
+                            font-size: var(--text-xl);
+                            font-weight: 700;
+                            line-height: 1.2;
+                            margin-bottom: 0;
+                        ">${_esc(ext.draft.skillName)}</h3>
+                    </div>
+                    <div id="edit-skillname-${index}" style="display: none; margin-bottom: var(--space-4);">
                         <label class="label mb-1">Skill name</label>
-                        <input class="input" id="draft-skill-${index}" value="${_esc(ext.draft.skillName ?? '')}" style="margin-bottom: var(--space-3);">
+                        <input class="input" id="draft-skill-${index}" value="${_esc(ext.draft.skillName ?? '')}">
                     </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">When to use it</label>
-                        <textarea class="input" id="draft-trigger-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.trigger ?? '')}</textarea>
+                ` : ''}
+
+                <!-- Divider -->
+                <div style="height: 1px; background: rgba(44,36,22,0.07); margin: var(--space-5) 0;"></div>
+
+                ${hasKnowledge ? `
+                    <!-- LORE's understanding — the intellectual core of the card -->
+                    <div style="margin-bottom: var(--space-5);">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--warm-grey);
+                            font-weight: 600;
+                            margin-bottom: var(--space-3);
+                        ">What this is really about</p>
+                        <p style="
+                            font-size: var(--text-base);
+                            line-height: 1.75;
+                            color: var(--ink);
+                            font-style: italic;
+                            border-left: 3px solid var(--sage);
+                            padding-left: var(--space-4);
+                            margin-bottom: var(--space-4);
+                        ">${_esc(ext.knowledge.insight ?? '')}</p>
+                        <p style="font-size: var(--text-sm); line-height: 1.6; color: var(--warm-grey);">${_esc(ext.knowledge.summary ?? '')}</p>
                     </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">What to do</label>
-                        <textarea class="input" id="draft-action-${index}" rows="3" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.actionSequence ?? '')}</textarea>
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">What it produces</label>
-                        <textarea class="input" id="draft-outcome-${index}" rows="2" style="margin-bottom: var(--space-3); resize: vertical;">${_esc(ext.draft.expectedOutcome ?? '')}</textarea>
-                    </div>
-                    <div class="auth-field">
-                        <label class="label mb-1">Assign to skill area</label>
-                        <input class="input" id="draft-domain-${index}"
-                            value="${_esc(ext.knowledge?.domain ?? ext.draft.domain ?? (_domains[0]?.name ?? ''))}"
-                            placeholder="Type a skill area name…">
+                ` : ''}
+
+                ${hasDraft ? `
+                    <!-- When it applies -->
+                    <div style="margin-bottom: var(--space-5);">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--warm-grey);
+                            font-weight: 600;
+                            margin-bottom: var(--space-2);
+                        ">When this applies</p>
+                        <div id="read-trigger-${index}">
+                            <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(ext.draft.trigger ?? '')}</p>
+                        </div>
+                        <div id="edit-trigger-${index}" style="display: none;">
+                            <textarea class="input" id="draft-trigger-${index}" rows="2" style="resize: vertical;">${_esc(ext.draft.trigger ?? '')}</textarea>
+                        </div>
                     </div>
 
-                    <!-- Reviewer assignment at the extraction point (PIPE-05).
-                         The Manager can immediately route this approved recipe
-                         for Reviewer validation without going to the Recipes tab. -->
-                    <div class="auth-field" style="margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid rgba(44,36,22,0.08);">
-                        <label class="label mb-1">Send for Reviewer validation (optional)</label>
-                        <p class="text-secondary text-xs mb-2">Choose a Reviewer to receive this as a quality check after you approve it.</p>
-                        <select class="input" id="draft-reviewer-${index}">
+                    <!-- What to do — numbered steps, clean and readable -->
+                    <div style="margin-bottom: var(--space-5);">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--warm-grey);
+                            font-weight: 600;
+                            margin-bottom: var(--space-3);
+                        ">What to do</p>
+                        <div id="read-action-${index}">
+                            ${steps.length > 0
+                                ? `<ol style="padding: 0; margin: 0; list-style: none;">
+                                    ${steps.map((step, si) => `
+                                        <li style="
+                                            display: flex; gap: var(--space-3);
+                                            padding: var(--space-2) 0;
+                                            ${si < steps.length - 1 ? 'border-bottom: 1px solid rgba(44,36,22,0.05);' : ''}
+                                        ">
+                                            <span style="
+                                                font-size: var(--text-xs);
+                                                font-weight: 700;
+                                                color: var(--ember);
+                                                min-width: 20px;
+                                                padding-top: 2px;
+                                            ">${si + 1}</span>
+                                            <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink); margin: 0;">${_esc(step)}</p>
+                                        </li>
+                                    `).join('')}
+                                   </ol>`
+                                : `<p style="font-size: var(--text-sm); color: var(--ink); line-height: 1.65;">${_esc(ext.draft.actionSequence ?? '')}</p>`
+                            }
+                        </div>
+                        <div id="edit-action-${index}" style="display: none;">
+                            <textarea class="input" id="draft-action-${index}" rows="4" style="resize: vertical;">${_esc(ext.draft.actionSequence ?? '')}</textarea>
+                            <p class="text-xs text-secondary mt-1">One step per line. LORE will display them as a numbered list.</p>
+                        </div>
+                    </div>
+
+                    <!-- What it produces -->
+                    <div style="
+                        margin-bottom: var(--space-5);
+                        padding: var(--space-4);
+                        background: rgba(61,139,110,0.05);
+                        border-radius: var(--radius-md);
+                        border: 1px solid rgba(61,139,110,0.12);
+                    ">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--sage);
+                            font-weight: 600;
+                            margin-bottom: var(--space-2);
+                        ">What it produces</p>
+                        <div id="read-outcome-${index}">
+                            <p style="font-size: var(--text-sm); line-height: 1.65; color: var(--ink);">${_esc(ext.draft.expectedOutcome ?? '')}</p>
+                        </div>
+                        <div id="edit-outcome-${index}" style="display: none;">
+                            <textarea class="input" id="draft-outcome-${index}" rows="2" style="resize: vertical;">${_esc(ext.draft.expectedOutcome ?? '')}</textarea>
+                        </div>
+                    </div>
+
+                    <!-- Skill area assignment -->
+                    <div style="margin-bottom: var(--space-4);">
+                        <p style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--warm-grey);
+                            font-weight: 600;
+                            margin-bottom: var(--space-2);
+                        ">Skill area</p>
+                        <div id="read-domain-${index}">
+                            <p style="font-size: var(--text-sm); color: var(--ink);">${_esc(domainLabel || 'Not assigned')}</p>
+                        </div>
+                        <div id="edit-domain-${index}" style="display: none;">
+                            <input class="input" id="draft-domain-${index}"
+                                value="${_esc(domainLabel)}"
+                                placeholder="Type a skill area name…">
+                        </div>
+                    </div>
+
+                    <!-- Reviewer assignment -->
+                    <div style="
+                        margin-bottom: var(--space-5);
+                        padding-top: var(--space-4);
+                        border-top: 1px solid rgba(44,36,22,0.07);
+                    ">
+                        <label style="
+                            font-size: var(--text-xs);
+                            text-transform: uppercase;
+                            letter-spacing: 0.08em;
+                            color: var(--warm-grey);
+                            font-weight: 600;
+                            display: block;
+                            margin-bottom: var(--space-2);
+                        ">Send for Reviewer validation (optional)</label>
+                        <p class="text-xs text-secondary mb-2">A Reviewer will see this as a quality check — they will not know it is part of a knowledge base.</p>
+                        <select class="input" id="draft-reviewer-${index}" style="font-size: var(--text-sm);">
                             <option value="">No Reviewer — approve only</option>
                         </select>
                         <p id="reviewer-load-status-${index}" class="text-xs text-secondary mt-1"></p>
                     </div>
-                </div>
-            ` : `
-                <!-- No draft yet — show a process button so the Manager can trigger extraction -->
-                <p class="text-xs text-secondary mb-3" id="process-status-${index}"></p>
-            `}
-
-            <div class="divider" style="margin: var(--space-4) 0;"></div>
-
-            <!-- Action buttons -->
-            <div style="display: flex; gap: var(--space-3);">
-                ${hasDraft ? `
-                    <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
-                        Add to knowledge base
-                    </button>
                 ` : `
-                    <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
-                        Extract knowledge
-                    </button>
+                    <!-- Knowledge present but no draft yet — rare state -->
+                    <p class="text-xs text-secondary mb-4" id="process-status-${index}"></p>
                 `}
-                <button class="btn btn-secondary" id="reject-btn-${index}"
-                    style="font-size: var(--text-sm); color: var(--error);">
-                    Dismiss
-                </button>
+
+                <!-- Raw source — collapsed, accessible -->
+                ${rawSection}
+
+                <!-- Action bar -->
+                <div style="
+                    display: flex; gap: var(--space-3);
+                    margin-top: var(--space-6);
+                    padding-top: var(--space-5);
+                    border-top: 1px solid rgba(44,36,22,0.07);
+                    align-items: center;
+                    flex-wrap: wrap;
+                ">
+                    ${hasDraft ? `
+                        <button class="btn btn-primary" id="approve-btn-${index}" style="font-size: var(--text-sm);">
+                            Add to knowledge base
+                        </button>
+                        <button class="btn btn-secondary" id="edit-toggle-${index}" style="font-size: var(--text-sm);">
+                            Edit
+                        </button>
+                    ` : `
+                        <button class="btn btn-primary" id="process-btn-${index}" style="font-size: var(--text-sm);">
+                            Extract knowledge
+                        </button>
+                    `}
+                    <button class="btn btn-secondary" id="reject-btn-${index}"
+                        style="font-size: var(--text-sm); color: var(--warm-grey); margin-left: auto;">
+                        Dismiss
+                    </button>
+                </div>
+
             </div>
         </div>
     `;
@@ -769,6 +1186,38 @@ function _attachExtractionHandlers(ext, index, parentEl) {
     if (ext.draft && ext.draft.skillName) {
         _populateReviewerDropdown(index);
     }
+
+    // ---------------------------------------------------------------------------
+    // Raw source toggle — "See source material" / "Hide source"
+    // ---------------------------------------------------------------------------
+    document.getElementById(`raw-toggle-${index}`)?.addEventListener('click', () => {
+        const raw    = document.getElementById(`raw-content-${index}`);
+        const btn    = document.getElementById(`raw-toggle-${index}`);
+        if (!raw) return;
+        const isOpen = raw.style.display !== 'none';
+        raw.style.display   = isOpen ? 'none' : 'block';
+        btn.textContent     = isOpen ? 'See source material' : 'Hide source';
+    });
+
+    // ---------------------------------------------------------------------------
+    // Edit toggle — swaps all read-mode elements to their edit counterparts.
+    // A second click on "Save changes" re-renders the card with updated values.
+    // ---------------------------------------------------------------------------
+    let _editMode = false;
+    document.getElementById(`edit-toggle-${index}`)?.addEventListener('click', () => {
+        _editMode = !_editMode;
+        const btn = document.getElementById(`edit-toggle-${index}`);
+
+        const fields = ['skillname', 'trigger', 'action', 'outcome', 'domain'];
+        fields.forEach(field => {
+            const readEl = document.getElementById(`read-${field}-${index}`);
+            const editEl = document.getElementById(`edit-${field}-${index}`);
+            if (readEl) readEl.style.display = _editMode ? 'none' : 'block';
+            if (editEl) editEl.style.display = _editMode ? 'block' : 'none';
+        });
+
+        if (btn) btn.textContent = _editMode ? 'Save changes' : 'Edit';
+    });
 
     // Process button (raw → three-stage pipeline)
     document.getElementById(`process-btn-${index}`)?.addEventListener('click', async () => {
