@@ -47,7 +47,7 @@ import {
     triggerClustering,
 } from '../engine/domains.js';
 import { generateInvite } from '../engine/auth.js';
-import { queueScenarioReview } from '../engine/scenarios.js';
+import { queueScenarioReview, queueRecipeReview } from '../engine/scenarios.js';
 import { flagHighSignalResponses } from '../engine/analysis.js';
 
 // ---------------------------------------------------------------------------
@@ -1274,10 +1274,13 @@ function _attachExtractionHandlers(ext, index, parentEl) {
             const reviewerSelect = document.getElementById(`draft-reviewer-${index}`);
             const reviewerId     = reviewerSelect?.value ?? '';
             if (reviewerId && recipeId) {
-                // We need a scenario for this recipe to send. If none exists yet,
-                // the Reviewer assignment is silently skipped — the Manager can
-                // send for review from the Recipes tab once scenarios are generated.
-                await _tryQueueReviewerTask(_orgId, recipeId, reviewerId);
+                // Queue a recipe accuracy check for the Reviewer. This works
+                // immediately on approval — no scenario needs to exist first.
+                // The Reviewer will see it as a situational quality check.
+                const reviewResult = await queueRecipeReview(_orgId, recipeId, reviewerId);
+                if (!reviewResult.ok) {
+                    console.warn('LORE dashboard.js: Could not queue recipe review after approval:', reviewResult.error);
+                }
             }
 
             // Re-render the full Knowledge Base tab to update summary header counts
@@ -1339,38 +1342,6 @@ async function _populateReviewerDropdown(index) {
 
 // ---------------------------------------------------------------------------
 // Try to queue a Reviewer task for a newly approved recipe.
-// Looks for an existing scenario for this recipe and sends it for review.
-// If no scenario exists yet, fails silently — the Manager can retry from
-// the Recipes tab once scenarios have been generated.
-// ---------------------------------------------------------------------------
-async function _tryQueueReviewerTask(orgId, recipeId, reviewerId) {
-    const { db } = await import('../firebase.js');
-    const { collection, query, where, limit, getDocs } = await import(
-        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
-    );
-    try {
-        const snap = await getDocs(
-            query(
-                collection(db, 'organisations', orgId, 'scenarios'),
-                where('recipeId', '==', recipeId),
-                limit(1)
-            )
-        );
-        if (snap.empty) {
-            console.log('LORE dashboard.js: No scenario found for recipe yet — Reviewer assignment skipped.');
-            return;
-        }
-        const scenarioId = snap.docs[0].id;
-        const result     = await queueScenarioReview(orgId, scenarioId, reviewerId);
-        if (result.ok) {
-            console.log('LORE dashboard.js: Scenario review queued — scenarioId:', scenarioId, 'reviewerId:', reviewerId);
-        } else {
-            console.warn('LORE dashboard.js: Could not queue scenario review.', result.error);
-        }
-    } catch (err) {
-        console.warn('LORE dashboard.js: _tryQueueReviewerTask failed.', err);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Refresh only the summary header counts without re-rendering the whole tab.
@@ -1503,48 +1474,41 @@ function renderKbRecipes(el) {
             if (isOpen) return;
 
             const reviewerSelect = document.getElementById(`review-reviewer-${r.id}`);
-            const scenarioSelect = document.getElementById(`review-scenario-${r.id}`);
             const statusEl       = document.getElementById(`review-status-${r.id}`);
 
+            // Populate the Reviewer dropdown — only users with role 'reviewer'
             const { db: firestoreDb } = await import('../firebase.js');
             const { collection: col, query: q, where: wh, getDocs: gd } =
                 await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
 
             try {
                 const usersSnap = await gd(q(col(firestoreDb, 'organisations', _orgId, 'users'), wh('role', '==', 'reviewer')));
+                if (usersSnap.empty) {
+                    if (statusEl) statusEl.textContent = 'No Reviewers in your team yet.';
+                }
                 usersSnap.forEach(d => {
                     const opt = document.createElement('option');
                     opt.value = d.id;
                     opt.textContent = d.data().displayName ?? d.data().email ?? d.id;
                     reviewerSelect?.appendChild(opt);
                 });
-
-                const scenariosSnap = await gd(q(col(firestoreDb, 'organisations', _orgId, 'scenarios'), wh('recipeId', '==', r.id)));
-                if (scenariosSnap.empty) {
-                    if (statusEl) statusEl.textContent = 'No scenarios generated for this recipe yet.';
-                } else {
-                    scenariosSnap.forEach((d, i) => {
-                        const opt = document.createElement('option');
-                        opt.value = d.id;
-                        opt.textContent = `Scenario ${i + 1} — ${d.data().scenarioType ?? 'general'}`;
-                        scenarioSelect?.appendChild(opt);
-                    });
-                }
             } catch (err) {
-                console.warn('LORE dashboard.js: Could not load Reviewers or scenarios.', err);
+                console.warn('LORE dashboard.js: Could not load Reviewers for recipe review panel.', err);
                 if (statusEl) statusEl.textContent = 'Could not load Reviewers. Try again.';
             }
 
             document.getElementById(`review-send-${r.id}`)?.addEventListener('click', async () => {
                 const reviewerId = reviewerSelect?.value;
-                const scenarioId = scenarioSelect?.value;
-                if (!reviewerId || !scenarioId) {
-                    if (statusEl) statusEl.textContent = 'Please choose a Reviewer and a scenario.';
+                if (!reviewerId) {
+                    if (statusEl) statusEl.textContent = 'Please choose a Reviewer.';
                     return;
                 }
                 const btn = document.getElementById(`review-send-${r.id}`);
                 btn.disabled = true; btn.textContent = 'Sending…';
-                const result = await queueScenarioReview(_orgId, scenarioId, reviewerId);
+                // Queue a recipe_review task — works whether or not scenarios exist.
+                // The Reviewer sees this as a situational accuracy check, not a
+                // training review. No scenario is needed for this path.
+                const result = await queueRecipeReview(_orgId, r.id, reviewerId);
                 btn.disabled = false; btn.textContent = 'Send';
                 if (statusEl) statusEl.textContent = result.ok
                     ? "Sent. They'll see it in their next session."
@@ -1701,13 +1665,10 @@ function _renderRecipeCard(r) {
 
             <!-- Send for review panel — hidden until button clicked -->
             <div id="recipe-review-panel-${r.id}" style="display: none; padding: var(--space-5); border-top: 1px solid rgba(44,36,22,0.07);">
-                <p class="label mb-2">Send a scenario for review</p>
-                <p class="text-sm text-secondary mb-3">Choose a Reviewer and a scenario. They'll see it as a quality check — nothing else.</p>
+                <p class="label mb-2">Send for Reviewer validation</p>
+                <p class="text-sm text-secondary mb-3">A Reviewer will see this as a quality check — they will not know it is part of a knowledge base.</p>
                 <select class="input mb-3" id="review-reviewer-${r.id}" style="margin-bottom: var(--space-3);">
                     <option value="">Choose a Reviewer…</option>
-                </select>
-                <select class="input mb-3" id="review-scenario-${r.id}" style="margin-bottom: var(--space-3);">
-                    <option value="">Choose a scenario…</option>
                 </select>
                 <p id="review-status-${r.id}" class="text-xs text-secondary mb-2"></p>
                 <button class="btn btn-primary" id="review-send-${r.id}" style="font-size: var(--text-sm);">Send</button>

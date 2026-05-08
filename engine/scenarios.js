@@ -506,6 +506,67 @@ async function _writeResponseCorpus(orgId, uid, scenario, recipe, responseText, 
 // reviewerId: the uid of the Reviewer to send it to
 // Returns { ok: true } or { ok: false, error }.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Queue a recipe accuracy check for a Reviewer.
+// Called from the dashboard on extraction approval (before scenarios exist)
+// and from the Recipes tab "Send for review" panel at any time.
+//
+// The task is framed as a situational accuracy check — the Reviewer confirms
+// whether the recipe reflects how the org actually handles the situation.
+// They never see the word "recipe", "training", or "knowledge base".
+//
+// Returns { ok: true } or { ok: false, error }.
+// ---------------------------------------------------------------------------
+export async function queueRecipeReview(orgId, recipeId, reviewerId) {
+    console.log('LORE scenarios.js: Queuing recipe review —', { recipeId, reviewerId });
+
+    // Fetch the recipe so the task document is self-contained.
+    // The task stores the fields the Reviewer will see — trigger and
+    // actionSequence — so tasks.js can render the prompt without an
+    // additional Firestore read at display time.
+    let skillName       = '';
+    let trigger         = '';
+    let actionSequence  = '';
+    let domain          = '';
+    try {
+        const snap = await getDoc(doc(db, 'organisations', orgId, 'recipes', recipeId));
+        if (!snap.exists()) {
+            console.warn('LORE scenarios.js: Recipe not found for review queue:', recipeId);
+            return { ok: false, error: 'Recipe not found.' };
+        }
+        skillName      = snap.data().skillName      ?? '';
+        trigger        = snap.data().trigger        ?? '';
+        actionSequence = snap.data().actionSequence ?? '';
+        domain         = snap.data().domain         ?? '';
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not fetch recipe for review queue.', err);
+        return { ok: false, error: 'Could not load recipe.' };
+    }
+
+    try {
+        await addDoc(
+            collection(db, 'organisations', orgId, 'users', reviewerId, 'tasks'),
+            {
+                type:          'recipe_review',
+                status:        'pending',
+                // recipeId is stored so the Manager can see which recipes have
+                // been reviewed when the task is completed.
+                recipeId,
+                skillName,
+                trigger,
+                actionSequence,
+                domain,
+                createdAt:     serverTimestamp(),
+            }
+        );
+        console.log('LORE scenarios.js: Recipe review task queued for Reviewer:', reviewerId);
+        return { ok: true };
+    } catch (err) {
+        console.warn('LORE scenarios.js: Could not queue recipe review task.', err);
+        return { ok: false, error: 'Could not send to Reviewer.' };
+    }
+}
+
 export async function queueScenarioReview(orgId, scenarioId, reviewerId) {
     console.log('LORE scenarios.js: Queuing scenario review —', { scenarioId, reviewerId });
 

@@ -169,6 +169,8 @@ function renderPrompt(container, prompt) {
         renderScenarioReview(container, prompt, progress);
     } else if (prompt.type === 'mentorship_note') {
         renderMentorshipNote(container, prompt, progress);
+    } else if (prompt.type === 'recipe_review') {
+        renderRecipeReview(container, prompt, progress);
     } else {
         // Unknown type — skip gracefully
         console.warn('LORE Tasks: Unknown prompt type:', prompt.type);
@@ -259,6 +261,144 @@ function renderScenarioReview(container, prompt, progress) {
             // This gives the extraction pipeline full question context — the Reviewer's
             // correction is only interpretable alongside what they were correcting.
             rawPrompt:  prompt.scenarioText ?? '',
+        });
+
+        await _markPromptComplete(_orgId, _uid, prompt.id);
+        renderThankYou(container, () => advanceToNext(container));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// SCREEN: Recipe accuracy check prompt.
+// The Reviewer is shown the situation trigger and the action approach
+// extracted from a recipe, and asked whether it reflects reality.
+// Framed as a quality check on team knowledge — not as training material.
+// Their response is staged as a raw extraction with sourceType 'recipe_review'.
+//
+// Three responses:
+//   Confirm  — no useful correction, mark complete and advance.
+//   Note     — mostly right but with a caveat; their note is the extraction.
+//   Disagree — doesn't reflect reality; their correction is the extraction.
+// ---------------------------------------------------------------------------
+function renderRecipeReview(container, prompt, progress) {
+    // Parse action steps from the stored actionSequence string.
+    // Handles newline-separated steps (current format) and the legacy ., format.
+    function parseSteps(raw) {
+        const str = Array.isArray(raw) ? raw.join('\n') : String(raw ?? '');
+        if (!str.trim()) return [];
+        let lines = str.split('\n').map(s => s.trim()).filter(Boolean);
+        if (lines.length === 1) lines = str.split('.,').map(s => s.trim()).filter(Boolean);
+        return lines.map(l => l.replace(/^\d+\.\s*/, '').trim()).filter(Boolean);
+    }
+    const steps    = parseSteps(prompt.actionSequence);
+    const stepsHtml = steps.length
+        ? `<ol style="padding-left: var(--space-5); margin: 0;">${
+            steps.map(s => `<li style="margin-bottom: var(--space-2); line-height: 1.7;">${s}</li>`).join('')
+          }</ol>`
+        : `<p style="line-height: 1.8;">${prompt.actionSequence ?? ''}</p>`;
+
+    container.innerHTML = `
+        <div>
+            <div class="flex-between mb-2">
+                <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em;">Quick check</p>
+                <p class="text-xs text-secondary">${progress}</p>
+            </div>
+
+            <div class="card mt-4">
+                <p class="label mb-1">When this comes up</p>
+                <p class="text-secondary" style="font-size: var(--text-sm); line-height: 1.7;">${prompt.trigger ?? ''}</p>
+            </div>
+
+            <div class="card mt-4">
+                <p class="label mb-3">Our current thinking on how to handle it</p>
+                <div style="font-size: var(--text-sm); color: var(--ink); line-height: 1.7;">
+                    ${stepsHtml}
+                </div>
+            </div>
+
+            <div class="card mt-4">
+                <p class="label mb-4">Does this match how you'd actually approach it?</p>
+
+                <div style="display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4);">
+                    <button class="btn btn-secondary" id="recipe-confirm" style="flex: 1;">
+                        Yes, this is right
+                    </button>
+                    <button class="btn btn-secondary" id="recipe-note" style="flex: 1;">
+                        Mostly, with a note
+                    </button>
+                    <button class="btn btn-secondary" id="recipe-disagree" style="flex: 1;">
+                        This doesn't reflect how we work
+                    </button>
+                </div>
+
+                <div id="recipe-input-area" style="display: none; margin-top: var(--space-4);">
+                    <p class="label mb-2" id="recipe-input-label"></p>
+                    <textarea
+                        class="input"
+                        id="recipe-input-text"
+                        rows="4"
+                        style="resize: vertical;"
+                    ></textarea>
+                    <button class="btn btn-primary btn-full mt-4" id="recipe-submit">
+                        Share your thinking
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Confirm — accurate as-is, no correction needed, advance
+    document.getElementById('recipe-confirm')?.addEventListener('click', async () => {
+        await _markPromptComplete(_orgId, _uid, prompt.id);
+        advanceToNext(container);
+    });
+
+    // Helper to reveal the text input with the right label and placeholder
+    function showInput(label, placeholder) {
+        document.getElementById('recipe-confirm').style.display   = 'none';
+        document.getElementById('recipe-note').style.display      = 'none';
+        document.getElementById('recipe-disagree').style.display  = 'none';
+        document.getElementById('recipe-input-label').textContent = label;
+        const textarea = document.getElementById('recipe-input-text');
+        textarea.placeholder = placeholder;
+        document.getElementById('recipe-input-area').style.display = 'block';
+        textarea.focus();
+    }
+
+    document.getElementById('recipe-note')?.addEventListener('click', () => {
+        showInput(
+            'What would you add or adjust?',
+            'Share what you'd do differently, or what context is missing…'
+        );
+    });
+
+    document.getElementById('recipe-disagree')?.addEventListener('click', () => {
+        showInput(
+            'What would make this more accurate?',
+            'Describe how your team actually handles this situation…'
+        );
+    });
+
+    // Submit correction or note — this is where the extraction happens
+    document.getElementById('recipe-submit')?.addEventListener('click', async () => {
+        const text = document.getElementById('recipe-input-text')?.value?.trim();
+        if (!text) {
+            document.getElementById('recipe-input-text').focus();
+            return;
+        }
+
+        const btn = document.getElementById('recipe-submit');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+
+        // Stage the Reviewer's response as a raw extraction.
+        // rawPrompt carries the full context — trigger and action sequence —
+        // so the extraction pipeline can interpret the correction correctly.
+        await createExtraction(_orgId, {
+            sourceType: 'recipe_review',
+            rawContent: text,
+            reviewerId: _uid,
+            rawPrompt:  `When this comes up: ${prompt.trigger ?? ''}\n\nOur current approach:\n${prompt.actionSequence ?? ''}`,
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
