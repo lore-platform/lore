@@ -338,6 +338,55 @@ async function handleRedeemInviteClaims(body, env, corsHeaders) {
         }
 
         console.log('LORE Worker: redeemInviteClaims — claims set. uid:', uid, 'orgId:', orgId, 'role:', role);
+
+        // Step 3: Write the user document to organisations/{orgId}/users/{uid}.
+        // Done here — not client-side — because the service account token has
+        // unconditional Firestore write authority, avoiding the security rules
+        // block that caused the client-side write to fail silently.
+        // The Firestore REST API PATCH with updateMask creates the document if it
+        // does not exist, equivalent to setDoc() in the client SDK.
+        // Fields sourced from the invite document (already read above in Step 1)
+        // plus the displayName supplied by the user on the invite screen.
+        const email     = fields.email?.stringValue     ?? '';
+        const roleTitle = fields.roleTitle?.stringValue ?? '';
+        const seniority = fields.seniority?.stringValue ?? 'mid';
+        const displayName = (body.name ?? '').trim();
+
+        const userDocUrl = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/organisations/${orgId}/users/${uid}`;
+        const userDocBody = {
+            fields: {
+                displayName:     { stringValue: displayName },
+                email:           { stringValue: email },
+                role:            { stringValue: role },
+                roleTitle:       { stringValue: roleTitle },
+                seniority:       { stringValue: seniority },
+                assignedDomains: { arrayValue: { values: [] } },
+                createdAt:       { timestampValue: new Date().toISOString() },
+            },
+        };
+
+        try {
+            const userDocRes = await fetch(userDocUrl, {
+                method:  'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type':  'application/json',
+                },
+                body: JSON.stringify(userDocBody),
+            });
+            if (!userDocRes.ok) {
+                const userDocErr = await userDocRes.json().catch(() => ({}));
+                // Non-fatal — claims are set, the user can sign in. Log the failure
+                // so it is visible in Worker logs, but do not block the response.
+                console.error('LORE Worker: redeemInviteClaims — user document write failed:', userDocErr);
+            } else {
+                console.log('LORE Worker: redeemInviteClaims — user document written. uid:', uid, 'orgId:', orgId);
+            }
+        } catch (userDocErr) {
+            // Non-fatal — same reasoning as above.
+            console.error('LORE Worker: redeemInviteClaims — user document write threw:', userDocErr.message);
+        }
+
         return json({ ok: true, uid, orgId, role }, 200, corsHeaders);
 
     } catch (err) {
