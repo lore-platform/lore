@@ -2158,7 +2158,7 @@ async function _loadTeamList(parentEl) {
             return expiry > now;
         });
 
-        if (users.length === 0 && pendingInvites.length === 0) {
+        if (_users.length === 0 && pendingInvites.length === 0) {
             listEl.innerHTML = `
                 <div class="empty-state">
                     <p class="text-secondary">No team members yet. Generate an invite link to add your first person.</p>
@@ -2206,7 +2206,7 @@ async function _loadTeamList(parentEl) {
             </div>
         ` : '';
 
-        if (users.length === 0) {
+        if (_users.length === 0) {
             listEl.innerHTML = pendingHtml + `
                 <div class="empty-state">
                     <p class="text-secondary">No accepted team members yet.</p>
@@ -2225,7 +2225,7 @@ async function _loadTeamList(parentEl) {
             return;
         }
 
-        listEl.innerHTML = pendingHtml + users.map(u => `
+        listEl.innerHTML = pendingHtml + _users.map(u => `
             <div class="card" style="margin-bottom: var(--space-3);">
                 <div class="flex-between">
                     <div>
@@ -2283,7 +2283,7 @@ async function _loadTeamList(parentEl) {
         });
 
         // Attach track panel toggle and save handlers for each employee
-        users.filter(u => u.role === 'employee').forEach(u => {
+        _users.filter(u => u.role === 'employee').forEach(u => {
             document.getElementById(`track-btn-${u.id}`)?.addEventListener('click', () => {
                 const panel = document.getElementById(`track-panel-${u.id}`);
                 if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
