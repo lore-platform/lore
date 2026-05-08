@@ -197,6 +197,10 @@ async function initAuth() {
                 btn.disabled    = false;
                 btn.textContent = 'Accept invite';
                 showAuthError(result.error, 'invite');
+            } else {
+                // Strip ?invite= from the URL so that signing out after redemption
+                // shows the normal sign-in screen rather than the now-redeemed invite screen.
+                history.replaceState(null, '', window.location.pathname);
             }
             // On success, onAuthStateChanged fires and routes the user
         });

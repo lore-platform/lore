@@ -64,6 +64,11 @@ let _clusters = [];
 // Which top-level tab is active: 'knowledge' | 'team'
 let _activeTab = 'knowledge';
 
+// Unsubscribe handle for the team list onSnapshot listener.
+// Called when the tab navigates away so the listener does not keep firing
+// against a DOM that no longer exists.
+let _teamListUnsub = null;
+
 // Which sub-section within the Knowledge Base tab is active.
 // Default is 'upload' — the upload-first principle means the Manager always
 // lands on the Add knowledge section, not the recipe list.
@@ -303,6 +308,9 @@ function renderDashboard(container) {
     document.getElementById('tab-knowledge')?.addEventListener('click', () => {
         _activeTab = 'knowledge';
         _setActiveTabStyle('knowledge');
+        // Unsubscribe the team list listener before switching away — the DOM
+        // nodes it would update are about to be replaced.
+        if (_teamListUnsub) { _teamListUnsub(); _teamListUnsub = null; }
         renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
     });
 
@@ -2127,32 +2135,24 @@ function _attachInviteFormHandlers() {
 
 async function _loadTeamList(parentEl) {
     const { db } = await import('../firebase.js');
-    const { collection, getDocs, query, where } = await import(
+    const { collection, onSnapshot, query, where } = await import(
         'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
 
     const listEl = document.getElementById('team-list');
     if (!listEl) return;
 
-    try {
-        // Load active members and pending invites in parallel.
-        // Pending invites are those created by this Manager, not yet redeemed.
-        const [usersSnap, invitesSnap] = await Promise.all([
-            getDocs(collection(db, 'organisations', _orgId, 'users')),
-            getDocs(query(
-                collection(db, 'invites'),
-                where('orgId',     '==', _orgId),
-                where('createdBy', '==', _uid),
-                where('redeemed',  '==', false),
-            )),
-        ]);
+    // Use onSnapshot on both queries so the team list updates in real time
+    // when an invite is redeemed — no page refresh needed.
+    // Both start as null; _renderTeamList waits until both have fired once.
+    let _users          = null;
+    let _pendingInvites = null;
 
-        const users   = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        const invites = invitesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    function _renderTeamList() {
+        if (_users === null || _pendingInvites === null) return;
 
-        // Filter out invites that have expired — no point showing them as pending
         const now            = new Date();
-        const pendingInvites = invites.filter(inv => {
+        const pendingInvites = _pendingInvites.filter(inv => {
             if (!inv.expiresAt) return true;
             const expiry = inv.expiresAt.toDate ? inv.expiresAt.toDate() : new Date(inv.expiresAt);
             return expiry > now;
@@ -2325,10 +2325,46 @@ async function _loadTeamList(parentEl) {
             });
         });
 
-    } catch (err) {
-        console.warn('LORE dashboard.js: Could not load team list.', err);
-        listEl.innerHTML = '<p class="text-secondary text-sm">Could not load team list.</p>';
-    }
+    } // end _renderTeamList
+
+    // Subscribe to the users collection — fires immediately and on every write.
+    const unsubUsers = onSnapshot(
+        collection(db, 'organisations', _orgId, 'users'),
+        (snap) => {
+            _users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            console.log('LORE dashboard.js: Team users snapshot —', _users.length, 'members.');
+            _renderTeamList();
+        },
+        (err) => {
+            console.warn('LORE dashboard.js: Team users snapshot error.', err);
+            listEl.innerHTML = '<p class="text-secondary text-sm">Could not load team list.</p>';
+        }
+    );
+
+    // Subscribe to pending invites — fires when an invite is redeemed so the
+    // pending entry disappears and the user moves to the active members list.
+    const unsubInvites = onSnapshot(
+        query(
+            collection(db, 'invites'),
+            where('orgId',     '==', _orgId),
+            where('createdBy', '==', _uid),
+            where('redeemed',  '==', false),
+        ),
+        (snap) => {
+            _pendingInvites = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            console.log('LORE dashboard.js: Pending invites snapshot —', _pendingInvites.length, 'pending.');
+            _renderTeamList();
+        },
+        (err) => {
+            console.warn('LORE dashboard.js: Pending invites snapshot error.', err);
+            // Non-fatal — active members will still render
+            _pendingInvites = _pendingInvites ?? [];
+            _renderTeamList();
+        }
+    );
+
+    // Store a combined unsubscribe so the tab-switch handler can clean up both
+    _teamListUnsub = () => { unsubUsers(); unsubInvites(); };
 }
 
 // ---------------------------------------------------------------------------

@@ -125,6 +125,33 @@ export async function redeemInvite(inviteId, name, password) {
         console.warn('LORE: Could not mark invite as redeemed.');
     }
 
+    // 7. Write the user document to organisations/{orgId}/users/{uid}.
+    // This is what makes the user appear in the Manager's team list.
+    // The document uses the same fields the dashboard rendering expects:
+    // displayName, email, role, roleTitle, seniority, assignedDomains.
+    // Without this write, the user exists in Firebase Auth but is invisible
+    // to the Manager — they would never leave the "pending" state on the dashboard.
+    try {
+        const { setDoc, doc: firestoreDoc } = await import(
+            'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+        );
+        await setDoc(firestoreDoc(db, 'organisations', invite.orgId, 'users', uid), {
+            displayName:     name,
+            email:           invite.email,
+            role:            invite.role,
+            roleTitle:       invite.roleTitle   ?? '',
+            seniority:       invite.seniority   ?? 'mid',
+            assignedDomains: [],
+            createdAt:       serverTimestamp(),
+        });
+        console.log('LORE auth.js: User document written to Firestore for uid:', uid);
+    } catch (err) {
+        // Non-fatal — claims are set, the user can sign in. The Manager will
+        // not see them in the team list until this write succeeds, but the
+        // account itself is functional.
+        console.warn('LORE auth.js: Could not write user document.', err);
+    }
+
     return { ok: true, role: invite.role, orgId: invite.orgId };
 }
 
