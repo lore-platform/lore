@@ -863,12 +863,7 @@ function _renderExtractionCard(ext, index) {
                     max-height: 320px;
                     overflow-y: auto;
                 ">
-                    ${(ext.rawContent ?? '')
-                        .split(/\n\n+/)
-                        .filter(Boolean)
-                        .map(para => `<p style="font-size: var(--text-xs); line-height: 1.8; color: var(--warm-grey); margin-bottom: var(--space-3);">${_esc(para.trim())}</p>`)
-                        .join('') || `<p style="font-size: var(--text-xs); color: var(--warm-grey);">No content available.</p>`
-                    }
+                    ${_renderMarkdown(ext.rawContent ?? '') || `<p style="font-size: var(--text-xs); color: var(--warm-grey);">No content available.</p>`}
                 </div>
             </div>
         </div>
@@ -1487,12 +1482,9 @@ function renderKbRecipes(el) {
                 if (snap.exists()) {
                     const rawContent = snap.data().rawContent ?? '';
                     if (textEl) {
-                        // Render as paragraphs — split on double newline for proper formatting
-                        textEl.innerHTML = rawContent
-                            .split(/\n\n+/)
-                            .filter(Boolean)
-                            .map(para => `<p style="margin-bottom: var(--space-3); line-height: 1.8;">${_esc(para.trim())}</p>`)
-                            .join('');
+                        // Render with markdown support — handles blockquotes, bold,
+                        // numbered lists, headings, and line breaks within paragraphs
+                        textEl.innerHTML = _renderMarkdown(rawContent);
                     }
                 } else {
                     if (textEl) textEl.textContent = 'Source material not found.';
@@ -3578,4 +3570,104 @@ function _esc(str) {
         .replace(/"/g, '&quot;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight markdown renderer for raw source content display.
+// Handles the subset of markdown that appears in practitioner-contributed
+// documents: blockquotes, bold, numbered lists, headings, horizontal rules,
+// and line breaks within paragraphs.
+//
+// Process: escape HTML first so angle brackets in content are safe, then
+// apply markdown patterns to the escaped text. This order is critical —
+// reversing it would cause _esc() to consume the markdown characters.
+//
+// Returns an HTML string safe to set as innerHTML.
+// ---------------------------------------------------------------------------
+function _renderMarkdown(raw) {
+    if (!raw) return '';
+
+    // Split into blocks on one or more blank lines
+    const blocks = raw.split(/\n{2,}/);
+
+    return blocks.map(block => {
+        const trimmed = block.trim();
+        if (!trimmed) return '';
+
+        // Escape HTML in the raw block before applying any patterns
+        const esc = trimmed
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            // Do not escape > here — we detect blockquotes first using the raw char
+            ;
+
+        // Horizontal rule — a line of three or more dashes or asterisks
+        if (/^[-*]{3,}$/.test(trimmed)) {
+            return '<hr style="border: none; border-top: 1px solid rgba(44,36,22,0.12); margin: var(--space-4) 0;">';
+        }
+
+        // Heading — one to three # characters followed by a space
+        const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+        if (headingMatch) {
+            const level   = headingMatch[1].length;
+            const content = _applyInlineMarkdown(headingMatch[2]);
+            const size    = level === 1 ? 'var(--text-base)' : 'var(--text-sm)';
+            return `<p style="font-size: ${size}; font-weight: 600; color: var(--ink); margin-bottom: var(--space-2); line-height: 1.5;">${content}</p>`;
+        }
+
+        // Blockquote — every line in the block starts with >
+        // Strip the leading > and optional space from each line, then render
+        // the inner content recursively so nested markdown is handled.
+        const lines = trimmed.split('\n');
+        if (lines.every(l => l.trimStart().startsWith('>'))) {
+            const inner = lines
+                .map(l => l.trimStart().replace(/^>\s?/, ''))
+                .join('\n');
+            const innerHtml = _renderMarkdown(inner);
+            return `<blockquote style="
+                border-left: 2px solid rgba(44,36,22,0.2);
+                margin: 0 0 var(--space-3) 0;
+                padding: var(--space-2) var(--space-4);
+                color: var(--warm-grey);
+                font-size: var(--text-xs);
+                line-height: 1.8;
+            ">${innerHtml}</blockquote>`;
+        }
+
+        // Numbered list — one or more lines starting with a digit and period
+        if (lines.some(l => /^\d+\.\s/.test(l.trimStart()))) {
+            const items = lines
+                .filter(l => /^\d+\.\s/.test(l.trimStart()))
+                .map(l => {
+                    const content = _applyInlineMarkdown(l.trimStart().replace(/^\d+\.\s+/, ''));
+                    return `<li style="margin-bottom: var(--space-1); line-height: 1.7;">${content}</li>`;
+                })
+                .join('');
+            return `<ol style="padding-left: var(--space-5); margin-bottom: var(--space-3); font-size: var(--text-xs); color: var(--warm-grey);">${items}</ol>`;
+        }
+
+        // Plain paragraph — apply inline markdown and preserve single line breaks
+        const html = lines
+            .map(l => _applyInlineMarkdown(l
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+            ))
+            .join('<br>');
+        return `<p style="font-size: var(--text-xs); line-height: 1.8; color: var(--warm-grey); margin-bottom: var(--space-3);">${html}</p>`;
+    }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Apply inline markdown patterns to an already-HTML-escaped string.
+// Bold only — covers the most common pattern in practitioner writing.
+// Called by _renderMarkdown() for inline content inside blocks.
+// ---------------------------------------------------------------------------
+function _applyInlineMarkdown(str) {
+    return str
+        // Bold: **text** or __text__
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/__(.+?)__/g, '<strong>$1</strong>');
 }
