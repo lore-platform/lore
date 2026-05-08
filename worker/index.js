@@ -339,18 +339,52 @@ async function handleRedeemInviteClaims(body, env, corsHeaders) {
 
         console.log('LORE Worker: redeemInviteClaims — claims set. uid:', uid, 'orgId:', orgId, 'role:', role);
 
-        // Step 3: Write the user document to organisations/{orgId}/users/{uid}.
+        // Step 3: Mark the invite as redeemed in Firestore using the service account
+        // token. This replaces the client-side updateDoc in auth.js which failed
+        // silently because the newly created user lacked permission to write to
+        // the top-level invites/ collection before their claims had propagated.
+        const redeemUrl  = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/invites/${inviteId}`;
+        const redeemBody = {
+            fields: {
+                redeemed:   { booleanValue: true },
+                redeemedAt: { timestampValue: new Date().toISOString() },
+                redeemedBy: { stringValue: uid },
+            },
+        };
+        try {
+            const redeemRes = await fetch(
+                `${redeemUrl}?updateMask.fieldPaths=redeemed&updateMask.fieldPaths=redeemedAt&updateMask.fieldPaths=redeemedBy`,
+                {
+                    method:  'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type':  'application/json',
+                    },
+                    body: JSON.stringify(redeemBody),
+                }
+            );
+            if (!redeemRes.ok) {
+                const redeemErr = await redeemRes.json().catch(() => ({}));
+                console.error('LORE Worker: redeemInviteClaims — invite redeem write failed:', redeemErr);
+            } else {
+                console.log('LORE Worker: redeemInviteClaims — invite marked as redeemed. inviteId:', inviteId);
+            }
+        } catch (redeemErr) {
+            console.error('LORE Worker: redeemInviteClaims — invite redeem write threw:', redeemErr.message);
+        }
+
+        // Step 4: Write the user document to organisations/{orgId}/users/{uid}.
         // Done here — not client-side — because the service account token has
         // unconditional Firestore write authority, avoiding the security rules
         // block that caused the client-side write to fail silently.
-        // The Firestore REST API PATCH with updateMask creates the document if it
-        // does not exist, equivalent to setDoc() in the client SDK.
-        // Fields sourced from the invite document (already read above in Step 1)
-        // plus the displayName supplied by the user on the invite screen.
+        // Fields sourced from the invite document (already read above in Step 1).
+        // displayName prefers the value stored on the invite document (set by the
+        // Manager) and falls back to body.name for invites generated before
+        // displayName was added to the invite document schema.
         const email     = fields.email?.stringValue     ?? '';
         const roleTitle = fields.roleTitle?.stringValue ?? '';
         const seniority = fields.seniority?.stringValue ?? 'mid';
-        const displayName = (body.name ?? '').trim();
+        const displayName = (fields.displayName?.stringValue || body.name || '').trim();
 
         const userDocUrl = `https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/organisations/${orgId}/users/${uid}`;
         const userDocBody = {

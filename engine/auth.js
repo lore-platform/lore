@@ -114,21 +114,11 @@ export async function redeemInvite(inviteId, name, password) {
         console.warn('LORE auth.js: redeemInviteClaims fetch failed:', err.message);
     }
 
-    // 6. Mark the invite as redeemed
-    try {
-        await updateDoc(inviteRef, {
-            redeemed:    true,
-            redeemedAt:  serverTimestamp(),
-            redeemedBy:  uid,
-        });
-    } catch {
-        console.warn('LORE: Could not mark invite as redeemed.');
-    }
-
-    // 7. User document write has moved to the Cloudflare Worker (redeemInviteClaims).
-    // The Worker writes organisations/{orgId}/users/{uid} using the service account
-    // token, which bypasses Firestore security rules and eliminates the timing race
-    // between account creation and claim assignment that caused silent failures here.
+    // 6. Marking the invite as redeemed and writing the user document have both
+    // moved to the Cloudflare Worker (handleRedeemInviteClaims). The Worker uses
+    // the service account token for both writes, which bypasses Firestore security
+    // rules and eliminates the race condition between account creation and claim
+    // propagation that caused both operations to fail silently from the client.
 
     return { ok: true, role: invite.role, orgId: invite.orgId };
 }
@@ -156,16 +146,20 @@ export async function generateInvite(orgId, creatorUid, options) {
     try {
         const ref = collection(db, 'invites');
         const added = await addDoc(ref, {
-            orgId:     orgId,
-            email:     options.email,
-            role:      options.role,
-            roleTitle: options.roleTitle ?? '',
-            seniority: options.seniority ?? 'mid',
-            orgName:   options.orgName   ?? '',
-            createdBy: creatorUid,
-            createdAt: serverTimestamp(),
+            orgId:       orgId,
+            email:       options.email,
+            role:        options.role,
+            roleTitle:   options.roleTitle   ?? '',
+            seniority:   options.seniority   ?? 'mid',
+            orgName:     options.orgName     ?? '',
+            // displayName is the name the Manager entered — pre-filled and locked
+            // on the invite screen so the invitee's display name stays in sync
+            // with the Manager's records rather than being entered fresh by the invitee.
+            displayName: options.displayName ?? '',
+            createdBy:   creatorUid,
+            createdAt:   serverTimestamp(),
             expiresAt,
-            redeemed:  false,
+            redeemed:    false,
         });
 
         // Build the invite URL — uses the live app URL with the invite ID as a query param

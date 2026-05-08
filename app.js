@@ -151,6 +151,25 @@ async function initAuth() {
         document.getElementById('invite-role-line').textContent   = roleLine;
         document.getElementById('invite-email-display').value     = invite.email ?? '';
 
+        // Set the name field from the invite document. The input starts disabled
+        // in the markup (matching the email field) so the value is locked by default.
+        // If the invite pre-dates the displayName field — i.e. the Manager generated
+        // it before this change was deployed — re-enable the field so the invitee
+        // can still type their name rather than being stuck on a blank locked input.
+        const nameInput = document.getElementById('invite-name');
+        if (nameInput) {
+            if (invite.displayName) {
+                nameInput.value = invite.displayName;
+                // Field stays disabled — value is already set from Manager's records.
+                // Opacity and cursor are already set in the markup.
+            } else {
+                // Older invite — no displayName stored. Re-enable so the user can type.
+                nameInput.disabled      = false;
+                nameInput.style.opacity = '';
+                nameInput.style.cursor  = '';
+            }
+        }
+
         _showAuthScreen('screen-invite');
 
         // Password visibility toggle for invite form
