@@ -3572,7 +3572,13 @@ function _renderMarkdown(raw) {
         const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
         if (headingMatch) {
             const level   = headingMatch[1].length;
-            const content = _applyInlineMarkdown(headingMatch[2]);
+            const content = _applyInlineMarkdown(
+                headingMatch[2]
+                    .replace(/&/g, '&amp;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+            );
             const size    = level === 1 ? 'var(--text-base)' : 'var(--text-sm)';
             return `<p style="font-size: ${size}; font-weight: 600; color: var(--ink); margin-bottom: var(--space-2); line-height: 1.5;">${content}</p>`;
         }
