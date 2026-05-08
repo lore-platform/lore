@@ -368,14 +368,14 @@ function renderRecipeReview(container, prompt, progress) {
     document.getElementById('recipe-note')?.addEventListener('click', () => {
         showInput(
             'What would you add or adjust?',
-            'Share what you'd do differently, or what context is missing…'
+            `Share what you'd do differently, or what context is missing\u2026`
         );
     });
 
     document.getElementById('recipe-disagree')?.addEventListener('click', () => {
         showInput(
             'What would make this more accurate?',
-            'Describe how your team actually handles this situation…'
+            `Describe how your team actually handles this situation\u2026`
         );
     });
 
