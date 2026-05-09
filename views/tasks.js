@@ -33,6 +33,19 @@ let _claims  = null;
 let _prompts = [];
 let _currentIndex = 0;
 
+// Whether this Reviewer has completed at least one task before this session.
+// Used to skip the welcome gate on return visits — returning Reviewers go
+// directly to the first prompt rather than the orientation screen.
+let _isReturningReviewer = false;
+
+// Cached reference to the tasks-content container — needed by the onSnapshot
+// listener so it can re-render without re-running the full init path.
+let _tasksContainer = null;
+
+// Unsubscribe handle for the pending tasks onSnapshot listener.
+// Stored so it can be torn down if the view is unmounted.
+let _tasksSnapshotUnsub = null;
+
 // ---------------------------------------------------------------------------
 // Entry point — called by app.js after auth.
 // claims includes: orgId, uid, email, role, and any Reviewer-specific
@@ -47,6 +60,12 @@ export async function initTasks(orgId, uid, claims) {
 
     const container = document.getElementById('tasks-content');
     if (!container) return;
+    _tasksContainer = container;
+
+    // Determine whether this is a returning Reviewer by checking for any
+    // previously completed task. If at least one completed task exists, we
+    // skip the orientation welcome screen on subsequent visits.
+    _isReturningReviewer = await _checkHasCompletedTask(orgId, uid);
 
     // Load any pending prompts for this Reviewer from Firestore
     _prompts = await _fetchPendingPrompts(orgId, uid);
@@ -54,18 +73,88 @@ export async function initTasks(orgId, uid, claims) {
 
     if (_prompts.length === 0) {
         renderAllClear(container);
+        _startTasksSnapshot(orgId, uid);
         return;
     }
 
     _currentIndex = 0;
-    renderReviewerWelcome(container);
+    // First-time Reviewers see the orientation welcome screen.
+    // Returning Reviewers go straight to the first prompt.
+    if (_isReturningReviewer) {
+        renderPrompt(container, _prompts[_currentIndex]);
+    } else {
+        renderReviewerWelcome(container);
+    }
+    _startTasksSnapshot(orgId, uid);
 }
 
 // ---------------------------------------------------------------------------
-// Fetch pending prompts addressed to this Reviewer.
-// Prompts are stored as tasks on the Reviewer's user document.
-// Returns an array of prompt objects, capped at 5 per session.
+// Check whether this Reviewer has ever completed a task.
+// Returns true if at least one completed task document exists.
+// Used to decide whether to show the orientation welcome screen.
 // ---------------------------------------------------------------------------
+async function _checkHasCompletedTask(orgId, uid) {
+    const { db } = await import('../firebase.js');
+    const { collection, query, where, limit, getDocs } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    try {
+        const ref = collection(db, 'organisations', orgId, 'users', uid, 'tasks');
+        const q   = query(ref, where('status', '==', 'completed'), limit(1));
+        const snap = await getDocs(q);
+        return !snap.empty;
+    } catch (err) {
+        console.warn('LORE tasks.js: Could not check completed tasks.', err);
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Start an onSnapshot listener on this Reviewer's pending tasks.
+// When new tasks arrive while they are on the session-complete or all-clear
+// screen, the view re-initialises so they can act on them immediately
+// without a page refresh.
+// The listener is stored in _tasksSnapshotUnsub so it can be torn down
+// if needed. It only triggers a re-render when the current screen is idle
+// (session complete or all-clear) — it does not interrupt an active session.
+// ---------------------------------------------------------------------------
+async function _startTasksSnapshot(orgId, uid) {
+    // Tear down any previous listener before starting a new one
+    if (_tasksSnapshotUnsub) { _tasksSnapshotUnsub(); _tasksSnapshotUnsub = null; }
+
+    const { db } = await import('../firebase.js');
+    const { collection, query, where, orderBy, limit, onSnapshot } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    const ref = collection(db, 'organisations', orgId, 'users', uid, 'tasks');
+    const q   = query(ref, where('status', '==', 'pending'), orderBy('createdAt', 'asc'), limit(5));
+
+    // Track whether this is the initial snapshot fire so we do not
+    // re-render immediately on mount when we have already rendered.
+    let isFirstFire = true;
+
+    _tasksSnapshotUnsub = onSnapshot(q, snap => {
+        if (isFirstFire) { isFirstFire = false; return; }
+
+        // Only act if the Reviewer is currently on an idle screen.
+        // If they are mid-session, do not interrupt — they will see the
+        // new tasks in the next natural cycle after session complete.
+        const container = _tasksContainer;
+        if (!container) return;
+
+        const newPrompts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        console.log('LORE tasks.js: onSnapshot fired — pending tasks now:', newPrompts.length);
+
+        if (newPrompts.length > 0 && _currentIndex >= _prompts.length) {
+            // We are on the idle screen — new tasks arrived. Restart.
+            _prompts = newPrompts;
+            _currentIndex = 0;
+            _isReturningReviewer = true; // definitely returning at this point
+            renderPrompt(container, _prompts[_currentIndex]);
+        }
+    }, err => {
+        console.warn('LORE tasks.js: tasks onSnapshot error.', err);
+    });
+}
 async function _fetchPendingPrompts(orgId, uid) {
     // Import Firestore inline to avoid a top-level dependency
     const { db } = await import('../firebase.js');
@@ -118,23 +207,47 @@ async function _markPromptComplete(orgId, uid, promptId) {
 }
 
 // ---------------------------------------------------------------------------
-// SCREEN: Reviewer welcome — shown once per session before the first prompt.
-// Gives the Reviewer just enough context to understand what they are doing
-// without revealing that knowledge is being captured or structured.
+// SCREEN: Reviewer welcome — shown once per session before the first prompt,
+// only for first-time Reviewers. Returning Reviewers skip this screen and
+// go directly to the first prompt.
 // Warm, brief, action-oriented. Not a tutorial.
+// Copy rule: no mention of training, knowledge base, or capture.
 // ---------------------------------------------------------------------------
 function renderReviewerWelcome(container) {
     const count = _prompts.length;
     container.innerHTML = `
         <div style="max-width: 480px;">
-            <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-3);">Your input</p>
-            <h2 style="margin-bottom: var(--space-4); line-height: 1.3;">You have ${count} quick thing${count !== 1 ? 's' : ''} to review</h2>
-            <p class="text-secondary" style="line-height: 1.7; margin-bottom: var(--space-6);">
-                These are situations your team has been working through. Your perspective — what looks right, what feels off, what a more experienced read would look like — helps make the training sharper for everyone.
+            <div style="
+                display: inline-flex;
+                align-items: center;
+                gap: var(--space-2);
+                background: rgba(61,139,110,0.08);
+                border: 1px solid rgba(61,139,110,0.18);
+                border-radius: var(--radius-md);
+                padding: var(--space-2) var(--space-3);
+                margin-bottom: var(--space-5);
+            ">
+                <span style="color: var(--sage); font-size: var(--text-sm);">●</span>
+                <span style="font-size: var(--text-xs); color: var(--sage); font-weight: 600; letter-spacing: 0.04em;">
+                    Your input matters here
+                </span>
+            </div>
+
+            <h2 style="margin-bottom: var(--space-4); line-height: 1.3;">
+                You have
+                <span style="color: var(--ember);">${count}</span>
+                quick thing${count !== 1 ? 's' : ''} to review
+            </h2>
+
+            <p class="text-secondary" style="line-height: 1.7; margin-bottom: var(--space-4);">
+                These are situations your team has been working through.
+                Your perspective — what looks right, what feels off, what a more
+                experienced read would look like — helps sharpen how the team handles these.
             </p>
-            <p class="text-secondary text-sm" style="margin-bottom: var(--space-6);">
+            <p class="text-secondary text-sm" style="line-height: 1.7; margin-bottom: var(--space-6);">
                 Each one takes about a minute. You can stop at any point and pick up where you left off.
             </p>
+
             <button class="btn btn-primary" id="reviewer-begin" style="width: 100%;">
                 Get started
             </button>
@@ -225,9 +338,16 @@ function renderScenarioReview(container, prompt, progress) {
         </div>
     `;
 
-    // "Yes, this tracks" — no useful extraction, just advance
+    // "Yes, this tracks" — no useful extraction, just advance.
+    // Show minimum 600ms saving state so the click registers visually.
     document.getElementById('flag-yes')?.addEventListener('click', async () => {
-        await _markPromptComplete(_orgId, _uid, prompt.id);
+        const btn = document.getElementById('flag-yes');
+        btn.disabled = true;
+        btn.textContent = 'Saving\u2026';
+        await Promise.all([
+            _markPromptComplete(_orgId, _uid, prompt.id),
+            new Promise(r => setTimeout(r, 600)),
+        ]);
         advanceToNext(container);
     });
 
@@ -264,7 +384,7 @@ function renderScenarioReview(container, prompt, progress) {
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
-        renderThankYou(container, () => advanceToNext(container));
+        renderThankYou(container, () => advanceToNext(container), null);
     });
 }
 
@@ -297,20 +417,52 @@ function renderRecipeReview(container, prompt, progress) {
           }</ol>`
         : `<p style="line-height: 1.8;">${prompt.actionSequence ?? ''}</p>`;
 
+    // The trigger becomes the active question the Reviewer is answering.
+    // Format: "[trigger] — is this how we approach it?"
+    const triggerQuestion = `${prompt.trigger ?? ''} — is this how we approach it?`;
+
+    // Returning Reviewers see a compact progress header instead of the welcome screen.
+    // This gives the count prominence without a full interstitial.
+    const progressHeader = _isReturningReviewer ? `
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-3) var(--space-4);
+            background: rgba(44,36,22,0.03);
+            border-radius: var(--radius-md);
+            margin-bottom: var(--space-5);
+            border: 1px solid rgba(44,36,22,0.07);
+        ">
+            <span style="font-size: var(--text-sm); font-weight: 600; color: var(--ink);">Your input today</span>
+            <span style="
+                font-size: var(--text-xs);
+                font-weight: 700;
+                color: var(--ember);
+                background: rgba(180,80,30,0.08);
+                border-radius: 100px;
+                padding: 2px var(--space-3);
+            ">${progress}</span>
+        </div>
+    ` : `
+        <div class="flex-between mb-2">
+            <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em;">Quick check</p>
+            <p class="text-xs text-secondary">${progress}</p>
+        </div>
+    `;
+
     container.innerHTML = `
         <div>
-            <div class="flex-between mb-2">
-                <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em;">Quick check</p>
-                <p class="text-xs text-secondary">${progress}</p>
+            ${progressHeader}
+
+            <div class="card mt-4" style="border-left: 3px solid var(--ember);">
+                <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--sage); font-weight: 600; margin-bottom: var(--space-1);">Skill</p>
+                <h3 style="font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-3); line-height: 1.3;">${prompt.skillName ?? ''}</h3>
+                <p style="font-size: var(--text-sm); line-height: 1.7; color: var(--ink);">${triggerQuestion}</p>
             </div>
 
             <div class="card mt-4">
-                <p class="label mb-1">When this comes up</p>
-                <p class="text-secondary" style="font-size: var(--text-sm); line-height: 1.7;">${prompt.trigger ?? ''}</p>
-            </div>
-
-            <div class="card mt-4">
-                <p class="label mb-3">Our current thinking on how to handle it</p>
+                <p class="label mb-3">Here's what we have documented</p>
                 <div style="font-size: var(--text-sm); color: var(--ink); line-height: 1.7;">
                     ${stepsHtml}
                 </div>
@@ -347,9 +499,16 @@ function renderRecipeReview(container, prompt, progress) {
         </div>
     `;
 
-    // Confirm — accurate as-is, no correction needed, advance
+    // Confirm — accurate as-is, no correction needed.
+    // Show a minimum 600ms saving state so the click always registers visually.
     document.getElementById('recipe-confirm')?.addEventListener('click', async () => {
-        await _markPromptComplete(_orgId, _uid, prompt.id);
+        const btn = document.getElementById('recipe-confirm');
+        btn.disabled = true;
+        btn.textContent = 'Saving\u2026';
+        const [result] = await Promise.all([
+            _markPromptComplete(_orgId, _uid, prompt.id),
+            new Promise(r => setTimeout(r, 600)),
+        ]);
         advanceToNext(container);
     });
 
@@ -389,7 +548,7 @@ function renderRecipeReview(container, prompt, progress) {
 
         const btn = document.getElementById('recipe-submit');
         btn.disabled = true;
-        btn.textContent = 'Saving…';
+        btn.textContent = 'Saving\u2026';
 
         // Stage the Reviewer's response as a raw extraction.
         // rawPrompt carries the full context — trigger and action sequence —
@@ -402,7 +561,7 @@ function renderRecipeReview(container, prompt, progress) {
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
-        renderThankYou(container, () => advanceToNext(container));
+        renderThankYou(container, () => advanceToNext(container), prompt.skillName);
     });
 }
 
@@ -479,23 +638,44 @@ function renderMentorshipNote(container, prompt, progress) {
         });
 
         await _markPromptComplete(_orgId, _uid, prompt.id);
-        renderThankYou(container, () => advanceToNext(container));
+        renderThankYou(container, () => advanceToNext(container), null);
     });
 }
 
 // ---------------------------------------------------------------------------
 // SCREEN: Brief confirmation after submitting.
-// Warm but quick — does not over-explain what just happened.
-// Auto-advances after 1.5 seconds so it feels fluid, not transactional.
+// Warm and considered — the Reviewer just contributed expert knowledge and
+// should feel that weight, even subtly. Not celebratory, but not a system
+// notification either. Holds for 2.5 seconds so it cannot be blinked past.
+// skillName is optional — shown as a contextual line when available.
 // ---------------------------------------------------------------------------
-function renderThankYou(container, next) {
+function renderThankYou(container, next, skillName) {
+    const contextLine = skillName
+        ? `<p class="text-secondary text-sm mt-3" style="line-height: 1.6;">Your read on <strong>${skillName}</strong> has been noted.</p>`
+        : `<p class="text-secondary mt-2">Your perspective helps the team handle these situations better.</p>`;
+
     container.innerHTML = `
-        <div class="empty-state">
-            <p style="color: var(--sage); font-size: var(--text-lg); font-weight: 500;">✓ Got it</p>
-            <p class="text-secondary mt-2">Your feedback helps the team get better.</p>
+        <div style="
+            max-width: 400px;
+            padding: var(--space-8) var(--space-6);
+            background: rgba(61,139,110,0.05);
+            border: 1px solid rgba(61,139,110,0.15);
+            border-radius: var(--radius-lg);
+            text-align: center;
+        ">
+            <div style="
+                width: 48px; height: 48px;
+                border-radius: 50%;
+                background: rgba(61,139,110,0.12);
+                display: flex; align-items: center; justify-content: center;
+                margin: 0 auto var(--space-4);
+                font-size: 22px;
+            ">✓</div>
+            <p style="font-size: var(--text-lg); font-weight: 600; color: var(--sage);">Noted — thank you</p>
+            ${contextLine}
         </div>
     `;
-    setTimeout(next, 1500);
+    setTimeout(next, 2500);
 }
 
 // ---------------------------------------------------------------------------

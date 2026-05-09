@@ -4,23 +4,22 @@
 // extraction pipeline, domain management, and team progress.
 //
 // Two tabs only:
-//   Knowledge Base — summary header, three sub-sections:
-//                    Add knowledge (default) — upload form, inline review queue,
-//                    corpus analysis action (CORP-03).
-//                    Recipes — approved recipes browsable by domain.
-//                    Skill areas — domain management (DOMAIN-02).
+//   Knowledge Base — summary header, four sub-sections:
+//                    Add knowledge (default) — upload form and corpus analysis.
+//                    Review queue            — pending extractions to approve/reject.
+//                    Recipes                 — approved recipes browsable by domain.
+//                    Skill areas             — domain management (DOMAIN-02).
 //   Team           — employee list with track assignment (IA-02), team
 //                    progress, time to readiness, Reviewer activity.
 //
 // Knowledge Base sub-nav order and defaults:
-//   Add knowledge (default) | Recipes | Skill areas
-//   The review queue lives inline below the upload form in Add knowledge —
-//   not as a separate tab. This keeps the upload-first flow intact while
-//   giving the Manager immediate sight of what is waiting for review.
+//   Add knowledge (default) | Review queue | Recipes | Skill areas
+//   The review queue is now its own sub-section so the Manager can reach it
+//   directly from the "To review" stat card without scrolling past the upload form.
 //
 // First-run state: new orgs (non-demo) land on a focused panel with only
 // the document upload and a brief value statement. Normal dashboard renders
-// once first content exists. Demo org always renders normally.
+// once first content exists.
 //
 // This is the Manager's full intelligence surface. Every other role sees
 // a focused, single-purpose screen. The Manager sees everything.
@@ -72,7 +71,7 @@ let _teamListUnsub = null;
 // Which sub-section within the Knowledge Base tab is active.
 // Default is 'upload' — the upload-first principle means the Manager always
 // lands on the Add knowledge section, not the recipe list.
-// 'upload' | 'recipes' | 'domains'
+// 'upload' | 'queue' | 'recipes' | 'domains'
 let _activeKnowledgeSection = 'upload';
 
 // Which sub-section within the Team tab is active.
@@ -386,9 +385,10 @@ function renderKnowledgeTab(container) {
                 </div>
             </div>
 
-            <!-- Knowledge Base sub-navigation — three tabs with descriptions -->
+            <!-- Knowledge Base sub-navigation — four tabs with descriptions -->
             <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                ${_kbNavTab('upload',  'Add knowledge',  'Upload documents and review extracted content')}
+                ${_kbNavTab('upload',  'Add knowledge',  'Upload documents and extract content')}
+                ${_kbNavTab('queue',   'Review queue',   'Approve or reject extracted content', pendingCount)}
                 ${_kbNavTab('recipes', 'Recipes',        'Browse your approved knowledge base')}
                 ${_kbNavTab('domains', 'Skill areas',    'Organise recipes into training tracks')}
             </div>
@@ -398,13 +398,14 @@ function renderKnowledgeTab(container) {
         </div>
     `;
 
-    // Stat card click handlers — each jumps to its corresponding sub-section
+    // Stat card click handlers — each jumps to its corresponding sub-section.
+    // 'To review' now routes directly to the Review queue sub-section.
     document.getElementById('kb-recipes-card')?.addEventListener('click', () => _switchKbSection('recipes'));
     document.getElementById('kb-domains-card')?.addEventListener('click', () => _switchKbSection('domains'));
-    document.getElementById('kb-pending-card')?.addEventListener('click', () => _switchKbSection('upload'));
+    document.getElementById('kb-pending-card')?.addEventListener('click', () => _switchKbSection('queue'));
 
     // Sub-nav handlers
-    ['upload', 'recipes', 'domains'].forEach(s => {
+    ['upload', 'queue', 'recipes', 'domains'].forEach(s => {
         document.getElementById(`kb-tab-${s}`)?.addEventListener('click', () => {
             _switchKbSection(s);
         });
@@ -416,14 +417,18 @@ function renderKnowledgeTab(container) {
 // Each sub-nav button shows a label and a one-line description beneath it.
 // The description gives the Manager enough context to know which section to
 // go to without clicking around.
-function _kbNavTab(id, label, description) {
+// badge is an optional number — when > 0, a queue-badge is shown next to the label.
+function _kbNavTab(id, label, description, badge) {
+    const badgeHtml = badge > 0
+        ? `<span class="queue-badge">${badge}</span>`
+        : '';
     return `
         <button
             id="kb-tab-${id}"
             class="btn btn-secondary"
             style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4); display: flex; flex-direction: column; align-items: flex-start; height: auto; white-space: normal; text-align: left; gap: var(--space-1);"
         >
-            <span style="font-weight: 600;">${label}</span>
+            <span style="font-weight: 600;">${label}${badgeHtml}</span>
             <span style="font-size: var(--text-xs); color: var(--warm-grey); font-weight: 400;">${description}</span>
         </button>
     `;
@@ -433,7 +438,7 @@ function _switchKbSection(section) {
     _activeKnowledgeSection = section;
 
     // Update sub-nav active styles
-    ['upload', 'recipes', 'domains'].forEach(s => {
+    ['upload', 'queue', 'recipes', 'domains'].forEach(s => {
         const btn = document.getElementById(`kb-tab-${s}`);
         if (!btn) return;
         if (s === section) {
@@ -455,6 +460,7 @@ function _switchKbSection(section) {
 
     switch (section) {
         case 'upload':  renderKbUpload(el);   break;
+        case 'queue':   renderKbReviewQueue(el); break;
         case 'recipes': renderKbRecipes(el);  break;
         case 'domains': renderKbDomains(el);  break;
         default:        renderKbUpload(el);
@@ -464,8 +470,8 @@ function _switchKbSection(section) {
 // ---------------------------------------------------------------------------
 // KB SUB-SECTION: Add knowledge
 // Upload form at the top. Corpus analysis action below it (CORP-03).
-// Inline review queue below that — so the Manager never has to navigate away
-// to see what is waiting for their review after an upload.
+// The review queue is now its own sub-section (renderKbReviewQueue) so the
+// Manager can reach it directly without scrolling past the upload form.
 // ---------------------------------------------------------------------------
 function renderKbUpload(el) {
     // In-progress spinner during document processing
@@ -660,19 +666,9 @@ function renderKbUpload(el) {
 
         el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${result.ok && result.extractionsCreated > 0 ? '' : ''}</div>`;
 
-        // "Review what we found" scrolls past the aha card to the queue below
+        // "Review what we found" switches to the Review queue sub-section.
         document.getElementById('upload-review-btn')?.addEventListener('click', () => {
-            // Re-render with the queue visible below the aha card
-            el.innerHTML = `<div>${resultHtml}${_renderCorpusAnalysisCard()}${_renderInlineQueue()}</div>`;
-            document.getElementById('upload-reset')?.addEventListener('click', () => {
-                _uploadState = { inProgress: false, docName: '', docText: '', result: null, errorMsg: '', chunkProgress: null, partial: false };
-                renderKbUpload(el);
-            });
-            _attachInlineQueueHandlers(el);
-            _attachCorpusAnalysisHandlers();
-            // Scroll to the queue
-            const queueEl = document.getElementById('inline-queue-list');
-            if (queueEl) queueEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            _switchKbSection('queue');
         });
 
         document.getElementById('upload-reset')?.addEventListener('click', () => {
@@ -684,7 +680,9 @@ function renderKbUpload(el) {
         return;
     }
 
-    // Default: upload form + corpus analysis card + inline review queue
+    // Default: upload form + corpus analysis card
+    // The review queue has moved to its own sub-section — the Manager reaches
+    // it via the Review queue tab or the 'To review' stat card.
     el.innerHTML = `
         <div>
             <div class="card" style="margin-bottom: var(--space-6);">
@@ -697,7 +695,6 @@ function renderKbUpload(el) {
                 ${_renderUploadForm()}
             </div>
             ${_renderCorpusAnalysisCard()}
-            ${_renderInlineQueue()}
         </div>
     `;
 
@@ -706,7 +703,6 @@ function renderKbUpload(el) {
         renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
     });
 
-    _attachInlineQueueHandlers(el);
     _attachCorpusAnalysisHandlers();
 }
 
@@ -771,8 +767,19 @@ function _attachCorpusAnalysisHandlers() {
     });
 }
 
-// Inline review queue — rendered inside Add knowledge below the upload form.
-// The Manager reviews extractions in the same flow as uploading — no tab switch needed.
+// ---------------------------------------------------------------------------
+// KB SUB-SECTION: Review queue
+// Dedicated sub-section for pending extractions — reached via the Review queue
+// sub-nav tab or the 'To review' stat card. Reuses _renderInlineQueue and
+// _attachInlineQueueHandlers so the card logic stays in one place.
+// ---------------------------------------------------------------------------
+function renderKbReviewQueue(el) {
+    el.innerHTML = `<div>${_renderInlineQueue()}</div>`;
+    _attachInlineQueueHandlers(el);
+}
+
+// Inline review queue — reusable HTML block for pending extractions.
+// Now rendered via renderKbReviewQueue in the dedicated sub-section.
 function _renderInlineQueue() {
     if (_pending.length === 0) {
         return `
@@ -1472,6 +1479,10 @@ function renderKbRecipes(el) {
             const isOpen = panel.style.display !== 'none';
             panel.style.display = isOpen ? 'none' : 'block';
             if (isOpen) return;
+            // Scroll the panel into view so the Manager does not have to
+            // hunt for it — especially important when the recipe card is
+            // expanded and the panel opens below a long body.
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
             const reviewerSelect = document.getElementById(`review-reviewer-${r.id}`);
             const statusEl       = document.getElementById(`review-status-${r.id}`);
@@ -1510,9 +1521,54 @@ function renderKbRecipes(el) {
                 // training review. No scenario is needed for this path.
                 const result = await queueRecipeReview(_orgId, r.id, reviewerId);
                 btn.disabled = false; btn.textContent = 'Send';
-                if (statusEl) statusEl.textContent = result.ok
-                    ? "Sent. They'll see it in their next session."
-                    : result.error ?? 'Could not send. Try again.';
+                if (!result.ok) {
+                    if (statusEl) statusEl.textContent = result.error ?? 'Could not send. Try again.';
+                    return;
+                }
+                // Replace panel content with a confirmation state.
+                // The Manager can re-open the send panel if they want to route
+                // the same recipe to a different Reviewer.
+                const panel = document.getElementById(`recipe-review-panel-${r.id}`);
+                if (panel) {
+                    panel.innerHTML = `
+                        <div style="display:flex;align-items:center;gap:var(--space-3);">
+                            <span style="
+                                color: var(--sage);
+                                font-size: var(--text-lg);
+                                font-weight: 600;
+                                background: rgba(61,139,110,0.1);
+                                border-radius: 50%;
+                                width: 32px; height: 32px;
+                                display: inline-flex;
+                                align-items: center;
+                                justify-content: center;
+                                flex-shrink: 0;
+                            ">✓</span>
+                            <div>
+                                <p style="font-size:var(--text-sm);font-weight:600;color:var(--sage);">Sent for review</p>
+                                <p style="font-size:var(--text-xs);color:var(--warm-grey);margin-top:2px;">They'll see it in their next session.</p>
+                            </div>
+                        </div>
+                        <button
+                            id="recipe-review-resend-${r.id}"
+                            style="
+                                background:none;border:none;cursor:pointer;padding:0;
+                                font-size:var(--text-xs);color:var(--warm-grey);
+                                text-decoration:underline;text-underline-offset:2px;
+                                margin-top:var(--space-3);display:block;
+                            "
+                        >Send to someone else</button>
+                    `;
+                    // 'Send to someone else' resets the panel to the dropdown state.
+                    // The Send button click handler needs to be re-attached because
+                    // the panel innerHTML has been replaced.
+                    document.getElementById(`recipe-review-resend-${r.id}`)?.addEventListener('click', () => {
+                        panel.style.display = 'none';
+                        // Trigger the Send for review button again to re-open
+                        // a fresh panel with a clean dropdown.
+                        document.getElementById(`recipe-review-${r.id}`)?.click();
+                    });
+                }
             });
         });
     });

@@ -175,6 +175,41 @@ function renderHoldingScreen(container) {
             </p>
         </div>
     `;
+
+    // Listen for the Manager assigning domains to this Employee.
+    // When assignedDomains appears on the user document, re-run initTraining
+    // so the Employee transitions seamlessly into the training loop without
+    // needing to refresh the page.
+    // The listener is torn down by re-running initTraining, which replaces
+    // the container content and re-establishes its own state.
+    _startDomainAssignmentListener(container);
+}
+
+// ---------------------------------------------------------------------------
+// Start an onSnapshot listener on this Employee's user document.
+// Fires when the Manager assigns domains (sets assignedDomains on the doc).
+// On the first non-empty assignedDomains, re-runs initTraining.
+// ---------------------------------------------------------------------------
+async function _startDomainAssignmentListener(container) {
+    const { db } = await import('../firebase.js');
+    const { doc, onSnapshot } =
+        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+
+    let isFirstFire = true;
+    const ref = doc(db, 'organisations', _orgId, 'users', _uid);
+
+    const unsub = onSnapshot(ref, snap => {
+        if (isFirstFire) { isFirstFire = false; return; }
+        if (!snap.exists()) return;
+        const assigned = snap.data().assignedDomains ?? [];
+        if (assigned.length > 0) {
+            console.log('LORE training.js: Domains assigned — re-running initTraining.');
+            unsub(); // tear down this listener before re-init
+            initTraining(_orgId, _uid, _state);
+        }
+    }, err => {
+        console.warn('LORE training.js: domain assignment onSnapshot error.', err);
+    });
 }
 
 // ---------------------------------------------------------------------------
