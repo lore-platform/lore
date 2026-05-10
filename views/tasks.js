@@ -46,6 +46,11 @@ let _tasksContainer = null;
 // Stored so it can be torn down if the view is unmounted.
 let _tasksSnapshotUnsub = null;
 
+// Skill names completed during this session — accumulated across all prompt
+// types and used to build the summary line on the final thank-you screen.
+// Reset to [] at the start of each initTasks call.
+let _completedSkillNames = [];
+
 // ---------------------------------------------------------------------------
 // Entry point — called by app.js after auth.
 // claims includes: orgId, uid, email, role, and any Reviewer-specific
@@ -61,6 +66,9 @@ export async function initTasks(orgId, uid, claims) {
     const container = document.getElementById('tasks-content');
     if (!container) return;
     _tasksContainer = container;
+
+    // Reset the session-level completed skill names tracker.
+    _completedSkillNames = [];
 
     // Determine whether this is a returning Reviewer by checking for any
     // previously completed task. If at least one completed task exists, we
@@ -451,23 +459,60 @@ function renderRecipeReview(container, prompt, progress) {
         </div>
     `;
 
+    // Build prev/next navigation — view-only, no logic impact.
+    // Allows the Reviewer to look ahead at what else is in the session
+    // without acting on anything. Only shown when there are multiple prompts.
+    const hasPrev = _currentIndex > 0;
+    const hasNext = _currentIndex < _prompts.length - 1;
+    const navHtml = _prompts.length > 1 ? `
+        <div style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--space-3);
+        ">
+            <button
+                id="review-prev"
+                style="
+                    background: none; border: none; cursor: ${hasPrev ? 'pointer' : 'default'};
+                    color: ${hasPrev ? 'var(--ink)' : 'rgba(44,36,22,0.2)'};
+                    font-size: var(--text-sm); padding: 0;
+                "
+                ${hasPrev ? '' : 'disabled'}
+            >← Previous</button>
+            <button
+                id="review-next"
+                style="
+                    background: none; border: none; cursor: ${hasNext ? 'pointer' : 'default'};
+                    color: ${hasNext ? 'var(--ink)' : 'rgba(44,36,22,0.2)'};
+                    font-size: var(--text-sm); padding: 0;
+                "
+                ${hasNext ? '' : 'disabled'}
+            >Next →</button>
+        </div>
+    ` : '';
+
     container.innerHTML = `
         <div>
             ${progressHeader}
 
-            <div class="card mt-4" style="border-left: 3px solid var(--ember);">
-                <p style="font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--sage); font-weight: 600; margin-bottom: var(--space-1);">Skill</p>
-                <h3 style="font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-3); line-height: 1.3;">${prompt.skillName ?? ''}</h3>
-                <p style="font-size: var(--text-sm); line-height: 1.7; color: var(--ink);">${triggerQuestion}</p>
+            ${navHtml}
+
+            <!-- Question first — gives the Reviewer immediate orientation -->
+            <div class="card mt-4">
+                <p style="font-size: var(--text-base); font-weight: 500; line-height: 1.6; color: var(--ink);">${triggerQuestion}</p>
             </div>
 
+            <!-- Steps second — what has been documented -->
             <div class="card mt-4">
-                <p class="label mb-3">Here's what we have documented</p>
+                <p class="label mb-1" style="margin-bottom: var(--space-1);">Here's what we have documented</p>
+                <p class="text-secondary text-xs" style="margin-bottom: var(--space-3); font-style: italic;">${prompt.skillName ?? ''}</p>
                 <div style="font-size: var(--text-sm); color: var(--ink); line-height: 1.7;">
                     ${stepsHtml}
                 </div>
             </div>
 
+            <!-- Response buttons third -->
             <div class="card mt-4">
                 <p class="label mb-4">Does this match how you'd actually approach it?</p>
 
@@ -499,12 +544,22 @@ function renderRecipeReview(container, prompt, progress) {
         </div>
     `;
 
+    // Prev/Next navigation handlers — view only, no state mutation
+    document.getElementById('review-prev')?.addEventListener('click', () => {
+        if (_currentIndex > 0) { _currentIndex--; renderPrompt(container, _prompts[_currentIndex]); }
+    });
+    document.getElementById('review-next')?.addEventListener('click', () => {
+        if (_currentIndex < _prompts.length - 1) { _currentIndex++; renderPrompt(container, _prompts[_currentIndex]); }
+    });
+
     // Confirm — accurate as-is, no correction needed.
     // Show a minimum 600ms saving state so the click always registers visually.
     document.getElementById('recipe-confirm')?.addEventListener('click', async () => {
         const btn = document.getElementById('recipe-confirm');
         btn.disabled = true;
         btn.textContent = 'Saving\u2026';
+        // Record skill name for session summary
+        if (prompt.skillName) _completedSkillNames.push(prompt.skillName);
         const [result] = await Promise.all([
             _markPromptComplete(_orgId, _uid, prompt.id),
             new Promise(r => setTimeout(r, 600)),
@@ -560,6 +615,8 @@ function renderRecipeReview(container, prompt, progress) {
             rawPrompt:  `When this comes up: ${prompt.trigger ?? ''}\n\nOur current approach:\n${prompt.actionSequence ?? ''}`,
         });
 
+        // Record skill name for session summary
+        if (prompt.skillName) _completedSkillNames.push(prompt.skillName);
         await _markPromptComplete(_orgId, _uid, prompt.id);
         renderThankYou(container, () => advanceToNext(container), prompt.skillName);
     });
@@ -692,12 +749,44 @@ function advanceToNext(container) {
 
 // ---------------------------------------------------------------------------
 // SCREEN: Session complete — all prompts in this batch have been handled.
+// If skill names were collected during the session, the summary line names
+// all of them rather than just the last one, so the Reviewer feels the
+// breadth of what they contributed.
 // ---------------------------------------------------------------------------
 function renderSessionComplete(container) {
+    let summaryLine;
+    if (_completedSkillNames.length === 0) {
+        summaryLine = 'Your perspective helps the team handle these situations better.';
+    } else if (_completedSkillNames.length === 1) {
+        summaryLine = `Your read on <strong>${_completedSkillNames[0]}</strong> has been noted.`;
+    } else {
+        // List all skill names — join with commas, 'and' before the last one
+        const listed = _completedSkillNames.length === 2
+            ? `<strong>${_completedSkillNames[0]}</strong> and <strong>${_completedSkillNames[1]}</strong>`
+            : _completedSkillNames.slice(0, -1).map(n => `<strong>${n}</strong>`).join(', ')
+                + ` and <strong>${_completedSkillNames[_completedSkillNames.length - 1]}</strong>`;
+        summaryLine = `Your input on ${listed} has been noted.`;
+    }
+
     container.innerHTML = `
-        <div class="empty-state">
-            <h3>That's everything for now</h3>
-            <p class="mt-2">You're all caught up. Thank you for your input — it makes a real difference for the team.</p>
+        <div style="
+            max-width: 400px;
+            padding: var(--space-8) var(--space-6);
+            background: rgba(61,139,110,0.05);
+            border: 1px solid rgba(61,139,110,0.15);
+            border-radius: var(--radius-lg);
+            text-align: center;
+        ">
+            <div style="
+                width: 48px; height: 48px;
+                border-radius: 50%;
+                background: rgba(61,139,110,0.12);
+                display: flex; align-items: center; justify-content: center;
+                margin: 0 auto var(--space-4);
+                font-size: 22px;
+            ">✓</div>
+            <p style="font-size: var(--text-lg); font-weight: 600; color: var(--sage);">That's everything for now</p>
+            <p class="text-secondary text-sm mt-3" style="line-height: 1.6;">${summaryLine}</p>
         </div>
     `;
 }

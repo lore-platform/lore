@@ -385,12 +385,18 @@ function renderKnowledgeTab(container) {
                 </div>
             </div>
 
-            <!-- Knowledge Base sub-navigation — four tabs with descriptions -->
-            <div style="display: flex; gap: var(--space-3); margin-bottom: var(--space-6); flex-wrap: wrap;">
-                ${_kbNavTab('upload',  'Add knowledge',  'Upload documents and extract content')}
-                ${_kbNavTab('queue',   'Review queue',   'Approve or reject extracted content', pendingCount)}
-                ${_kbNavTab('recipes', 'Recipes',        'Browse your approved knowledge base')}
-                ${_kbNavTab('domains', 'Skill areas',    'Organise recipes into training tracks')}
+            <!-- Knowledge Base sub-navigation — compact pill strip -->
+            <div style="
+                display: flex;
+                gap: var(--space-1);
+                margin-bottom: var(--space-6);
+                border-bottom: 1px solid rgba(44,36,22,0.08);
+                padding-bottom: var(--space-2);
+            ">
+                ${_kbNavTab('upload',  'Add knowledge',  '', 0)}
+                ${_kbNavTab('queue',   'Review queue',   '', pendingCount)}
+                ${_kbNavTab('recipes', 'Recipes',        '', 0)}
+                ${_kbNavTab('domains', 'Skill areas',    '', 0)}
             </div>
 
             <!-- Sub-section content -->
@@ -414,44 +420,66 @@ function renderKnowledgeTab(container) {
     _switchKbSection(_activeKnowledgeSection);
 }
 
-// Each sub-nav button shows a label and a one-line description beneath it.
-// The description gives the Manager enough context to know which section to
-// go to without clicking around.
-// badge is an optional number — when > 0, a queue-badge is shown next to the label.
+// Each sub-nav tab is a compact pill — label only, no description.
+// Active state is a filled background. badge is an optional number shown
+// inline next to the label when > 0.
 function _kbNavTab(id, label, description, badge) {
     const badgeHtml = badge > 0
-        ? `<span class="queue-badge">${badge}</span>`
+        ? `<span style="
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 18px;
+                height: 18px;
+                padding: 0 5px;
+                border-radius: 100px;
+                background: var(--ember);
+                color: #fff;
+                font-size: 10px;
+                font-weight: 700;
+                margin-left: 6px;
+                line-height: 1;
+                vertical-align: middle;
+            ">${badge}</span>`
         : '';
     return `
         <button
             id="kb-tab-${id}"
-            class="btn btn-secondary"
-            style="font-size: var(--text-sm); padding: var(--space-2) var(--space-4); display: flex; flex-direction: column; align-items: flex-start; height: auto; white-space: normal; text-align: left; gap: var(--space-1);"
-        >
-            <span style="font-weight: 600;">${label}${badgeHtml}</span>
-            <span style="font-size: var(--text-xs); color: var(--warm-grey); font-weight: 400;">${description}</span>
-        </button>
+            style="
+                display: inline-flex;
+                align-items: center;
+                gap: 0;
+                padding: var(--space-2) var(--space-4);
+                border-radius: 100px;
+                border: 1px solid transparent;
+                background: transparent;
+                font-size: var(--text-sm);
+                font-weight: 500;
+                color: var(--warm-grey);
+                cursor: pointer;
+                white-space: nowrap;
+                transition: background 0.15s, color 0.15s;
+            "
+        >${label}${badgeHtml}</button>
     `;
 }
 
 function _switchKbSection(section) {
     _activeKnowledgeSection = section;
 
-    // Update sub-nav active styles
+    // Update sub-nav active styles — pill style: filled background when active,
+    // transparent when inactive. No border manipulation needed.
     ['upload', 'queue', 'recipes', 'domains'].forEach(s => {
         const btn = document.getElementById(`kb-tab-${s}`);
         if (!btn) return;
         if (s === section) {
             btn.style.background = 'rgba(44,36,22,0.08)';
-            btn.style.borderColor = 'rgba(44,36,22,0.3)';
-            // Darken the description text slightly when active
-            const desc = btn.querySelector('span:last-child');
-            if (desc) desc.style.color = 'var(--ink)';
+            btn.style.color      = 'var(--ink)';
+            btn.style.fontWeight = '600';
         } else {
-            btn.style.background  = '';
-            btn.style.borderColor = '';
-            const desc = btn.querySelector('span:last-child');
-            if (desc) desc.style.color = '';
+            btn.style.background = 'transparent';
+            btn.style.color      = 'var(--warm-grey)';
+            btn.style.fontWeight = '500';
         }
     });
 
@@ -1373,13 +1401,34 @@ function _refreshSummaryHeader() {
         pendingCard.style.cursor = pendingCount > 0 ? 'pointer' : 'default';
     }
 
-    // Update the sub-nav queue badge if it exists
-    const queueBadge = document.querySelector('#kb-tab-upload .queue-badge');
-    if (queueBadge) {
+    // Update the Review queue tab badge inline.
+    // The badge is a <span> inside #kb-tab-queue — find it by its style
+    // signature (ember background). We update its text or remove it entirely.
+    const queueTab = document.getElementById('kb-tab-queue');
+    if (queueTab) {
+        // Remove any existing badge first
+        const existingBadge = queueTab.querySelector('span[style]');
+        if (existingBadge) existingBadge.remove();
         if (pendingCount > 0) {
-            queueBadge.textContent = pendingCount;
-        } else {
-            queueBadge.remove();
+            const badge = document.createElement('span');
+            badge.textContent = pendingCount;
+            badge.setAttribute('style', [
+                'display:inline-flex',
+                'align-items:center',
+                'justify-content:center',
+                'min-width:18px',
+                'height:18px',
+                'padding:0 5px',
+                'border-radius:100px',
+                'background:var(--ember)',
+                'color:#fff',
+                'font-size:10px',
+                'font-weight:700',
+                'margin-left:6px',
+                'line-height:1',
+                'vertical-align:middle',
+            ].join(';'));
+            queueTab.appendChild(badge);
         }
     }
 }
@@ -1473,15 +1522,28 @@ function renderKbRecipes(el) {
             }
         });
 
-        document.getElementById(`recipe-review-${r.id}`)?.addEventListener('click', async () => {
+        // _openReviewPanel populates and wires the send panel for a given recipe.
+        // Extracted as a named async function so it can be called both on the
+        // initial 'Send for review' click and after 'Send to someone else' resets
+        // the panel — without triggering the outer toggle handler again.
+        async function _openReviewPanel() {
             const panel = document.getElementById(`recipe-review-panel-${r.id}`);
             if (!panel) return;
-            const isOpen = panel.style.display !== 'none';
-            panel.style.display = isOpen ? 'none' : 'block';
-            if (isOpen) return;
-            // Scroll the panel into view so the Manager does not have to
-            // hunt for it — especially important when the recipe card is
-            // expanded and the panel opens below a long body.
+
+            // Restore the original panel markup so the dropdown is fresh
+            panel.innerHTML = `
+                <p class="label" style="margin-bottom: var(--space-3);">Send for Reviewer validation</p>
+                <p class="text-secondary text-sm" style="margin-bottom: var(--space-3); line-height: 1.6;">
+                    A Reviewer will see this as a quality check — they will not know it is part of a knowledge base.
+                </p>
+                <select class="input mb-3" id="review-reviewer-${r.id}" style="margin-bottom: var(--space-3);">
+                    <option value="">Choose a Reviewer…</option>
+                </select>
+                <p id="review-status-${r.id}" class="text-xs text-secondary mb-2"></p>
+                <button class="btn btn-primary" id="review-send-${r.id}">Send</button>
+            `;
+
+            panel.style.display = 'block';
             panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
             const reviewerSelect = document.getElementById(`review-reviewer-${r.id}`);
@@ -1526,11 +1588,11 @@ function renderKbRecipes(el) {
                     return;
                 }
                 // Replace panel content with a confirmation state.
-                // The Manager can re-open the send panel if they want to route
-                // the same recipe to a different Reviewer.
-                const panel = document.getElementById(`recipe-review-panel-${r.id}`);
-                if (panel) {
-                    panel.innerHTML = `
+                // 'Send to someone else' calls _openReviewPanel() directly — no
+                // .click() on the outer button — so the dropdown is always fresh.
+                const panelEl = document.getElementById(`recipe-review-panel-${r.id}`);
+                if (panelEl) {
+                    panelEl.innerHTML = `
                         <div style="display:flex;align-items:center;gap:var(--space-3);">
                             <span style="
                                 color: var(--sage);
@@ -1549,27 +1611,32 @@ function renderKbRecipes(el) {
                                 <p style="font-size:var(--text-xs);color:var(--warm-grey);margin-top:2px;">They'll see it in their next session.</p>
                             </div>
                         </div>
-                        <button
-                            id="recipe-review-resend-${r.id}"
-                            style="
-                                background:none;border:none;cursor:pointer;padding:0;
-                                font-size:var(--text-xs);color:var(--warm-grey);
-                                text-decoration:underline;text-underline-offset:2px;
-                                margin-top:var(--space-3);display:block;
-                            "
-                        >Send to someone else</button>
+                        <button id="recipe-review-resend-${r.id}" style="
+                            background:none;border:none;cursor:pointer;padding:0;
+                            font-size:var(--text-xs);color:var(--warm-grey);
+                            text-decoration:underline;text-underline-offset:2px;
+                            margin-top:var(--space-3);display:block;
+                        ">Send to someone else</button>
                     `;
-                    // 'Send to someone else' resets the panel to the dropdown state.
-                    // The Send button click handler needs to be re-attached because
-                    // the panel innerHTML has been replaced.
+                    // Re-open a fresh populated panel directly — do not use .click()
+                    // on the outer toggle button as that would re-enter the toggle
+                    // and close the panel if it was already open.
                     document.getElementById(`recipe-review-resend-${r.id}`)?.addEventListener('click', () => {
-                        panel.style.display = 'none';
-                        // Trigger the Send for review button again to re-open
-                        // a fresh panel with a clean dropdown.
-                        document.getElementById(`recipe-review-${r.id}`)?.click();
+                        _openReviewPanel();
                     });
                 }
             });
+        }
+
+        document.getElementById(`recipe-review-${r.id}`)?.addEventListener('click', async () => {
+            const panel = document.getElementById(`recipe-review-panel-${r.id}`);
+            if (!panel) return;
+            // Toggle: close if already open, open if closed.
+            if (panel.style.display !== 'none') {
+                panel.style.display = 'none';
+                return;
+            }
+            await _openReviewPanel();
         });
     });
 }
