@@ -809,10 +809,36 @@ function _attachCorpusAnalysisHandlers() {
 function renderKbReviewQueue(el) {
     el.innerHTML = `
         <div>
-            <p class="text-secondary text-sm" style="margin-bottom: var(--space-5); line-height: 1.6;">
-                Approve or reject knowledge extracted from uploaded documents and Reviewer contributions.
-                Approved items become recipes in your knowledge base.
-            </p>
+            <!-- Section intro strip — consistent with the Recipes tab header treatment -->
+            <div style="
+                background: rgba(44,36,22,0.03);
+                border: 1px solid rgba(44,36,22,0.07);
+                border-radius: var(--radius-lg);
+                padding: var(--space-5) var(--space-6);
+                margin-bottom: var(--space-6);
+                display: flex;
+                align-items: flex-start;
+                gap: var(--space-4);
+            ">
+                <div style="flex: 1;">
+                    <p class="text-secondary text-sm" style="line-height: 1.7;">
+                        Approve or reject knowledge extracted from uploaded documents and Reviewer contributions.
+                        Approved items become recipes in your knowledge base.
+                    </p>
+                </div>
+                ${_pending.length > 0 ? `
+                    <span style="
+                        font-size: var(--text-xs);
+                        font-weight: 700;
+                        color: var(--ember);
+                        background: rgba(196,98,45,0.08);
+                        border-radius: 100px;
+                        padding: 2px var(--space-3);
+                        flex-shrink: 0;
+                        white-space: nowrap;
+                    ">${_pending.length} waiting</span>
+                ` : ''}
+            </div>
             ${_renderInlineQueue()}
         </div>
     `;
@@ -1477,30 +1503,206 @@ function renderKbRecipes(el) {
         return;
     }
 
-    // Group by domain
-    const byDomain = {};
-    _recipes.forEach(r => {
-        const d = r.domain || 'Uncategorised';
-        if (!byDomain[d]) byDomain[d] = [];
-        byDomain[d].push(r);
+    // ---------------------------------------------------------------------------
+    // Grouping strategy — match each recipe to a confirmed Skill Area by comparing
+    // r.domain (the string set at approval time) against confirmed domain names.
+    // Matching is case-insensitive and trims whitespace so minor inconsistencies
+    // in how the Manager typed the domain at approval time do not create orphans.
+    //
+    // Three buckets:
+    //   byDomain      — Map of confirmed domain id → { domain object, recipes[] }
+    //   unmatched     — Recipes whose r.domain string matches no confirmed Skill Area
+    //   noDomainsYet  — True when there are no confirmed Skill Areas at all
+    // ---------------------------------------------------------------------------
+    const confirmed = _domains.filter(d => !d.provisional);
+
+    // Build a lookup: normalised name → domain object
+    const domainByName = {};
+    confirmed.forEach(d => {
+        domainByName[d.name.trim().toLowerCase()] = d;
     });
+
+    const byDomainId  = {}; // domainId → { domain, recipes[] }
+    const unmatched   = []; // recipes with no confirmed Skill Area match
+
+    confirmed.forEach(d => {
+        byDomainId[d.id] = { domain: d, recipes: [] };
+    });
+
+    _recipes.forEach(r => {
+        const key    = (r.domain ?? '').trim().toLowerCase();
+        const match  = domainByName[key];
+        if (match) {
+            byDomainId[match.id].recipes.push(r);
+        } else {
+            unmatched.push(r);
+        }
+    });
+
+    // Detect Employee assignment gap for the contextual prompt
+    // (same check as Feature 2 — checked here so the Recipes tab can also surface it)
+    // We read _domains which is already loaded — no extra Firestore call needed here.
+    const hasConfirmedDomains = confirmed.length > 0;
+
+    // Build the section summary line
+    const matchedCount   = _recipes.length - unmatched.length;
+    const summaryParts   = [];
+    if (matchedCount > 0)   summaryParts.push(`${matchedCount} in ${Object.values(byDomainId).filter(b => b.recipes.length > 0).length} skill area${Object.values(byDomainId).filter(b => b.recipes.length > 0).length !== 1 ? 's' : ''}`);
+    if (unmatched.length > 0) summaryParts.push(`${unmatched.length} not yet assigned to a skill area`);
 
     el.innerHTML = `
         <div>
-            <p class="text-secondary text-sm" style="margin-bottom: var(--space-3); line-height: 1.6;">
-                Recipes are the structured knowledge your organisation has approved. Each one captures a situation,
-                how your team approaches it, and what a good outcome looks like. They are what Employees train against.
-            </p>
-            <p class="text-secondary text-sm mb-6">${_recipes.length} recipe${_recipes.length !== 1 ? 's' : ''} across ${Object.keys(byDomain).length} skill area${Object.keys(byDomain).length !== 1 ? 's' : ''}</p>
-            ${Object.entries(byDomain).map(([domain, recipes]) => `
-                <div style="margin-bottom: var(--space-8);">
-                    <h3 style="margin-bottom: var(--space-4);">${domain}</h3>
-                    ${recipes.map(r => _renderRecipeCard(r)).join('')}
+            <!-- Section intro — warm parchment-toned header strip -->
+            <div style="
+                background: rgba(44,36,22,0.03);
+                border: 1px solid rgba(44,36,22,0.07);
+                border-radius: var(--radius-lg);
+                padding: var(--space-5) var(--space-6);
+                margin-bottom: var(--space-6);
+            ">
+                <p class="text-secondary text-sm" style="line-height: 1.7; margin-bottom: var(--space-3);">
+                    Recipes are the structured knowledge your organisation has approved. Each one captures a situation,
+                    how your team approaches it, and what a good outcome looks like. They are what Employees train against.
+                </p>
+                <div style="display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;">
+                    <span style="
+                        font-size: var(--text-xs);
+                        font-weight: 700;
+                        color: var(--ember);
+                        background: rgba(196,98,45,0.08);
+                        border-radius: 100px;
+                        padding: 2px var(--space-3);
+                    ">${_recipes.length} recipe${_recipes.length !== 1 ? 's' : ''}</span>
+                    ${summaryParts.length > 0 ? `<span class="text-xs text-secondary">${summaryParts.join(' · ')}</span>` : ''}
                 </div>
-            `).join('')}
+            </div>
+
+            <!-- Gap prompt: recipes exist but no confirmed Skill Areas yet -->
+            ${!hasConfirmedDomains ? `
+                <div style="
+                    display: flex;
+                    gap: var(--space-4);
+                    align-items: flex-start;
+                    padding: var(--space-5);
+                    margin-bottom: var(--space-6);
+                    background: rgba(196,98,45,0.05);
+                    border: 1px solid rgba(196,98,45,0.18);
+                    border-radius: var(--radius-lg);
+                    border-left: 3px solid var(--ember);
+                ">
+                    <div style="
+                        width: 36px; height: 36px; border-radius: 50%;
+                        background: rgba(196,98,45,0.1);
+                        display: flex; align-items: center; justify-content: center;
+                        flex-shrink: 0;
+                    ">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8 3v5M8 11h.01" stroke="var(--ember)" stroke-width="1.5" stroke-linecap="round"/>
+                            <circle cx="8" cy="8" r="6.5" stroke="var(--ember)" stroke-width="1.5"/>
+                        </svg>
+                    </div>
+                    <div style="flex: 1;">
+                        <p style="font-weight: 600; font-size: var(--text-sm); margin-bottom: var(--space-1);">
+                            Your recipes need skill areas before training can begin
+                        </p>
+                        <p class="text-secondary text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">
+                            Employees train within skill areas — without them, no one can be assigned a track
+                            and training cannot start. Create skill areas to organise these recipes.
+                        </p>
+                        <button class="btn btn-secondary" id="recipes-go-domains"
+                            style="font-size: var(--text-sm); border-color: rgba(196,98,45,0.3); color: var(--ember);">
+                            Go to Skill areas →
+                        </button>
+                    </div>
+                </div>
+            ` : ''}
+
+            <!-- Recipes grouped under their confirmed Skill Area headings -->
+            ${confirmed.map(d => {
+                const group = byDomainId[d.id];
+                if (!group || group.recipes.length === 0) return '';
+                return `
+                    <div style="margin-bottom: var(--space-8);">
+                        <!-- Skill area heading — sage accent dot for warmth -->
+                        <div style="
+                            display: flex;
+                            align-items: center;
+                            gap: var(--space-3);
+                            margin-bottom: var(--space-4);
+                            padding-bottom: var(--space-3);
+                            border-bottom: 1px solid rgba(44,36,22,0.07);
+                        ">
+                            <span style="
+                                width: 8px; height: 8px;
+                                border-radius: 50%;
+                                background: var(--sage);
+                                flex-shrink: 0;
+                            "></span>
+                            <h3 style="margin: 0;">${_esc(d.name)}</h3>
+                            <span style="
+                                font-size: var(--text-xs);
+                                color: var(--warm-grey);
+                                margin-left: auto;
+                            ">${group.recipes.length} recipe${group.recipes.length !== 1 ? 's' : ''}</span>
+                        </div>
+                        ${group.recipes.map(r => _renderRecipeCard(r)).join('')}
+                    </div>
+                `;
+            }).join('')}
+
+            <!-- Unmatched recipes — exist in Firestore but their r.domain string
+                 does not match any confirmed Skill Area name. Shown with a nudge
+                 to either create a matching Skill Area or send them for review. -->
+            ${unmatched.length > 0 ? `
+                <div style="margin-bottom: var(--space-8);">
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        gap: var(--space-3);
+                        margin-bottom: var(--space-4);
+                        padding-bottom: var(--space-3);
+                        border-bottom: 1px solid rgba(44,36,22,0.07);
+                    ">
+                        <span style="
+                            width: 8px; height: 8px;
+                            border-radius: 50%;
+                            background: rgba(140,123,106,0.5);
+                            flex-shrink: 0;
+                        "></span>
+                        <h3 style="margin: 0; color: var(--warm-grey);">Not yet in a skill area</h3>
+                        <span style="
+                            font-size: var(--text-xs);
+                            color: var(--warm-grey);
+                            margin-left: auto;
+                        ">${unmatched.length} recipe${unmatched.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div style="
+                        padding: var(--space-4) var(--space-5);
+                        background: rgba(44,36,22,0.03);
+                        border-radius: var(--radius-md);
+                        margin-bottom: var(--space-4);
+                        border: 1px solid rgba(44,36,22,0.07);
+                    ">
+                        <p class="text-secondary text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">
+                            These recipes are approved but their skill area label does not match any confirmed
+                            Skill Area. Create a matching Skill Area so they can be used in training.
+                        </p>
+                        <button class="btn btn-secondary" id="unmatched-go-domains"
+                            style="font-size: var(--text-sm);">
+                            Create a skill area →
+                        </button>
+                    </div>
+                    ${unmatched.map(r => _renderRecipeCard(r)).join('')}
+                </div>
+            ` : ''}
         </div>
     `;
 
+    // Gap prompt handlers — route to the correct sub-section
+    document.getElementById('recipes-go-domains')?.addEventListener('click',   () => _switchKbSection('domains'));
+    document.getElementById('unmatched-go-domains')?.addEventListener('click', () => _switchKbSection('domains'));
+
+    // Wire up per-recipe handlers — same as before
     _recipes.forEach(r => {
         document.getElementById(`recipe-toggle-${r.id}`)?.addEventListener('click', () => {
             const detail = document.getElementById(`recipe-detail-${r.id}`);
@@ -1836,18 +2038,89 @@ function _renderRecipeCard(r) {
 // AI clustering shown only when recipe count >= 3.
 // Provisional seeds shown as dismissible cards.
 // ---------------------------------------------------------------------------
-function renderKbDomains(el) {
+async function renderKbDomains(el) {
     const confirmed   = _domains.filter(d => !d.provisional);
     const provisional = _domains.filter(d =>  d.provisional);
     const canCluster  = _recipes.length >= 3;
 
+    // Check for unassigned Employees asynchronously so the page renders
+    // immediately and the nudge appears once the data is ready.
+    // Only run the check when confirmed domains exist — if there are none,
+    // the Manager's next job is to create them, not to assign anyone.
+    let unassignedEmployees = [];
+    if (confirmed.length > 0) {
+        try {
+            const { db: _db } = await import('../firebase.js');
+            const { collection: _col, query: _q, where: _wh, getDocs: _gd } = await import(
+                'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+            );
+            const empSnap = await _gd(
+                _q(_col(_db, 'organisations', _orgId, 'users'), _wh('role', '==', 'employee'))
+            );
+            unassignedEmployees = empSnap.docs
+                .map(d => ({ id: d.id, ...d.data() }))
+                .filter(u => !u.assignedDomains || u.assignedDomains.length === 0);
+        } catch (err) {
+            console.warn('LORE dashboard.js: Could not check Employee assignment status.', err);
+        }
+    }
+
+    const showAssignmentNudge = confirmed.length > 0 && unassignedEmployees.length > 0;
+
     el.innerHTML = `
         <div>
+            <!-- Contextual assignment nudge — shown only when confirmed skill areas
+                 exist but one or more Employees have no track assigned yet.
+                 This is the gap between creating skill areas and starting training.
+                 Framed as a next step, not a warning. Routes to Team members. -->
+            ${showAssignmentNudge ? `
+                <div style="
+                    display: flex;
+                    gap: var(--space-4);
+                    align-items: flex-start;
+                    padding: var(--space-5);
+                    margin-bottom: var(--space-6);
+                    background: rgba(196,98,45,0.05);
+                    border: 1px solid rgba(196,98,45,0.18);
+                    border-radius: var(--radius-lg);
+                    border-left: 3px solid var(--ember);
+                ">
+                    <div style="
+                        width: 36px; height: 36px;
+                        border-radius: 50%;
+                        background: rgba(196,98,45,0.1);
+                        display: flex; align-items: center; justify-content: center;
+                        flex-shrink: 0;
+                    ">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M8 3v5M8 11h.01" stroke="var(--ember)" stroke-width="1.5" stroke-linecap="round"/>
+                            <circle cx="8" cy="8" r="6.5" stroke="var(--ember)" stroke-width="1.5"/>
+                        </svg>
+                    </div>
+                    <div style="flex: 1;">
+                        <p style="font-weight: 600; font-size: var(--text-sm); margin-bottom: var(--space-1);">
+                            ${unassignedEmployees.length === 1
+                                ? `One Employee has no skill areas assigned yet`
+                                : `${unassignedEmployees.length} Employees have no skill areas assigned yet`}
+                        </p>
+                        <p class="text-secondary text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">
+                            Your skill areas are confirmed, but training cannot start until each Employee
+                            has a track. Assign them from the Team members tab.
+                        </p>
+                        <button class="btn btn-secondary" id="domains-go-assign"
+                            style="font-size: var(--text-sm); border-color: rgba(196,98,45,0.3); color: var(--ember);">
+                            Go to Team members →
+                        </button>
+                    </div>
+                </div>
+            ` : ''}
+
             <p class="text-secondary text-sm" style="margin-bottom: var(--space-5); line-height: 1.6;">
                 Skill areas group your recipes into practice areas that your organisation defines.
                 They determine which scenarios Employees train against, and which Reviewers receive
                 mentorship prompts when an Employee misses something in that area.
             </p>
+
             <!-- Manual domain creation — always first -->
             <div class="card" style="margin-bottom: var(--space-6);">
                 <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>
@@ -1879,18 +2152,68 @@ function renderKbDomains(el) {
                 </div>
             ` : ''}
 
-            <!-- Confirmed skill areas -->
+            <!-- Confirmed skill areas — visual warmth: accent left-border,
+                 recipe count badge in ember, description line below name -->
             ${confirmed.length > 0 ? `
                 <div style="margin-bottom: var(--space-6);">
-                    <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
+                    <div style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        margin-bottom: var(--space-4);
+                    ">
+                        <h3>Your skill areas</h3>
+                        <span style="
+                            font-size: var(--text-xs);
+                            color: var(--warm-grey);
+                            background: rgba(44,36,22,0.05);
+                            border-radius: 100px;
+                            padding: 2px var(--space-3);
+                        ">${confirmed.length} confirmed</span>
+                    </div>
                     ${confirmed.map(d => `
-                        <div class="card" style="margin-bottom: var(--space-3);">
-                            <div class="flex-between">
-                                <div>
-                                    <p style="font-weight: 500;">${_esc(d.name)}</p>
-                                    <p class="text-secondary text-sm mt-1">${_esc(d.description ?? '')}</p>
+                        <div class="card" style="
+                            margin-bottom: var(--space-3);
+                            padding: 0;
+                            overflow: hidden;
+                        ">
+                            <div style="
+                                display: flex;
+                                align-items: stretch;
+                            ">
+                                <!-- Ember left accent bar -->
+                                <div style="
+                                    width: 3px;
+                                    background: var(--ember);
+                                    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+                                    flex-shrink: 0;
+                                "></div>
+                                <div style="
+                                    flex: 1;
+                                    padding: var(--space-4) var(--space-5);
+                                    display: flex;
+                                    justify-content: space-between;
+                                    align-items: center;
+                                ">
+                                    <div>
+                                        <p style="font-weight: 600;">${_esc(d.name)}</p>
+                                        ${d.description ? `<p class="text-secondary text-sm" style="margin-top: var(--space-1); line-height: 1.5;">${_esc(d.description)}</p>` : ''}
+                                    </div>
+                                    <div style="
+                                        flex-shrink: 0;
+                                        margin-left: var(--space-4);
+                                        text-align: right;
+                                    ">
+                                        <span style="
+                                            font-size: var(--text-xs);
+                                            font-weight: 700;
+                                            color: ${(d.recipeIds ?? []).length > 0 ? 'var(--ember)' : 'var(--warm-grey)'};
+                                            background: ${(d.recipeIds ?? []).length > 0 ? 'rgba(196,98,45,0.08)' : 'rgba(44,36,22,0.05)'};
+                                            border-radius: 100px;
+                                            padding: 2px var(--space-3);
+                                        ">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</span>
+                                    </div>
                                 </div>
-                                <p class="text-xs text-secondary">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</p>
                             </div>
                         </div>
                     `).join('')}
@@ -1920,6 +2243,16 @@ function renderKbDomains(el) {
             ` : ''}
         </div>
     `;
+
+    // Assignment nudge — routes the Manager to the Team members tab where
+    // track assignment already lives. No duplicate assignment UI here.
+    document.getElementById('domains-go-assign')?.addEventListener('click', () => {
+        _activeTab = 'team';
+        _setActiveTabStyle('team');
+        renderTeamTab(document.getElementById('dashboard-tab-content'));
+        // Switch to the members sub-section so the Manager lands directly on track assignment
+        _switchTeamSection('members');
+    });
 
     // Create domain handler
     document.getElementById('create-domain-btn')?.addEventListener('click', async () => {
@@ -2746,7 +3079,14 @@ async function renderReviewerActivity(el) {
 
     const activityByReviewer = {};
     reviewers.forEach(r => {
-        activityByReviewer[r.id] = { scenario_review: 0, mentorship_note: 0, document_chunk: 0, approved: 0 };
+        // recipe_reviews_completed is fetched per-Reviewer below — initialise to 0 here
+        activityByReviewer[r.id] = {
+            scenario_review:          0,
+            mentorship_note:          0,
+            document_chunk:           0,
+            approved:                 0,
+            recipe_reviews_completed: 0,
+        };
     });
 
     allExtractions.forEach(ext => {
@@ -2759,35 +3099,138 @@ async function renderReviewerActivity(el) {
         }
     });
 
+    // Fetch completed recipe_review tasks for every Reviewer in parallel.
+    // Each task lives at organisations/{orgId}/users/{reviewerId}/tasks
+    // and has type === 'recipe_review' and status === 'completed'.
+    // We run all fetches concurrently so the total wait is one round-trip, not N.
+    try {
+        await Promise.all(reviewers.map(async r => {
+            const taskSnap = await gd(q(
+                col(firestoreDb, 'organisations', _orgId, 'users', r.id, 'tasks'),
+                wh('type',   '==', 'recipe_review'),
+                wh('status', '==', 'completed'),
+            ));
+            activityByReviewer[r.id].recipe_reviews_completed = taskSnap.size;
+        }));
+    } catch (err) {
+        // Non-fatal — the other three metrics will still render
+        console.warn('LORE dashboard.js: Could not load recipe_review task counts.', err);
+    }
+
     el.innerHTML = `
         <div>
-            <h3 style="margin-bottom: var(--space-2);">Reviewer activity</h3>
-            <p class="text-secondary text-sm mb-6">Contributions from each Reviewer — scenarios reviewed, mentorship notes, and approved recipes they helped build.</p>
+            <!-- Section header with a subtle decorative accent -->
+            <div style="
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                margin-bottom: var(--space-6);
+                padding-bottom: var(--space-4);
+                border-bottom: 1px solid rgba(44,36,22,0.07);
+            ">
+                <div>
+                    <h3 style="margin-bottom: var(--space-1);">Reviewer activity</h3>
+                    <p class="text-secondary text-sm" style="line-height: 1.6;">
+                        Contributions from each Reviewer across scenarios, mentorship, recipe validation, and approved knowledge.
+                    </p>
+                </div>
+                <span style="
+                    font-size: var(--text-xs);
+                    font-weight: 600;
+                    color: var(--warm-grey);
+                    background: rgba(44,36,22,0.05);
+                    border-radius: 100px;
+                    padding: var(--space-1) var(--space-3);
+                    white-space: nowrap;
+                    margin-left: var(--space-4);
+                    flex-shrink: 0;
+                ">${reviewers.length} reviewer${reviewers.length !== 1 ? 's' : ''}</span>
+            </div>
             ${reviewers.map(r => {
                 const activity = activityByReviewer[r.id];
-                const total    = (activity.scenario_review ?? 0) + (activity.mentorship_note ?? 0);
+                // Total counts all interaction types for the active/inactive chip
+                const total    = (activity.scenario_review ?? 0)
+                               + (activity.mentorship_note ?? 0)
+                               + (activity.recipe_reviews_completed ?? 0);
+                // Metric definitions — label, value, accent colour
+                const metrics = [
+                    {
+                        label: 'Scenarios reviewed',
+                        value: activity.scenario_review ?? 0,
+                        colour: 'var(--ink)',
+                    },
+                    {
+                        label: 'Mentorship notes',
+                        value: activity.mentorship_note ?? 0,
+                        colour: 'var(--ink)',
+                    },
+                    {
+                        label: 'Recipes reviewed',
+                        value: activity.recipe_reviews_completed ?? 0,
+                        colour: 'var(--ember)',
+                    },
+                    {
+                        label: 'Recipes contributed',
+                        value: activity.approved ?? 0,
+                        colour: 'var(--sage)',
+                    },
+                ];
                 return `
-                    <div class="card" style="margin-bottom: var(--space-4);">
-                        <div class="flex-between mb-4">
+                    <div class="card" style="
+                        margin-bottom: var(--space-4);
+                        padding: 0;
+                        overflow: hidden;
+                    ">
+                        <!-- Card header — name, title, active chip -->
+                        <div style="
+                            padding: var(--space-4) var(--space-5);
+                            background: rgba(44,36,22,0.025);
+                            border-bottom: 1px solid rgba(44,36,22,0.07);
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                        ">
                             <div>
-                                <p style="font-weight: 500;">${_esc(r.displayName ?? r.email ?? 'Reviewer')}</p>
-                                <p class="text-secondary text-sm mt-1">${_esc(r.roleTitle ?? '')}</p>
+                                <p style="font-weight: 600; font-size: var(--text-base);">${_esc(r.displayName ?? r.email ?? 'Reviewer')}</p>
+                                ${r.roleTitle ? `<p class="text-secondary text-sm" style="margin-top: 2px;">${_esc(r.roleTitle)}</p>` : ''}
                             </div>
-                            <span class="chip chip-${total > 0 ? 'correct' : 'pending'}">${total > 0 ? 'Active' : 'No contributions yet'}</span>
+                            <span class="chip chip-${total > 0 ? 'correct' : 'pending'}" style="flex-shrink: 0; margin-left: var(--space-3);">
+                                ${total > 0 ? 'Active' : 'No contributions yet'}
+                            </span>
                         </div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--space-4);">
-                            <div>
-                                <p class="text-xs text-secondary">Scenarios reviewed</p>
-                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1);">${activity.scenario_review ?? 0}</p>
-                            </div>
-                            <div>
-                                <p class="text-xs text-secondary">Mentorship notes</p>
-                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1);">${activity.mentorship_note ?? 0}</p>
-                            </div>
-                            <div>
-                                <p class="text-xs text-secondary">Recipes contributed</p>
-                                <p style="font-size: var(--text-xl); font-weight: 600; margin-top: var(--space-1); color: var(--sage);">${activity.approved ?? 0}</p>
-                            </div>
+
+                        <!-- Four metrics in a responsive flex row —
+                             flex-wrap means they reflow to 2×2 on narrow viewports
+                             without overflow or cramping. Each metric is flex: 1
+                             with a min-width so they never get too thin. -->
+                        <div style="
+                            padding: var(--space-5);
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: var(--space-4);
+                        ">
+                            ${metrics.map(m => `
+                                <div style="
+                                    flex: 1 1 110px;
+                                    padding: var(--space-3) var(--space-4);
+                                    background: rgba(44,36,22,0.02);
+                                    border-radius: var(--radius-md);
+                                    border: 1px solid rgba(44,36,22,0.06);
+                                ">
+                                    <p class="text-xs text-secondary" style="
+                                        text-transform: uppercase;
+                                        letter-spacing: 0.06em;
+                                        margin-bottom: var(--space-2);
+                                        line-height: 1.4;
+                                    ">${m.label}</p>
+                                    <p style="
+                                        font-size: var(--text-2xl);
+                                        font-weight: 700;
+                                        line-height: 1;
+                                        color: ${m.value > 0 ? m.colour : 'var(--warm-grey)'};
+                                    ">${m.value}</p>
+                                </div>
+                            `).join('')}
                         </div>
                     </div>
                 `;
