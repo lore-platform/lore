@@ -788,9 +788,14 @@ function _attachCorpusAnalysisHandlers() {
 
         if (result.ok && result.extractionsCreated > 0) {
             _pending = await getPendingExtractions(_orgId);
-            // Re-render the inline queue to show the new extractions
+            // Re-render the active sub-section to show the new extractions.
+            // Route to the queue section if the Manager is already there.
             const kbEl = document.getElementById('kb-section-content');
-            if (kbEl && _activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+            if (kbEl) {
+                if (_activeKnowledgeSection === 'queue') renderKbReviewQueue(kbEl);
+                else if (_activeKnowledgeSection === 'upload') renderKbUpload(kbEl);
+            }
+            _refreshSummaryHeader();
         }
     });
 }
@@ -802,7 +807,15 @@ function _attachCorpusAnalysisHandlers() {
 // _attachInlineQueueHandlers so the card logic stays in one place.
 // ---------------------------------------------------------------------------
 function renderKbReviewQueue(el) {
-    el.innerHTML = `<div>${_renderInlineQueue()}</div>`;
+    el.innerHTML = `
+        <div>
+            <p class="text-secondary text-sm" style="margin-bottom: var(--space-5); line-height: 1.6;">
+                Approve or reject knowledge extracted from uploaded documents and Reviewer contributions.
+                Approved items become recipes in your knowledge base.
+            </p>
+            ${_renderInlineQueue()}
+        </div>
+    `;
     _attachInlineQueueHandlers(el);
 }
 
@@ -1318,8 +1331,15 @@ function _attachExtractionHandlers(ext, index, parentEl) {
                 }
             }
 
-            // Re-render the full Knowledge Base tab to update summary header counts
-            renderKnowledgeTab(document.getElementById('dashboard-tab-content'));
+            // Re-render only the active sub-section so the Manager stays in
+            // the queue tab after approving. Then refresh the summary header
+            // so stat counts and badge update without a full tab re-render.
+            const kbContent = document.getElementById('kb-section-content');
+            if (kbContent) {
+                if (_activeKnowledgeSection === 'queue') renderKbReviewQueue(kbContent);
+                else renderKbUpload(kbContent);
+            }
+            _refreshSummaryHeader();
         } else {
             btn.disabled    = false;
             btn.textContent = 'Add to knowledge base';
@@ -1335,7 +1355,13 @@ function _attachExtractionHandlers(ext, index, parentEl) {
         // Remove from local array first, then re-render so counts are correct
         _pending.splice(index, 1);
         const kbContent = document.getElementById('kb-section-content');
-        if (kbContent) renderKbUpload(kbContent);
+        // Re-render the active section — if the Manager is in the queue tab,
+        // show the queue (including the empty state when the last item is dismissed).
+        // Do not fall back to the upload section.
+        if (kbContent) {
+            if (_activeKnowledgeSection === 'queue') renderKbReviewQueue(kbContent);
+            else renderKbUpload(kbContent);
+        }
         // Also update the summary header to reflect the new pending count
         _refreshSummaryHeader();
     });
@@ -1461,6 +1487,10 @@ function renderKbRecipes(el) {
 
     el.innerHTML = `
         <div>
+            <p class="text-secondary text-sm" style="margin-bottom: var(--space-3); line-height: 1.6;">
+                Recipes are the structured knowledge your organisation has approved. Each one captures a situation,
+                how your team approaches it, and what a good outcome looks like. They are what Employees train against.
+            </p>
             <p class="text-secondary text-sm mb-6">${_recipes.length} recipe${_recipes.length !== 1 ? 's' : ''} across ${Object.keys(byDomain).length} skill area${Object.keys(byDomain).length !== 1 ? 's' : ''}</p>
             ${Object.entries(byDomain).map(([domain, recipes]) => `
                 <div style="margin-bottom: var(--space-8);">
@@ -1813,6 +1843,11 @@ function renderKbDomains(el) {
 
     el.innerHTML = `
         <div>
+            <p class="text-secondary text-sm" style="margin-bottom: var(--space-5); line-height: 1.6;">
+                Skill areas group your recipes into practice areas that your organisation defines.
+                They determine which scenarios Employees train against, and which Reviewers receive
+                mentorship prompts when an Employee misses something in that area.
+            </p>
             <!-- Manual domain creation — always first -->
             <div class="card" style="margin-bottom: var(--space-6);">
                 <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>

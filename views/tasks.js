@@ -158,6 +158,12 @@ async function _startTasksSnapshot(orgId, uid) {
             _currentIndex = 0;
             _isReturningReviewer = true; // definitely returning at this point
             renderPrompt(container, _prompts[_currentIndex]);
+        } else if (newPrompts.length > _prompts.length) {
+            // New tasks arrived mid-session. Update _prompts so the progress
+            // pill reflects the new total on the next natural prompt render.
+            // Do not interrupt the current prompt — the Reviewer will see the
+            // updated count when they advance to the next task.
+            _prompts = newPrompts;
         }
     }, err => {
         console.warn('LORE tasks.js: tasks onSnapshot error.', err);
@@ -429,9 +435,16 @@ function renderRecipeReview(container, prompt, progress) {
     // Format: "[trigger] — is this how we approach it?"
     const triggerQuestion = `${prompt.trigger ?? ''} — is this how we approach it?`;
 
-    // Returning Reviewers see a compact progress header instead of the welcome screen.
-    // This gives the count prominence without a full interstitial.
-    const progressHeader = _isReturningReviewer ? `
+    // Unified progress bar with inline chevron navigation.
+    // The progress pill sits in the centre of the bar. Chevron arrows
+    // on each side allow the Reviewer to browse tasks — view only, no
+    // logic impact. Chevrons are subtle when inactive (low opacity),
+    // visible when the direction is available.
+    // Both first-time and returning Reviewers see the same bar once
+    // they are in the prompt flow.
+    const hasPrev = _currentIndex > 0;
+    const hasNext = _currentIndex < _prompts.length - 1;
+    const progressHeader = `
         <div style="
             display: flex;
             align-items: center;
@@ -442,55 +455,51 @@ function renderRecipeReview(container, prompt, progress) {
             margin-bottom: var(--space-5);
             border: 1px solid rgba(44,36,22,0.07);
         ">
-            <span style="font-size: var(--text-sm); font-weight: 600; color: var(--ink);">Your input today</span>
-            <span style="
-                font-size: var(--text-xs);
-                font-weight: 700;
-                color: var(--ember);
-                background: rgba(180,80,30,0.08);
-                border-radius: 100px;
-                padding: 2px var(--space-3);
-            ">${progress}</span>
-        </div>
-    ` : `
-        <div class="flex-between mb-2">
-            <p class="text-xs text-secondary" style="text-transform: uppercase; letter-spacing: 0.08em;">Quick check</p>
-            <p class="text-xs text-secondary">${progress}</p>
-        </div>
-    `;
-
-    // Build prev/next navigation — view-only, no logic impact.
-    // Allows the Reviewer to look ahead at what else is in the session
-    // without acting on anything. Only shown when there are multiple prompts.
-    const hasPrev = _currentIndex > 0;
-    const hasNext = _currentIndex < _prompts.length - 1;
-    const navHtml = _prompts.length > 1 ? `
-        <div style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: var(--space-3);
-        ">
+            <!-- Left chevron — dims when at first prompt -->
             <button
                 id="review-prev"
                 style="
-                    background: none; border: none; cursor: ${hasPrev ? 'pointer' : 'default'};
-                    color: ${hasPrev ? 'var(--ink)' : 'rgba(44,36,22,0.2)'};
-                    font-size: var(--text-sm); padding: 0;
+                    background: none; border: none; padding: 0;
+                    cursor: ${hasPrev ? 'pointer' : 'default'};
+                    opacity: ${hasPrev ? '1' : '0.18'};
+                    font-size: 18px; line-height: 1;
+                    color: var(--ink); width: 28px; text-align: left;
                 "
                 ${hasPrev ? '' : 'disabled'}
-            >← Previous</button>
+                aria-label="Previous"
+            >‹</button>
+
+            <!-- Centre: label + pill -->
+            <div style="display: flex; align-items: center; gap: var(--space-3);">
+                <span style="font-size: var(--text-sm); font-weight: 600; color: var(--ink);">Your input today</span>
+                <span style="
+                    font-size: var(--text-xs);
+                    font-weight: 700;
+                    color: var(--ember);
+                    background: rgba(180,80,30,0.08);
+                    border-radius: 100px;
+                    padding: 2px var(--space-3);
+                ">${progress}</span>
+            </div>
+
+            <!-- Right chevron — dims when at last prompt -->
             <button
                 id="review-next"
                 style="
-                    background: none; border: none; cursor: ${hasNext ? 'pointer' : 'default'};
-                    color: ${hasNext ? 'var(--ink)' : 'rgba(44,36,22,0.2)'};
-                    font-size: var(--text-sm); padding: 0;
+                    background: none; border: none; padding: 0;
+                    cursor: ${hasNext ? 'pointer' : 'default'};
+                    opacity: ${hasNext ? '1' : '0.18'};
+                    font-size: 18px; line-height: 1;
+                    color: var(--ink); width: 28px; text-align: right;
                 "
                 ${hasNext ? '' : 'disabled'}
-            >Next →</button>
+                aria-label="Next"
+            >›</button>
         </div>
-    ` : '';
+    `;
+    // navHtml is now folded into progressHeader — kept as empty string
+    // so the template below does not need restructuring.
+    const navHtml = '';
 
     container.innerHTML = `
         <div>
@@ -498,32 +507,52 @@ function renderRecipeReview(container, prompt, progress) {
 
             ${navHtml}
 
-            <!-- Question first — gives the Reviewer immediate orientation -->
-            <div class="card mt-4">
+            <!-- Question first — sage left border gives it visual weight -->
+            <div class="card mt-4" style="border-left: 3px solid var(--sage);">
                 <p style="font-size: var(--text-base); font-weight: 500; line-height: 1.6; color: var(--ink);">${triggerQuestion}</p>
             </div>
 
-            <!-- Steps second — what has been documented -->
+            <!-- Steps second — skill name shown as a labelled pill for context -->
             <div class="card mt-4">
-                <p class="label mb-1" style="margin-bottom: var(--space-1);">Here's what we have documented</p>
-                <p class="text-secondary text-xs" style="margin-bottom: var(--space-3); font-style: italic;">${prompt.skillName ?? ''}</p>
+                <p class="label mb-2" style="margin-bottom: var(--space-2);">Here's what we have documented</p>
+                <div style="display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3);">
+                    <span style="
+                        font-size: var(--text-xs);
+                        color: var(--warm-grey);
+                        background: rgba(44,36,22,0.05);
+                        border: 1px solid rgba(44,36,22,0.1);
+                        border-radius: var(--radius-sm);
+                        padding: 2px var(--space-2);
+                        font-style: italic;
+                    ">${prompt.skillName ?? ''}</span>
+                </div>
                 <div style="font-size: var(--text-sm); color: var(--ink); line-height: 1.7;">
                     ${stepsHtml}
                 </div>
             </div>
 
-            <!-- Response buttons third -->
+            <!-- Response buttons third — hover states via onmouseenter/leave
+                 since inline styles cannot use :hover pseudo-class. -->
             <div class="card mt-4">
                 <p class="label mb-4">Does this match how you'd actually approach it?</p>
 
                 <div style="display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4);">
-                    <button class="btn btn-secondary" id="recipe-confirm" style="flex: 1;">
+                    <button class="btn btn-secondary" id="recipe-confirm"
+                        style="flex: 1;"
+                        onmouseenter="this.style.background='rgba(61,139,110,0.08)';this.style.borderColor='rgba(61,139,110,0.3)';this.style.color='var(--sage)';"
+                        onmouseleave="this.style.background='';this.style.borderColor='';this.style.color='';">
                         Yes, this is right
                     </button>
-                    <button class="btn btn-secondary" id="recipe-note" style="flex: 1;">
+                    <button class="btn btn-secondary" id="recipe-note"
+                        style="flex: 1;"
+                        onmouseenter="this.style.background='rgba(44,36,22,0.05)';this.style.borderColor='rgba(44,36,22,0.2)';"
+                        onmouseleave="this.style.background='';this.style.borderColor='';">
                         Mostly, with a note
                     </button>
-                    <button class="btn btn-secondary" id="recipe-disagree" style="flex: 1;">
+                    <button class="btn btn-secondary" id="recipe-disagree"
+                        style="flex: 1;"
+                        onmouseenter="this.style.background='rgba(180,80,30,0.06)';this.style.borderColor='rgba(180,80,30,0.2)';this.style.color='var(--ember)';"
+                        onmouseleave="this.style.background='';this.style.borderColor='';this.style.color='';">
                         This doesn't reflect how we work
                     </button>
                 </div>
@@ -789,4 +818,16 @@ function renderSessionComplete(container) {
             <p class="text-secondary text-sm mt-3" style="line-height: 1.6;">${summaryLine}</p>
         </div>
     `;
+
+    // After the acknowledgement screen has shown long enough to be read,
+    // transition to the idle all-clear state. This ensures the view resets
+    // properly — previously it stayed on the completion card indefinitely,
+    // and the onSnapshot listener could not re-enter because _currentIndex
+    // had not been reset to a state the idle check recognised.
+    setTimeout(() => {
+        // Only transition if the container is still showing this session's
+        // completion screen — guard against re-render mid-timeout.
+        renderAllClear(container);
+        _startTasksSnapshot(_orgId, _uid);
+    }, 2500);
 }
