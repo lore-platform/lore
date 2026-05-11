@@ -41,11 +41,18 @@ let _prePulled = null;
 // Reads from Firestore first. If no unseen scenarios exist, generates one.
 // Returns a scenario object or null.
 // ---------------------------------------------------------------------------
+// domain is now a full domain object: { id, name, recipeIds[] }.
+// The name is used for display and cache comparison; recipeIds[] is used by
+// _getRecipeForDomain and _getStoredScenario to find material by explicit
+// membership rather than the free-text domain field match.
 export async function getNextScenario(orgId, domain, employeeContext) {
-    console.log('LORE scenarios.js: getNextScenario called —', { orgId, domain, seniority: employeeContext?.seniority });
+    const domainName = domain?.name ?? domain ?? '';
+    console.log('LORE scenarios.js: getNextScenario called —', { orgId, domainName, recipeIds: domain?.recipeIds?.length ?? 0, seniority: employeeContext?.seniority });
 
-    // If we have a pre-pulled scenario ready, use it
-    if (_prePulled && _prePulled.domain === domain) {
+    // If we have a pre-pulled scenario ready for this domain, use it.
+    // Compare by name string since pre-pull may have been called with the
+    // same domain object reference or a freshly resolved copy.
+    if (_prePulled && _prePulled.domain === domainName) {
         console.log('LORE scenarios.js: Using pre-pulled scenario, id:', _prePulled.id);
         const scenario = _prePulled;
         _prePulled = null;
@@ -61,7 +68,8 @@ export async function getNextScenario(orgId, domain, employeeContext) {
 // ---------------------------------------------------------------------------
 export function prePullNext(orgId, domain, employeeContext) {
     // Fire and forget — populates _prePulled for the next call to getNextScenario
-    console.log('LORE scenarios.js: Pre-pulling next scenario for domain:', domain);
+    const domainName = domain?.name ?? domain ?? '';
+    console.log('LORE scenarios.js: Pre-pulling next scenario for domain:', domainName);
     _fetchOrGenerate(orgId, domain, employeeContext)
         .then(scenario => {
             _prePulled = scenario;
@@ -79,20 +87,24 @@ export function clearPrePull() {
 
 // ---------------------------------------------------------------------------
 // Internal — fetch from Firestore or generate a new scenario.
+// domain is a full domain object { id, name, recipeIds[] }.
 // ---------------------------------------------------------------------------
 async function _fetchOrGenerate(orgId, domain, employeeContext) {
+    const domainName = domain?.name ?? domain ?? '';
+    const recipeIds  = domain?.recipeIds ?? [];
+
     // 1. Try to get an approved scenario in this domain that isn't exhausted
-    const storedScenario = await _getStoredScenario(orgId, domain);
+    const storedScenario = await _getStoredScenario(orgId, domainName, recipeIds);
     if (storedScenario) {
         console.log('LORE scenarios.js: Fetched stored scenario, id:', storedScenario.id);
         return storedScenario;
     }
 
     // 2. No stored scenario available — get a recipe and generate one
-    console.log('LORE scenarios.js: No stored scenario — attempting generation for domain:', domain);
-    const recipe = await _getRecipeForDomain(orgId, domain);
+    console.log('LORE scenarios.js: No stored scenario — attempting generation for domain:', domainName, '| recipeIds:', recipeIds.length);
+    const recipe = await _getRecipeForDomain(orgId, domainName, recipeIds);
     if (!recipe) {
-        console.warn('LORE scenarios.js: No approved recipe found for domain:', domain);
+        console.warn('LORE scenarios.js: No approved recipe found for domain:', domainName);
         return null;
     }
 
@@ -101,21 +113,54 @@ async function _fetchOrGenerate(orgId, domain, employeeContext) {
 
 // ---------------------------------------------------------------------------
 // Fetch a stored scenario from Firestore.
+//
+// Primary path: if recipeIds[] is non-empty, query for approved scenarios
+// whose recipeId matches any ID in the array. This is the correct path once
+// the Manager has explicitly assigned recipes to a Skill Area.
+//
+// Fallback path: if recipeIds[] is empty, fall back to the free-text domain
+// name match. This preserves backward compatibility for orgs that have not
+// yet assigned recipes to skill areas.
+//
 // Returns a scenario object or null if none available.
 // ---------------------------------------------------------------------------
-async function _getStoredScenario(orgId, domain) {
+async function _getStoredScenario(orgId, domainName, recipeIds = []) {
     try {
         const ref = collection(db, 'organisations', orgId, 'scenarios');
+
+        if (recipeIds.length > 0) {
+            // Primary: query by recipeId membership in the domain's recipeIds array.
+            // Firestore 'in' supports up to 30 values — slice to be safe.
+            const idBatch = recipeIds.slice(0, 30);
+            const q = query(
+                ref,
+                where('recipeId', 'in', idBatch),
+                where('approved', '==', true),
+                orderBy('generatedAt', 'asc'),
+                limit(1)
+            );
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+                const docSnap = snap.docs[0];
+                return { id: docSnap.id, ...docSnap.data() };
+            }
+            // No matching stored scenario found via recipeId — fall through to
+            // generation rather than the name-match fallback, since name-match
+            // is unlikely to help when recipeIds are explicit.
+            console.log('LORE scenarios.js: No stored scenario found via recipeIds for domain:', domainName);
+            return null;
+        }
+
+        // Fallback: free-text domain name match (legacy path, no recipeIds assigned yet)
         const q = query(
             ref,
-            where('domain', '==', domain),
+            where('domain', '==', domainName),
             where('approved', '==', true),
             orderBy('generatedAt', 'asc'),
             limit(1)
         );
         const snap = await getDocs(q);
         if (snap.empty) return null;
-
         const docSnap = snap.docs[0];
         return { id: docSnap.id, ...docSnap.data() };
     } catch (err) {
@@ -126,23 +171,52 @@ async function _getStoredScenario(orgId, domain) {
 
 // ---------------------------------------------------------------------------
 // Get a recipe for a domain to use as generation source.
+//
+// Primary path: if recipeIds[] is non-empty, fetch by document ID using a
+// random pick from the array. Random selection ensures varied scenario seeds
+// across sessions rather than always using the same recipe.
+//
+// Fallback path: if recipeIds[] is empty, fall back to the free-text domain
+// name match. This preserves backward compatibility.
 // ---------------------------------------------------------------------------
-async function _getRecipeForDomain(orgId, domain) {
+async function _getRecipeForDomain(orgId, domainName, recipeIds = []) {
     try {
+        if (recipeIds.length > 0) {
+            // Primary: pick a random recipe ID from the Skill Area's explicit list
+            const randomId = recipeIds[Math.floor(Math.random() * recipeIds.length)];
+            const snap = await getDoc(doc(db, 'organisations', orgId, 'recipes', randomId));
+            if (snap.exists() && snap.data().approved !== false) {
+                console.log('LORE scenarios.js: Found recipe by recipeId membership:', randomId);
+                return { id: snap.id, ...snap.data() };
+            }
+            // The randomly selected recipe was not found or not approved.
+            // Try the remaining IDs in order before giving up.
+            for (const id of recipeIds) {
+                if (id === randomId) continue;
+                const fallSnap = await getDoc(doc(db, 'organisations', orgId, 'recipes', id));
+                if (fallSnap.exists() && fallSnap.data().approved !== false) {
+                    console.log('LORE scenarios.js: Found recipe by recipeId fallback:', id);
+                    return { id: fallSnap.id, ...fallSnap.data() };
+                }
+            }
+            console.warn('LORE scenarios.js: All recipeIds in domain checked — none approved. Domain:', domainName);
+            return null;
+        }
+
+        // Fallback: free-text domain name match (legacy path, no recipeIds assigned yet)
         const ref = collection(db, 'organisations', orgId, 'recipes');
         const q = query(
             ref,
-            where('domain', '==', domain),
+            where('domain', '==', domainName),
             where('approved', '==', true),
             limit(1)
         );
         const snap = await getDocs(q);
         if (snap.empty) return null;
-
         const docSnap = snap.docs[0];
         return { id: docSnap.id, ...docSnap.data() };
     } catch (err) {
-        console.warn('LORE scenarios.js: Could not fetch recipe for domain:', domain, err);
+        console.warn('LORE scenarios.js: Could not fetch recipe for domain:', domainName, err);
         return null;
     }
 }

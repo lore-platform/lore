@@ -88,8 +88,10 @@ export async function initTraining(orgId, uid, state) {
     // an ID string against recipe.domain text — they never match, producing the
     // "No approved recipe found for domain: [firestoreId]" console warning and
     // showing raw IDs as skill area headings on the training screen.
-    _assignedDomains = await _resolveDomainNames(orgId, rawDomainIds);
-    console.log('LORE training.js: Resolved assignedDomains —', _assignedDomains);
+    // Full domain objects are now returned so getNextScenario() can use
+    // recipeIds[] membership rather than the free-text domain field match.
+    _assignedDomains = await _resolveDomains(orgId, rawDomainIds);
+    console.log('LORE training.js: Resolved assignedDomains —', _assignedDomains.map(d => d.name));
 
     // Update local state with seniority and roleTitle from the user document.
     // These may have been set at invite time and are needed for evaluateResponse().
@@ -142,20 +144,21 @@ async function _loadUserDoc(orgId, uid) {
 }
 
 // ---------------------------------------------------------------------------
-// Resolve an array of domain Firestore document IDs to human-readable names.
+// Resolve an array of domain Firestore document IDs to full domain objects.
 //
 // The Manager stores Firestore document IDs in assignedDomains on the
-// Employee's user document. The training view needs names, not IDs — both
-// for display (skill area card headings) and for recipe matching inside
-// getNextScenario(), which queries where('domain', '==', domain). Recipes
-// store domain as a plain text name set at approval time, so a Firestore ID
-// will never match — producing the "No approved recipe found" warning.
+// Employee's user document. The training view needs full domain objects —
+// not just names — so that getNextScenario() can use the recipeIds[] array
+// on each domain to find recipes by explicit membership rather than relying
+// on the free-text domain field match, which was the root cause of the
+// "No approved recipe found" error.
 //
 // Strategy: fetch each domain document by ID. If a document is not found
-// (deleted domain, stale ID), skip it silently. Returns an array of name
-// strings — always shorter than or equal to the input array length.
+// (deleted domain, stale ID), skip it silently. Returns an array of domain
+// objects { id, name, recipeIds[], ... } — always shorter than or equal to
+// the input array length.
 // ---------------------------------------------------------------------------
-async function _resolveDomainNames(orgId, domainIds) {
+async function _resolveDomains(orgId, domainIds) {
     if (!domainIds || domainIds.length === 0) return [];
 
     const { db } = await import('../firebase.js');
@@ -163,15 +166,15 @@ async function _resolveDomainNames(orgId, domainIds) {
         'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
     );
 
-    const names = [];
+    const domains = [];
     for (const id of domainIds) {
         try {
             const snap = await getDoc(doc(db, 'organisations', orgId, 'domains', id));
             if (snap.exists()) {
-                const name = snap.data().name;
-                if (name) {
-                    names.push(name);
-                    console.log('LORE training.js: Resolved domain ID', id, '→', name);
+                const data = snap.data();
+                if (data.name) {
+                    domains.push({ id: snap.id, ...data });
+                    console.log('LORE training.js: Resolved domain ID', id, '→', data.name, '| recipeIds:', (data.recipeIds ?? []).length);
                 } else {
                     console.warn('LORE training.js: Domain document has no name field — skipping ID:', id);
                 }
@@ -182,7 +185,7 @@ async function _resolveDomainNames(orgId, domainIds) {
             console.warn('LORE training.js: Could not resolve domain ID:', id, err);
         }
     }
-    return names;
+    return domains;
 }
 
 // ---------------------------------------------------------------------------
@@ -344,13 +347,15 @@ function renderQueue(container) {
 
     const xpData = getXPProgress(_state.xp ?? 0);
 
-    // Build domain stats for display
-    const domainCards = _assignedDomains.map(domainName => {
-        const mastery  = _state.domainMastery?.[domainName] ?? { played: 0, correct: 0 };
+    // Build domain stats for display.
+    // _assignedDomains is now an array of full domain objects { id, name, recipeIds[] }.
+    // We use d.name as the mastery key — consistent with how responses are recorded.
+    const domainCards = _assignedDomains.map(d => {
+        const mastery  = _state.domainMastery?.[d.name] ?? { played: 0, correct: 0 };
         const accuracy = mastery.played > 0
             ? Math.round((mastery.correct / mastery.played) * 100)
             : null;
-        return { name: domainName, accuracy, played: mastery.played };
+        return { id: d.id, name: d.name, recipeIds: d.recipeIds ?? [], accuracy, played: mastery.played };
     });
 
     const hasDueToday = _dueTodayQueue.length > 0;
@@ -466,11 +471,13 @@ function renderQueue(container) {
         _startNextDueItem(container);
     });
 
-    // Skill area cards — start a free session in that domain
+    // Skill area cards — start a free session in that domain.
+    // _activeDomain carries the full domain object so getNextScenario() can
+    // use recipeIds[] for recipe selection rather than the free-text name match.
     domainCards.forEach((d, i) => {
         document.getElementById(`domain-card-${i}`)?.addEventListener('click', () => {
             _inDueTodayQueue = false;
-            _activeDomain    = { name: d.name };
+            _activeDomain    = { id: d.id, name: d.name, recipeIds: d.recipeIds ?? [] };
             startSession(container);
         });
     });
@@ -496,8 +503,14 @@ async function _startNextDueItem(container) {
 
     renderLoading(container, 'Loading your next review…');
 
-    // Set the active domain from the recipeProgress record
-    _activeDomain = { name: dueItem.domain ?? _assignedDomains[0] };
+    // Set the active domain from the recipeProgress record.
+    // dueItem.domain stores the domain name string — find the matching full
+    // domain object from _assignedDomains so recipeIds[] is available for
+    // getNextScenario(). Fall back to the first assigned domain if not found.
+    const dueItemDomainObj = _assignedDomains.find(d => d.name === dueItem.domain)
+        ?? _assignedDomains[0]
+        ?? { name: dueItem.domain ?? '', recipeIds: [] };
+    _activeDomain = dueItemDomainObj;
 
     // Fetch the recipe directly — due items target a specific recipe
     _activeRecipe = await getRecipe(_orgId, dueItem.recipeId);
@@ -513,7 +526,7 @@ async function _startNextDueItem(container) {
     // Fetch or generate a scenario for this specific recipe
     const scenario = await getNextScenario(
         _orgId,
-        _activeDomain.name,
+        _activeDomain,
         { seniority: _state.seniority ?? 'mid', uid: _uid, recipeId: dueItem.recipeId }
     );
 
@@ -540,7 +553,7 @@ async function startSession(container) {
 
     const scenario = await getNextScenario(
         _orgId,
-        _activeDomain.name,
+        _activeDomain,
         { seniority: _state.seniority ?? 'mid', uid: _uid }
     );
 
@@ -682,7 +695,9 @@ async function handleSubmit(container, response, scenario, isDueItem) {
 
     // Pre-pull the next scenario while the Employee reads the result screen.
     // This runs in the background — the result renders immediately.
-    prePullNext(_orgId, _activeDomain?.name, {
+    // Pass the full domain object so prePullNext forwards recipeIds[] to
+    // _fetchOrGenerate and ultimately to _getRecipeForDomain.
+    prePullNext(_orgId, _activeDomain, {
         seniority: _state.seniority ?? 'mid',
         uid: _uid,
     });

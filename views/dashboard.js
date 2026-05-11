@@ -2309,13 +2309,25 @@ async function renderKbDomains(el) {
                         ">${confirmed.length} confirmed</span>
                     </div>
 
-                    ${confirmed.map(d => `
+                    ${confirmed.map(d => {
+                        // Recipes currently assigned to this skill area
+                        const assignedRecipes   = _recipes.filter(r => (d.recipeIds ?? []).includes(r.id));
+                        // Recipes approved but not yet assigned to any confirmed domain
+                        const assignedAllIds    = confirmed.flatMap(c => c.recipeIds ?? []);
+                        const availableRecipes  = _recipes.filter(r => !assignedAllIds.includes(r.id));
+                        const recipeCount       = (d.recipeIds ?? []).length;
+                        return `
                         <div class="card" style="
                             margin-bottom: var(--space-3);
                             padding: 0;
                             overflow: hidden;
-                        ">
-                            <div style="display: flex; align-items: stretch;">
+                        " id="domain-card-outer-${d.id}">
+                            <!-- Card header — click to expand/collapse -->
+                            <div id="domain-card-header-${d.id}" style="
+                                display: flex;
+                                align-items: stretch;
+                                cursor: pointer;
+                            ">
                                 <!-- Ember left accent bar -->
                                 <div style="
                                     width: 4px;
@@ -2337,22 +2349,146 @@ async function renderKbDomains(el) {
                                             ? `<p class="text-secondary text-sm" style="margin-top: var(--space-1); line-height: 1.5;">${_esc(d.description)}</p>`
                                             : ''}
                                     </div>
-                                    <div style="flex-shrink: 0; text-align: right;">
+                                    <div style="display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0;">
                                         <span style="
                                             display: inline-block;
                                             font-size: var(--text-xs);
                                             font-weight: 700;
-                                            color: ${(d.recipeIds ?? []).length > 0 ? 'var(--ember)' : 'var(--warm-grey)'};
-                                            background: ${(d.recipeIds ?? []).length > 0 ? 'rgba(196,98,45,0.1)' : 'rgba(44,36,22,0.05)'};
+                                            color: ${recipeCount > 0 ? 'var(--ember)' : 'var(--warm-grey)'};
+                                            background: ${recipeCount > 0 ? 'rgba(196,98,45,0.1)' : 'rgba(44,36,22,0.05)'};
                                             border-radius: 100px;
                                             padding: 3px var(--space-3);
                                             white-space: nowrap;
-                                        ">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</span>
+                                        ">${recipeCount} recipe${recipeCount !== 1 ? 's' : ''}</span>
+                                        <span id="domain-card-chevron-${d.id}" style="
+                                            color: var(--warm-grey);
+                                            font-size: var(--text-xs);
+                                            transition: transform 0.15s;
+                                            display: inline-block;
+                                        ">▾</span>
                                     </div>
                                 </div>
                             </div>
+
+                            <!-- Expandable body — recipe assignment, removal, and delete -->
+                            <div id="domain-card-body-${d.id}" style="
+                                display: none;
+                                border-top: 1px solid rgba(44,36,22,0.07);
+                                padding: var(--space-5) var(--space-6);
+                            ">
+                                <!-- Assigned recipes list -->
+                                <p class="label" style="margin-bottom: var(--space-3);">Assigned recipes</p>
+                                ${assignedRecipes.length === 0
+                                    ? `<p class="text-secondary text-sm" style="margin-bottom: var(--space-5);">
+                                        No recipes assigned yet. Add recipes below so training can begin.
+                                       </p>`
+                                    : `<div style="margin-bottom: var(--space-5);">
+                                        ${assignedRecipes.map(r => `
+                                            <div style="
+                                                display: flex;
+                                                justify-content: space-between;
+                                                align-items: center;
+                                                padding: var(--space-3) 0;
+                                                border-bottom: 1px solid rgba(44,36,22,0.05);
+                                                gap: var(--space-3);
+                                            ">
+                                                <!-- Recipe name — click opens detail in the Recipes tab -->
+                                                <button id="domain-recipe-view-${d.id}-${r.id}" style="
+                                                    background: none;
+                                                    border: none;
+                                                    padding: 0;
+                                                    cursor: pointer;
+                                                    text-align: left;
+                                                    font-size: var(--text-sm);
+                                                    font-weight: 600;
+                                                    color: var(--ink);
+                                                    line-height: 1.4;
+                                                    text-decoration: underline;
+                                                    text-underline-offset: 2px;
+                                                    text-decoration-color: rgba(44,36,22,0.2);
+                                                ">${_esc(r.skillName)}</button>
+                                                <!-- Remove from skill area -->
+                                                <button id="domain-recipe-remove-${d.id}-${r.id}" style="
+                                                    background: none;
+                                                    border: none;
+                                                    padding: 0;
+                                                    cursor: pointer;
+                                                    font-size: var(--text-xs);
+                                                    color: var(--warm-grey);
+                                                    white-space: nowrap;
+                                                    text-decoration: underline;
+                                                    text-underline-offset: 2px;
+                                                    flex-shrink: 0;
+                                                ">Remove</button>
+                                            </div>
+                                        `).join('')}
+                                       </div>`
+                                }
+
+                                <!-- Add a recipe from the unassigned pool -->
+                                ${availableRecipes.length > 0 ? `
+                                    <p class="label" style="margin-bottom: var(--space-3);">Add a recipe</p>
+                                    <div style="margin-bottom: var(--space-5);">
+                                        ${availableRecipes.map(r => `
+                                            <div style="
+                                                display: flex;
+                                                justify-content: space-between;
+                                                align-items: center;
+                                                padding: var(--space-3) 0;
+                                                border-bottom: 1px solid rgba(44,36,22,0.05);
+                                                gap: var(--space-3);
+                                            ">
+                                                <p class="text-sm" style="color: var(--ink); line-height: 1.4;">${_esc(r.skillName)}</p>
+                                                <button id="domain-recipe-add-${d.id}-${r.id}" style="
+                                                    background: none;
+                                                    border: none;
+                                                    padding: 0;
+                                                    cursor: pointer;
+                                                    font-size: var(--text-xs);
+                                                    font-weight: 600;
+                                                    color: var(--ember);
+                                                    white-space: nowrap;
+                                                    text-decoration: underline;
+                                                    text-underline-offset: 2px;
+                                                    flex-shrink: 0;
+                                                ">Add</button>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                ` : ''}
+
+                                <!-- Delete this skill area -->
+                                <div style="border-top: 1px solid rgba(44,36,22,0.07); padding-top: var(--space-4); margin-top: var(--space-2);">
+                                    <div id="domain-delete-confirm-${d.id}" style="display: none; margin-bottom: var(--space-3);">
+                                        <p class="text-sm" style="color: var(--ink); line-height: 1.6; margin-bottom: var(--space-3);">
+                                            This will remove the skill area and unassign any Employees on this track.
+                                            This cannot be undone.
+                                        </p>
+                                        <div style="display: flex; gap: var(--space-3);">
+                                            <button class="btn btn-primary" id="domain-delete-execute-${d.id}"
+                                                style="font-size: var(--text-sm); background: var(--error); border-color: var(--error);">
+                                                Confirm delete
+                                            </button>
+                                            <button class="btn btn-secondary" id="domain-delete-cancel-${d.id}"
+                                                style="font-size: var(--text-sm);">
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <button id="domain-delete-btn-${d.id}" style="
+                                        background: none;
+                                        border: none;
+                                        padding: 0;
+                                        cursor: pointer;
+                                        font-size: var(--text-xs);
+                                        color: var(--warm-grey);
+                                        text-decoration: underline;
+                                        text-underline-offset: 2px;
+                                    ">Delete this skill area</button>
+                                </div>
+                            </div>
                         </div>
-                    `).join('')}
+                    `}).join('')}
                 </div>
 
                 <!-- Secondary section — creation form and clustering as collapsed
@@ -2528,6 +2664,128 @@ async function renderKbDomains(el) {
         document.getElementById(`dismiss-cluster-${i}`)?.addEventListener('click', () => {
             _clusters.splice(i, 1);
             if (_clusters.length === 0) clearPendingClusters(_orgId);
+            renderKbDomains(el);
+        });
+    });
+
+    // ---------------------------------------------------------------------------
+    // Confirmed domain card — expand/collapse, recipe add/remove, delete.
+    // These handlers are wired after innerHTML is set in the post-creation
+    // state. They do nothing in the empty state (no confirmed cards rendered).
+    // ---------------------------------------------------------------------------
+    confirmed.forEach(d => {
+        // Expand / collapse card body on header click
+        document.getElementById(`domain-card-header-${d.id}`)?.addEventListener('click', () => {
+            const body    = document.getElementById(`domain-card-body-${d.id}`);
+            const chevron = document.getElementById(`domain-card-chevron-${d.id}`);
+            if (!body) return;
+            const isOpen = body.style.display !== 'none';
+            body.style.display           = isOpen ? 'none' : 'block';
+            if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+        });
+
+        // Per-assigned-recipe handlers — view and remove
+        const assignedRecipes = _recipes.filter(r => (d.recipeIds ?? []).includes(r.id));
+        assignedRecipes.forEach(r => {
+            // View — navigate to Recipes tab and open the detail panel for this recipe
+            document.getElementById(`domain-recipe-view-${d.id}-${r.id}`)?.addEventListener('click', () => {
+                _switchKbSection('recipes');
+                // Open the detail panel after the Recipes tab has rendered
+                requestAnimationFrame(() => {
+                    const detail = document.getElementById(`recipe-detail-${r.id}`);
+                    const toggle = document.getElementById(`recipe-toggle-${r.id}`);
+                    if (detail) {
+                        detail.style.display = 'block';
+                        detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                    if (toggle) toggle.textContent = 'Hide';
+                });
+            });
+
+            // Remove — splice recipe ID from domain's recipeIds array in Firestore
+            document.getElementById(`domain-recipe-remove-${d.id}-${r.id}`)?.addEventListener('click', async () => {
+                const btn = document.getElementById(`domain-recipe-remove-${d.id}-${r.id}`);
+                if (btn) { btn.disabled = true; btn.textContent = 'Removing…'; }
+                const newIds = (d.recipeIds ?? []).filter(id => id !== r.id);
+                const ok = await updateDomain(_orgId, d.id, { recipeIds: newIds });
+                if (ok) {
+                    // Update local domain object so re-render reflects the change
+                    d.recipeIds = newIds;
+                    _domains = _domains.map(x => x.id === d.id ? { ...x, recipeIds: newIds } : x);
+                    renderKbDomains(el);
+                } else {
+                    if (btn) { btn.disabled = false; btn.textContent = 'Remove'; }
+                }
+            });
+        });
+
+        // Per-available-recipe handlers — add to this skill area
+        const assignedAllIds   = confirmed.flatMap(c => c.recipeIds ?? []);
+        const availableRecipes = _recipes.filter(r => !assignedAllIds.includes(r.id));
+        availableRecipes.forEach(r => {
+            document.getElementById(`domain-recipe-add-${d.id}-${r.id}`)?.addEventListener('click', async () => {
+                const btn = document.getElementById(`domain-recipe-add-${d.id}-${r.id}`);
+                if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+                const newIds = [...(d.recipeIds ?? []), r.id];
+                const ok = await updateDomain(_orgId, d.id, { recipeIds: newIds });
+                if (ok) {
+                    d.recipeIds = newIds;
+                    _domains = _domains.map(x => x.id === d.id ? { ...x, recipeIds: newIds } : x);
+                    renderKbDomains(el);
+                } else {
+                    if (btn) { btn.disabled = false; btn.textContent = 'Add'; }
+                }
+            });
+        });
+
+        // Delete skill area — show inline confirmation, then execute
+        document.getElementById(`domain-delete-btn-${d.id}`)?.addEventListener('click', () => {
+            const confirmEl = document.getElementById(`domain-delete-confirm-${d.id}`);
+            const deleteBtn = document.getElementById(`domain-delete-btn-${d.id}`);
+            if (confirmEl) confirmEl.style.display = 'block';
+            if (deleteBtn) deleteBtn.style.display = 'none';
+        });
+
+        document.getElementById(`domain-delete-cancel-${d.id}`)?.addEventListener('click', () => {
+            const confirmEl = document.getElementById(`domain-delete-confirm-${d.id}`);
+            const deleteBtn = document.getElementById(`domain-delete-btn-${d.id}`);
+            if (confirmEl) confirmEl.style.display = 'none';
+            if (deleteBtn) deleteBtn.style.display = 'block';
+        });
+
+        document.getElementById(`domain-delete-execute-${d.id}`)?.addEventListener('click', async () => {
+            const btn = document.getElementById(`domain-delete-execute-${d.id}`);
+            if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+            // 1. Delete the domain document
+            await deleteDomain(_orgId, d.id);
+
+            // 2. Remove this domain ID from any Employee's assignedDomains array.
+            //    Employees currently on this track would otherwise keep a stale
+            //    reference to a domain that no longer exists.
+            try {
+                const { db: firestoreDb } = await import('../firebase.js');
+                const {
+                    collection: col, query: q, where: wh, getDocs: gd,
+                    doc: fdoc, updateDoc: fupdate, arrayRemove,
+                } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+                const usersSnap = await gd(q(
+                    col(firestoreDb, 'organisations', _orgId, 'users'),
+                    wh('assignedDomains', 'array-contains', d.id)
+                ));
+                const cleanups = usersSnap.docs.map(userDoc =>
+                    fupdate(fdoc(firestoreDb, 'organisations', _orgId, 'users', userDoc.id), {
+                        assignedDomains: arrayRemove(d.id),
+                    })
+                );
+                await Promise.all(cleanups);
+                console.log('LORE dashboard.js: Removed domain', d.id, 'from', cleanups.length, 'Employee records.');
+            } catch (err) {
+                console.warn('LORE dashboard.js: Could not clean up Employee assignedDomains after domain delete.', err);
+            }
+
+            // 3. Update local state and re-render
+            _domains = _domains.filter(x => x.id !== d.id);
             renderKbDomains(el);
         });
     });
@@ -2914,7 +3172,7 @@ async function _loadTeamList(parentEl) {
                         `).join('')}
                         ${_domains.length === 0 ? '<p class="text-secondary text-sm">No skill areas confirmed yet.</p>' : ''}
                     </div>
-                    <p class="label mb-2">Handover package (optional)</p>
+                    <p class="label mb-2">Handover track (optional)</p>
                     <p class="text-secondary text-sm mb-2">If this employee is taking over from someone, note their name here so LORE can contextualise the training.</p>
                     <input class="input" id="handover-from-${u.id}" type="text"
                         placeholder="e.g. Amaka Obi"
