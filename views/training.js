@@ -79,7 +79,17 @@ export async function initTraining(orgId, uid, state) {
     // We need to re-read from Firestore rather than state, because state.js
     // does not currently cache assignedDomains in localStorage.
     const userDoc = await _loadUserDoc(orgId, uid);
-    _assignedDomains = userDoc?.assignedDomains ?? [];
+    const rawDomainIds = userDoc?.assignedDomains ?? [];
+
+    // Resolve domain IDs to human-readable names before any rendering occurs.
+    // The track assignment panel stores Firestore document IDs in assignedDomains.
+    // Recipes store domain as a plain text name (set at approval time via the
+    // draft-domain input). Without this resolution, _getRecipeForDomain() compares
+    // an ID string against recipe.domain text — they never match, producing the
+    // "No approved recipe found for domain: [firestoreId]" console warning and
+    // showing raw IDs as skill area headings on the training screen.
+    _assignedDomains = await _resolveDomainNames(orgId, rawDomainIds);
+    console.log('LORE training.js: Resolved assignedDomains —', _assignedDomains);
 
     // Update local state with seniority and roleTitle from the user document.
     // These may have been set at invite time and are needed for evaluateResponse().
@@ -132,6 +142,50 @@ async function _loadUserDoc(orgId, uid) {
 }
 
 // ---------------------------------------------------------------------------
+// Resolve an array of domain Firestore document IDs to human-readable names.
+//
+// The Manager stores Firestore document IDs in assignedDomains on the
+// Employee's user document. The training view needs names, not IDs — both
+// for display (skill area card headings) and for recipe matching inside
+// getNextScenario(), which queries where('domain', '==', domain). Recipes
+// store domain as a plain text name set at approval time, so a Firestore ID
+// will never match — producing the "No approved recipe found" warning.
+//
+// Strategy: fetch each domain document by ID. If a document is not found
+// (deleted domain, stale ID), skip it silently. Returns an array of name
+// strings — always shorter than or equal to the input array length.
+// ---------------------------------------------------------------------------
+async function _resolveDomainNames(orgId, domainIds) {
+    if (!domainIds || domainIds.length === 0) return [];
+
+    const { db } = await import('../firebase.js');
+    const { doc, getDoc } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
+
+    const names = [];
+    for (const id of domainIds) {
+        try {
+            const snap = await getDoc(doc(db, 'organisations', orgId, 'domains', id));
+            if (snap.exists()) {
+                const name = snap.data().name;
+                if (name) {
+                    names.push(name);
+                    console.log('LORE training.js: Resolved domain ID', id, '→', name);
+                } else {
+                    console.warn('LORE training.js: Domain document has no name field — skipping ID:', id);
+                }
+            } else {
+                console.warn('LORE training.js: Domain ID not found in Firestore — skipping:', id);
+            }
+        } catch (err) {
+            console.warn('LORE training.js: Could not resolve domain ID:', id, err);
+        }
+    }
+    return names;
+}
+
+// ---------------------------------------------------------------------------
 // ENG-01 — Load the Due Today queue.
 // Queries recipeProgress/ for items where dueAt is in the past, limit 5.
 // Returns an array of recipeProgress objects sorted by dueAt ascending.
@@ -168,11 +222,35 @@ async function _loadDueTodayQueue(orgId, uid) {
 // ---------------------------------------------------------------------------
 function renderHoldingScreen(container) {
     container.innerHTML = `
-        <div class="empty-state">
-            <h3>Your training is being set up</h3>
-            <p class="mt-2" style="max-width: 380px; line-height: 1.6;">
-                Your manager is putting together your learning path. You'll get a notification when it's ready — usually within a day or two.
-            </p>
+        <div>
+            <h1 style="margin-bottom: var(--space-6);">Training</h1>
+            <div style="
+                padding: var(--space-8) var(--space-6);
+                background: rgba(196,98,45,0.04);
+                border: 1px solid rgba(196,98,45,0.12);
+                border-radius: var(--radius-lg);
+                border-left: 4px solid var(--ember);
+                text-align: center;
+            ">
+                <div style="
+                    width: 48px; height: 48px;
+                    border-radius: 50%;
+                    background: rgba(196,98,45,0.1);
+                    display: flex; align-items: center; justify-content: center;
+                    margin: 0 auto var(--space-5);
+                ">
+                    <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="11" cy="11" r="9.5" stroke="var(--ember)" stroke-width="1.5"/>
+                        <path d="M11 7v4.5l3 2" stroke="var(--ember)" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </div>
+                <p style="font-weight: 700; font-size: var(--text-lg); color: var(--ink); margin-bottom: var(--space-3);">
+                    Your training is being set up
+                </p>
+                <p class="text-secondary text-sm" style="max-width: 360px; margin: 0 auto; line-height: 1.7;">
+                    Your manager is putting together your learning path. Check back soon — usually within a day or two.
+                </p>
+            </div>
         </div>
     `;
 
@@ -323,18 +401,56 @@ function renderQueue(container) {
             <div ${hasDueToday ? `style="margin-top: var(--space-4);"` : `style="margin-top: var(--space-8);"`}>
                 <h3 style="margin-bottom: var(--space-4);">Your skill areas</h3>
                 ${domainCards.map((d, i) => `
-                    <div class="card" id="domain-card-${i}"
-                        style="cursor: pointer; margin-bottom: var(--space-4);">
-                        <div class="flex-between">
-                            <div>
-                                <h3>${d.name}</h3>
-                            </div>
-                            <div style="text-align: right; flex-shrink: 0; margin-left: var(--space-4);">
-                                ${d.accuracy !== null
-                                    ? `<p style="font-size: var(--text-xl); font-weight: 600;">${d.accuracy}%</p>
-                                       <p class="text-xs text-secondary">accuracy</p>`
-                                    : `<p class="text-xs text-secondary">Not started</p>`
-                                }
+                    <div class="card" id="domain-card-${i}" style="
+                        cursor: pointer;
+                        margin-bottom: var(--space-3);
+                        padding: 0;
+                        overflow: hidden;
+                        transition: box-shadow 0.15s ease;
+                    ">
+                        <div style="display: flex; align-items: stretch;">
+                            <!-- Left accent bar: sage when started, ember when not -->
+                            <div style="
+                                width: 4px;
+                                background: ${d.played > 0 ? 'var(--sage)' : 'var(--ember)'};
+                                border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+                                flex-shrink: 0;
+                            "></div>
+                            <div style="
+                                flex: 1;
+                                padding: var(--space-5) var(--space-6);
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                gap: var(--space-4);
+                            ">
+                                <div style="min-width: 0;">
+                                    <p style="font-weight: 700; font-size: var(--text-base); color: var(--ink);">${d.name}</p>
+                                    <p class="text-xs text-secondary" style="margin-top: var(--space-1);">
+                                        ${d.played > 0
+                                            ? `${d.played} scenario${d.played !== 1 ? 's' : ''} completed`
+                                            : 'Not started yet'}
+                                    </p>
+                                </div>
+                                <div style="flex-shrink: 0; text-align: right;">
+                                    ${d.accuracy !== null
+                                        ? `<p style="
+                                                font-size: var(--text-xl);
+                                                font-weight: 700;
+                                                color: ${d.accuracy >= 70 ? 'var(--sage)' : d.accuracy >= 40 ? 'var(--amber-text)' : 'var(--error)'};
+                                                line-height: 1;
+                                            ">${d.accuracy}%</p>
+                                           <p class="text-xs text-secondary" style="margin-top: 2px;">accuracy</p>`
+                                        : `<span style="
+                                                font-size: var(--text-xs);
+                                                font-weight: 600;
+                                                color: var(--ember);
+                                                background: rgba(196,98,45,0.1);
+                                                border-radius: 100px;
+                                                padding: 3px var(--space-3);
+                                            ">Start</span>`
+                                    }
+                                </div>
                             </div>
                         </div>
                     </div>
