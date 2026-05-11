@@ -2038,17 +2038,49 @@ function _renderRecipeCard(r) {
 // AI clustering shown only when recipe count >= 3.
 // Provisional seeds shown as dismissible cards.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Clear all provisional seed domains from Firestore once the Manager has
+// confirmed at least one real Skill Area. Provisional domains are industry
+// seeds created at org provisioning time — they have served their purpose
+// once real domains exist. Deleting from Firestore (not just hiding) ensures
+// they vanish from the track assignment panel and training view too.
+// Updates the in-memory _domains array immediately so the session stays clean.
+// ---------------------------------------------------------------------------
+async function _clearProvisionalDomains(orgId) {
+    const provisional = _domains.filter(d => d.provisional);
+    if (provisional.length === 0) return;
+
+    const { db: _db } = await import('../firebase.js');
+    const { doc: _doc, deleteDoc } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js'
+    );
+    for (const d of provisional) {
+        try {
+            await deleteDoc(_doc(_db, 'organisations', orgId, 'domains', d.id));
+            console.log('LORE dashboard.js: Provisional domain deleted —', d.name, '(', d.id, ')');
+        } catch (err) {
+            console.warn('LORE dashboard.js: Could not delete provisional domain:', d.id, err);
+        }
+    }
+    // Remove from the in-memory array so the rest of the session sees a clean list
+    _domains = _domains.filter(d => !d.provisional);
+}
+
 async function renderKbDomains(el) {
     const confirmed   = _domains.filter(d => !d.provisional);
     const provisional = _domains.filter(d =>  d.provisional);
     const canCluster  = _recipes.length >= 3;
+
+    // State flag: whether any confirmed domains exist yet.
+    // Controls the layout priority — confirmed domains are dominant once created.
+    const hasConfirmed = confirmed.length > 0;
 
     // Check for unassigned Employees asynchronously so the page renders
     // immediately and the nudge appears once the data is ready.
     // Only run the check when confirmed domains exist — if there are none,
     // the Manager's next job is to create them, not to assign anyone.
     let unassignedEmployees = [];
-    if (confirmed.length > 0) {
+    if (hasConfirmed) {
         try {
             const { db: _db } = await import('../firebase.js');
             const { collection: _col, query: _q, where: _wh, getDocs: _gd } = await import(
@@ -2065,102 +2097,207 @@ async function renderKbDomains(el) {
         }
     }
 
-    const showAssignmentNudge = confirmed.length > 0 && unassignedEmployees.length > 0;
+    const showAssignmentNudge = hasConfirmed && unassignedEmployees.length > 0;
 
-    el.innerHTML = `
-        <div>
-            <!-- Contextual assignment nudge — shown only when confirmed skill areas
-                 exist but one or more Employees have no track assigned yet.
-                 This is the gap between creating skill areas and starting training.
-                 Framed as a next step, not a warning. Routes to Team members. -->
-            ${showAssignmentNudge ? `
+    // ---------------------------------------------------------------------------
+    // Two distinct layout states:
+    //
+    // EMPTY STATE (no confirmed domains yet):
+    //   A prominent directed prompt explains why skill areas matter and what to
+    //   do. The creation form follows as the primary action. The clustering card
+    //   is secondary. Provisional seeds appear below as starting-point reference.
+    //
+    // POST-CREATION STATE (at least one confirmed domain exists):
+    //   Confirmed domains are the dominant element — rendered first, full-width,
+    //   with ember accent bars. The assignment nudge (if needed) follows directly
+    //   below. The creation form collapses to a secondary toggle below the list.
+    //   The clustering card steps back to a quiet secondary option. Provisional
+    //   seeds are auto-deleted from Firestore so they cannot appear anywhere.
+    // ---------------------------------------------------------------------------
+
+    if (!hasConfirmed) {
+        // -----------------------------------------------------------------------
+        // EMPTY STATE — no confirmed skill areas yet.
+        // The prompt to create skill areas takes full visual priority.
+        // -----------------------------------------------------------------------
+        el.innerHTML = `
+            <div>
+                <!-- Primary prompt — dominant visual presence before any confirmed
+                     domains exist. Framed around value, not feature names. -->
                 <div style="
-                    display: flex;
-                    gap: var(--space-4);
-                    align-items: flex-start;
-                    padding: var(--space-5);
+                    padding: var(--space-6);
                     margin-bottom: var(--space-6);
                     background: rgba(196,98,45,0.05);
-                    border: 1px solid rgba(196,98,45,0.18);
+                    border: 1px solid rgba(196,98,45,0.15);
                     border-radius: var(--radius-lg);
-                    border-left: 3px solid var(--ember);
+                    border-left: 4px solid var(--ember);
                 ">
-                    <div style="
-                        width: 36px; height: 36px;
-                        border-radius: 50%;
-                        background: rgba(196,98,45,0.1);
-                        display: flex; align-items: center; justify-content: center;
-                        flex-shrink: 0;
-                    ">
-                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M8 3v5M8 11h.01" stroke="var(--ember)" stroke-width="1.5" stroke-linecap="round"/>
-                            <circle cx="8" cy="8" r="6.5" stroke="var(--ember)" stroke-width="1.5"/>
-                        </svg>
-                    </div>
-                    <div style="flex: 1;">
-                        <p style="font-weight: 600; font-size: var(--text-sm); margin-bottom: var(--space-1);">
-                            ${unassignedEmployees.length === 1
-                                ? `One Employee has no skill areas assigned yet`
-                                : `${unassignedEmployees.length} Employees have no skill areas assigned yet`}
-                        </p>
-                        <p class="text-secondary text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">
-                            Your skill areas are confirmed, but training cannot start until each Employee
-                            has a track. Assign them from the Team members tab.
-                        </p>
-                        <button class="btn btn-secondary" id="domains-go-assign"
-                            style="font-size: var(--text-sm); border-color: rgba(196,98,45,0.3); color: var(--ember);">
-                            Go to Team members →
-                        </button>
+                    <div style="display: flex; align-items: flex-start; gap: var(--space-4);">
+                        <div style="
+                            width: 40px; height: 40px;
+                            border-radius: 50%;
+                            background: rgba(196,98,45,0.12);
+                            display: flex; align-items: center; justify-content: center;
+                            flex-shrink: 0; margin-top: 2px;
+                        ">
+                            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M9 2v7m0 3h.01" stroke="var(--ember)" stroke-width="1.75" stroke-linecap="round"/>
+                                <circle cx="9" cy="9" r="7.5" stroke="var(--ember)" stroke-width="1.5"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <p style="font-weight: 700; font-size: var(--text-base); margin-bottom: var(--space-2); color: var(--ink);">
+                                Define your skill areas before assigning training tracks
+                            </p>
+                            <p class="text-secondary text-sm" style="line-height: 1.7; margin-bottom: 0;">
+                                Skill areas tell LORE which practice areas your organisation values.
+                                They determine what scenarios Employees train against and which Reviewers
+                                are notified when an Employee misses something. Create at least one
+                                before assigning any team members to a track.
+                            </p>
+                        </div>
                     </div>
                 </div>
-            ` : ''}
 
-            <p class="text-secondary text-sm" style="margin-bottom: var(--space-5); line-height: 1.6;">
-                Skill areas group your recipes into practice areas that your organisation defines.
-                They determine which scenarios Employees train against, and which Reviewers receive
-                mentorship prompts when an Employee misses something in that area.
-            </p>
+                <!-- Creation form — primary action in empty state -->
+                <div class="card" style="margin-bottom: var(--space-5);">
+                    <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>
+                    <p class="text-secondary text-sm mb-4" style="line-height: 1.6;">
+                        Name a practice area that matters to your organisation. You can always
+                        rename it or add more later.
+                    </p>
+                    <div class="auth-field">
+                        <label class="label mb-1">Skill area name</label>
+                        <input class="input" id="new-domain-name" type="text"
+                            placeholder="e.g. Client Engagement" style="margin-bottom: var(--space-3);">
+                    </div>
+                    <div class="auth-field">
+                        <label class="label mb-1">Description (optional)</label>
+                        <input class="input" id="new-domain-desc" type="text"
+                            placeholder="One sentence describing this skill area…">
+                    </div>
+                    <p id="new-domain-error" class="text-xs" style="color: var(--error); margin-top: var(--space-2); display: none;"></p>
+                    <button class="btn btn-primary mt-4" id="create-domain-btn" style="font-size: var(--text-sm);">
+                        Create skill area
+                    </button>
+                </div>
 
-            <!-- Manual domain creation — always first -->
-            <div class="card" style="margin-bottom: var(--space-6);">
-                <h3 style="margin-bottom: var(--space-2);">Create a skill area</h3>
-                <p class="text-secondary text-sm mb-4">Name a skill area that matters to your organisation. You can always rename it later.</p>
-                <div class="auth-field">
-                    <label class="label mb-1">Skill area name</label>
-                    <input class="input" id="new-domain-name" type="text" placeholder="e.g. Client Engagement" style="margin-bottom: var(--space-3);">
-                </div>
-                <div class="auth-field">
-                    <label class="label mb-1">Description (optional)</label>
-                    <input class="input" id="new-domain-desc" type="text" placeholder="One sentence describing this skill area…">
-                </div>
-                <p id="new-domain-error" class="text-xs" style="color: var(--error); margin-top: var(--space-2); display: none;"></p>
-                <button class="btn btn-primary mt-4" id="create-domain-btn" style="font-size: var(--text-sm);">
-                    Create skill area
-                </button>
+                <!-- AI clustering — secondary option, shown only when enough recipes exist -->
+                ${canCluster ? `
+                    <div class="card" style="margin-bottom: var(--space-6); opacity: 0.9;">
+                        <h3 style="margin-bottom: var(--space-2);">Or — let LORE suggest skill areas</h3>
+                        <p class="text-secondary text-sm mb-4" style="line-height: 1.6;">
+                            LORE can group your ${_recipes.length} approved recipes into suggested skill
+                            areas. You confirm, rename, or adjust them before anything is created.
+                        </p>
+                        ${_clusters.length > 0 ? _renderProposedClusters() : `
+                            <button class="btn btn-secondary" id="run-clustering" style="font-size: var(--text-sm);">
+                                Suggest skill areas from recipes
+                            </button>
+                        `}
+                    </div>
+                ` : ''}
+
+                <!-- Provisional seed domains — reference only, below the action -->
+                ${provisional.length > 0 ? `
+                    <div style="margin-top: var(--space-4);">
+                        <div style="display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3);">
+                            <p style="font-size: var(--text-sm); font-weight: 500; color: var(--warm-grey);">Starting points</p>
+                            <span style="
+                                font-size: var(--text-xs);
+                                color: var(--warm-grey);
+                                background: rgba(44,36,22,0.05);
+                                border-radius: 100px;
+                                padding: 2px var(--space-3);
+                            ">Based on your industry</span>
+                        </div>
+                        <p class="text-secondary text-sm mb-4" style="line-height: 1.6;">
+                            These provisional areas are seeded from your industry. Use them as
+                            inspiration or dismiss any that don't apply — they are replaced
+                            automatically once you create your own skill areas.
+                        </p>
+                        ${provisional.map(d => `
+                            <div class="card" style="
+                                margin-bottom: var(--space-3);
+                                opacity: 0.7;
+                                padding: var(--space-4) var(--space-5);
+                            ">
+                                <div class="flex-between">
+                                    <div>
+                                        <p style="font-weight: 500; color: var(--warm-grey);">${_esc(d.name)}</p>
+                                        <span class="chip chip-pending" style="margin-top: var(--space-1); font-size: 10px;">Provisional</span>
+                                    </div>
+                                    <button class="btn btn-secondary" id="dismiss-provisional-${d.id}"
+                                        style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);">
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
             </div>
+        `;
 
-            <!-- AI clustering — shown only when recipe count >= 3 (DOMAIN-02) -->
-            ${canCluster ? `
-                <div class="card" style="margin-bottom: var(--space-6);">
-                    <h3 style="margin-bottom: var(--space-2);">Suggest skill areas from recipes</h3>
-                    <p class="text-secondary text-sm mb-4">LORE can group your ${_recipes.length} recipes into suggested skill areas. You confirm, rename, or adjust them.</p>
-                    ${_clusters.length > 0 ? _renderProposedClusters() : `
-                        <button class="btn btn-secondary" id="run-clustering" style="font-size: var(--text-sm);">
-                            Suggest skill areas
-                        </button>
-                    `}
-                </div>
-            ` : ''}
+    } else {
+        // -----------------------------------------------------------------------
+        // POST-CREATION STATE — confirmed skill areas exist.
+        // Confirmed domains are the dominant element. Creation and clustering
+        // step back to collapsed secondary affordances below the list.
+        // -----------------------------------------------------------------------
+        el.innerHTML = `
+            <div>
+                <!-- Assignment nudge — most urgent next step when domains exist
+                     but Employees have no track yet. Shown above the domain list. -->
+                ${showAssignmentNudge ? `
+                    <div style="
+                        display: flex;
+                        gap: var(--space-4);
+                        align-items: flex-start;
+                        padding: var(--space-5);
+                        margin-bottom: var(--space-6);
+                        background: rgba(196,98,45,0.06);
+                        border: 1px solid rgba(196,98,45,0.2);
+                        border-radius: var(--radius-lg);
+                        border-left: 4px solid var(--ember);
+                    ">
+                        <div style="
+                            width: 36px; height: 36px;
+                            border-radius: 50%;
+                            background: rgba(196,98,45,0.12);
+                            display: flex; align-items: center; justify-content: center;
+                            flex-shrink: 0;
+                        ">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M8 3v5M8 11h.01" stroke="var(--ember)" stroke-width="1.5" stroke-linecap="round"/>
+                                <circle cx="8" cy="8" r="6.5" stroke="var(--ember)" stroke-width="1.5"/>
+                            </svg>
+                        </div>
+                        <div style="flex: 1;">
+                            <p style="font-weight: 700; font-size: var(--text-sm); margin-bottom: var(--space-1); color: var(--ink);">
+                                ${unassignedEmployees.length === 1
+                                    ? 'One Employee has no skill areas assigned yet'
+                                    : `${unassignedEmployees.length} Employees have no skill areas assigned yet`}
+                            </p>
+                            <p class="text-secondary text-sm" style="line-height: 1.6; margin-bottom: var(--space-3);">
+                                Your skill areas are confirmed. Assign each Employee a track in
+                                Team members so their training can begin.
+                            </p>
+                            <button class="btn btn-secondary" id="domains-go-assign"
+                                style="font-size: var(--text-sm); border-color: rgba(196,98,45,0.3); color: var(--ember);">
+                                Go to Team members →
+                            </button>
+                        </div>
+                    </div>
+                ` : ''}
 
-            <!-- Confirmed skill areas — visual warmth: accent left-border,
-                 recipe count badge in ember, description line below name -->
-            ${confirmed.length > 0 ? `
+                <!-- Confirmed skill areas — dominant element -->
                 <div style="margin-bottom: var(--space-6);">
                     <div style="
                         display: flex;
                         align-items: center;
                         justify-content: space-between;
-                        margin-bottom: var(--space-4);
+                        margin-bottom: var(--space-5);
                     ">
                         <h3>Your skill areas</h3>
                         <span style="
@@ -2171,46 +2308,45 @@ async function renderKbDomains(el) {
                             padding: 2px var(--space-3);
                         ">${confirmed.length} confirmed</span>
                     </div>
+
                     ${confirmed.map(d => `
                         <div class="card" style="
                             margin-bottom: var(--space-3);
                             padding: 0;
                             overflow: hidden;
                         ">
-                            <div style="
-                                display: flex;
-                                align-items: stretch;
-                            ">
+                            <div style="display: flex; align-items: stretch;">
                                 <!-- Ember left accent bar -->
                                 <div style="
-                                    width: 3px;
+                                    width: 4px;
                                     background: var(--ember);
                                     border-radius: var(--radius-lg) 0 0 var(--radius-lg);
                                     flex-shrink: 0;
                                 "></div>
                                 <div style="
                                     flex: 1;
-                                    padding: var(--space-4) var(--space-5);
+                                    padding: var(--space-5) var(--space-6);
                                     display: flex;
                                     justify-content: space-between;
                                     align-items: center;
+                                    gap: var(--space-4);
                                 ">
-                                    <div>
-                                        <p style="font-weight: 600;">${_esc(d.name)}</p>
-                                        ${d.description ? `<p class="text-secondary text-sm" style="margin-top: var(--space-1); line-height: 1.5;">${_esc(d.description)}</p>` : ''}
+                                    <div style="min-width: 0;">
+                                        <p style="font-weight: 700; font-size: var(--text-base); color: var(--ink);">${_esc(d.name)}</p>
+                                        ${d.description
+                                            ? `<p class="text-secondary text-sm" style="margin-top: var(--space-1); line-height: 1.5;">${_esc(d.description)}</p>`
+                                            : ''}
                                     </div>
-                                    <div style="
-                                        flex-shrink: 0;
-                                        margin-left: var(--space-4);
-                                        text-align: right;
-                                    ">
+                                    <div style="flex-shrink: 0; text-align: right;">
                                         <span style="
+                                            display: inline-block;
                                             font-size: var(--text-xs);
                                             font-weight: 700;
                                             color: ${(d.recipeIds ?? []).length > 0 ? 'var(--ember)' : 'var(--warm-grey)'};
-                                            background: ${(d.recipeIds ?? []).length > 0 ? 'rgba(196,98,45,0.08)' : 'rgba(44,36,22,0.05)'};
+                                            background: ${(d.recipeIds ?? []).length > 0 ? 'rgba(196,98,45,0.1)' : 'rgba(44,36,22,0.05)'};
                                             border-radius: 100px;
-                                            padding: 2px var(--space-3);
+                                            padding: 3px var(--space-3);
+                                            white-space: nowrap;
                                         ">${(d.recipeIds ?? []).length} recipe${(d.recipeIds ?? []).length !== 1 ? 's' : ''}</span>
                                     </div>
                                 </div>
@@ -2218,40 +2354,97 @@ async function renderKbDomains(el) {
                         </div>
                     `).join('')}
                 </div>
-            ` : ''}
 
-            <!-- Provisional seed domains — dismissible -->
-            ${provisional.length > 0 ? `
-                <div>
-                    <h3 style="margin-bottom: var(--space-2);">Starting points</h3>
-                    <p class="text-secondary text-sm mb-4">Provisional skill areas based on your industry. Dismiss any that don't apply — LORE will replace them with your organisation's own as knowledge builds.</p>
-                    ${provisional.map(d => `
-                        <div class="card" style="margin-bottom: var(--space-3); opacity: 0.75;">
-                            <div class="flex-between">
-                                <div>
-                                    <p style="font-weight: 500; color: var(--warm-grey);">${_esc(d.name)}</p>
-                                    <span class="chip chip-pending" style="margin-top: var(--space-1); font-size: 10px;">Provisional</span>
-                                </div>
-                                <button class="btn btn-secondary" id="dismiss-provisional-${d.id}"
-                                    style="font-size: var(--text-xs); padding: var(--space-1) var(--space-3); color: var(--warm-grey);">
-                                    Dismiss
-                                </button>
+                <!-- Secondary section — creation form and clustering as collapsed
+                     toggles below the confirmed domain list -->
+                <div style="
+                    border-top: 1px solid rgba(44,36,22,0.08);
+                    padding-top: var(--space-5);
+                ">
+                    <!-- Collapsed creation form -->
+                    <div style="margin-bottom: var(--space-4);">
+                        <button class="btn btn-secondary" id="toggle-create-domain"
+                            style="font-size: var(--text-sm); color: var(--warm-grey);">
+                            + Add another skill area
+                        </button>
+                        <div id="create-domain-form" style="display: none; margin-top: var(--space-4);">
+                            <div class="auth-field">
+                                <label class="label mb-1">Skill area name</label>
+                                <input class="input" id="new-domain-name" type="text"
+                                    placeholder="e.g. Client Engagement" style="margin-bottom: var(--space-3);">
+                            </div>
+                            <div class="auth-field">
+                                <label class="label mb-1">Description (optional)</label>
+                                <input class="input" id="new-domain-desc" type="text"
+                                    placeholder="One sentence describing this skill area…">
+                            </div>
+                            <p id="new-domain-error" class="text-xs" style="color: var(--error); margin-top: var(--space-2); display: none;"></p>
+                            <button class="btn btn-primary mt-4" id="create-domain-btn" style="font-size: var(--text-sm);">
+                                Create skill area
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Collapsed clustering option -->
+                    ${canCluster ? `
+                        <div>
+                            <button class="btn btn-secondary" id="toggle-clustering"
+                                style="font-size: var(--text-sm); color: var(--warm-grey);">
+                                Suggest skill areas from recipes
+                            </button>
+                            <div id="clustering-panel" style="display: none; margin-top: var(--space-4);">
+                                <p class="text-secondary text-sm mb-4" style="line-height: 1.6;">
+                                    LORE will group your ${_recipes.length} recipes into suggested skill areas.
+                                    You confirm, rename, or adjust them before anything is created.
+                                </p>
+                                ${_clusters.length > 0 ? _renderProposedClusters() : `
+                                    <button class="btn btn-secondary" id="run-clustering" style="font-size: var(--text-sm);">
+                                        Run suggestion
+                                    </button>
+                                `}
                             </div>
                         </div>
-                    `).join('')}
+                    ` : ''}
                 </div>
-            ` : ''}
-        </div>
-    `;
+            </div>
+        `;
+    }
 
-    // Assignment nudge — routes the Manager to the Team members tab where
-    // track assignment already lives. No duplicate assignment UI here.
+    // ---------------------------------------------------------------------------
+    // Event handlers — attached after innerHTML is set, regardless of state branch.
+    // ---------------------------------------------------------------------------
+
+    // Assignment nudge — routes to Team members.
+    // _activeTeamSection is set BEFORE renderTeamTab so that renderTeamTab's
+    // internal call to _switchTeamSection(_activeTeamSection) requests 'members'
+    // directly. Without this, _activeTeamSection defaults to 'progress', which
+    // fires the async renderTeamProgress — that async call resolves later and
+    // overwrites the members view, causing the routing bug.
     document.getElementById('domains-go-assign')?.addEventListener('click', () => {
-        _activeTab = 'team';
+        _activeTab         = 'team';
+        _activeTeamSection = 'members';
         _setActiveTabStyle('team');
         renderTeamTab(document.getElementById('dashboard-tab-content'));
-        // Switch to the members sub-section so the Manager lands directly on track assignment
-        _switchTeamSection('members');
+    });
+
+    // Toggle the collapsed creation form in the post-creation state
+    document.getElementById('toggle-create-domain')?.addEventListener('click', () => {
+        const form = document.getElementById('create-domain-form');
+        if (!form) return;
+        const isOpen = form.style.display !== 'none';
+        form.style.display = isOpen ? 'none' : 'block';
+        const btn = document.getElementById('toggle-create-domain');
+        if (btn) btn.textContent = isOpen ? '+ Add another skill area' : '− Cancel';
+    });
+
+    // Toggle the clustering panel in the post-creation state
+    document.getElementById('toggle-clustering')?.addEventListener('click', () => {
+        const panel = document.getElementById('clustering-panel');
+        if (!panel) return;
+        const isOpen = panel.style.display !== 'none';
+        panel.style.display = isOpen ? 'none' : 'block';
+        const btn = document.getElementById('toggle-clustering');
+        if (btn) btn.textContent = isOpen ? 'Suggest skill areas from recipes' : '− Cancel';
     });
 
     // Create domain handler
@@ -2273,6 +2466,9 @@ async function renderKbDomains(el) {
 
         const newId = await confirmDomain(_orgId, { name, description: desc ?? '', recipeIds: [], reviewerIds: [] });
         if (newId) {
+            // Auto-clear provisional seeds now that a real domain exists.
+            // Runs before the reload so the reload returns a clean list.
+            await _clearProvisionalDomains(_orgId);
             _domains = await getDomains(_orgId);
             renderKbDomains(el);
         } else {
@@ -2294,7 +2490,7 @@ async function renderKbDomains(el) {
             renderKbDomains(el);
         } else {
             btn.disabled    = false;
-            btn.textContent = 'Suggest skill areas';
+            btn.textContent = 'Suggest skill areas from recipes';
         }
     });
 
@@ -2320,6 +2516,9 @@ async function renderKbDomains(el) {
             btn.textContent = 'Confirming…';
 
             await confirmDomain(_orgId, { ...cluster, name, description: desc });
+            // Auto-clear provisional seeds now that a real domain exists.
+            // Runs before the reload so the reload returns a clean list.
+            await _clearProvisionalDomains(_orgId);
             _domains = await getDomains(_orgId);
             _clusters.splice(i, 1);
             if (_clusters.length === 0) clearPendingClusters(_orgId);
@@ -2604,8 +2803,21 @@ async function _loadTeamList(parentEl) {
 
         if (_users.length === 0 && pendingInvites.length === 0) {
             listEl.innerHTML = `
-                <div class="empty-state">
-                    <p class="text-secondary">No team members yet. Generate an invite link to add your first person.</p>
+                <div style="
+                    padding: var(--space-8) var(--space-6);
+                    background: rgba(196,98,45,0.04);
+                    border: 1px solid rgba(196,98,45,0.12);
+                    border-radius: var(--radius-lg);
+                    border-left: 4px solid var(--ember);
+                    text-align: center;
+                ">
+                    <p style="font-weight: 600; color: var(--ink); margin-bottom: var(--space-2);">
+                        No team members yet
+                    </p>
+                    <p class="text-secondary text-sm" style="line-height: 1.7; max-width: 380px; margin: 0 auto;">
+                        Use the Invite someone button above to send personal invite links to your
+                        Employees and Reviewers. Each link expires after 7 days.
+                    </p>
                 </div>
             `;
             return;
