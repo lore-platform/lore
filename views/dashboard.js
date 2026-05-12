@@ -1504,36 +1504,38 @@ function renderKbRecipes(el) {
     }
 
     // ---------------------------------------------------------------------------
-    // Grouping strategy — match each recipe to a confirmed Skill Area by comparing
-    // r.domain (the string set at approval time) against confirmed domain names.
-    // Matching is case-insensitive and trims whitespace so minor inconsistencies
-    // in how the Manager typed the domain at approval time do not create orphans.
+    // Grouping strategy — match each recipe to a confirmed Skill Area by checking
+    // whether the recipe's ID appears in the domain's recipeIds[] array. This is
+    // the correct path now that Managers assign recipes explicitly via the Skill
+    // Areas tab, rather than relying on the free-text r.domain field matching the
+    // Skill Area name (which almost never matched in practice).
     //
     // Three buckets:
-    //   byDomain      — Map of confirmed domain id → { domain object, recipes[] }
-    //   unmatched     — Recipes whose r.domain string matches no confirmed Skill Area
+    //   byDomainId    — Map of confirmed domain id → { domain object, recipes[] }
+    //   unmatched     — Recipes not found in any confirmed domain's recipeIds[]
     //   noDomainsYet  — True when there are no confirmed Skill Areas at all
     // ---------------------------------------------------------------------------
     const confirmed = _domains.filter(d => !d.provisional);
 
-    // Build a lookup: normalised name → domain object
-    const domainByName = {};
+    // Build a lookup: recipeId → domainId, so each recipe can be bucketed in O(1)
+    const recipeIdToDomainId = {};
     confirmed.forEach(d => {
-        domainByName[d.name.trim().toLowerCase()] = d;
+        (d.recipeIds ?? []).forEach(rid => {
+            recipeIdToDomainId[rid] = d.id;
+        });
     });
 
     const byDomainId  = {}; // domainId → { domain, recipes[] }
-    const unmatched   = []; // recipes with no confirmed Skill Area match
+    const unmatched   = []; // recipes not in any confirmed Skill Area's recipeIds[]
 
     confirmed.forEach(d => {
         byDomainId[d.id] = { domain: d, recipes: [] };
     });
 
     _recipes.forEach(r => {
-        const key    = (r.domain ?? '').trim().toLowerCase();
-        const match  = domainByName[key];
-        if (match) {
-            byDomainId[match.id].recipes.push(r);
+        const domainId = recipeIdToDomainId[r.id];
+        if (domainId && byDomainId[domainId]) {
+            byDomainId[domainId].recipes.push(r);
         } else {
             unmatched.push(r);
         }
