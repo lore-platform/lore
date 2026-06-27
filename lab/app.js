@@ -12,7 +12,6 @@
  */
 
 import { onAuthChange, signIn, signOut } from '../engine/auth.js';
-import { ping } from '../engine/ai.js';
 
 // ── Shared state ──────────────────────────────────────────────────────
 let _currentUser = null;
@@ -120,8 +119,10 @@ function renderAuthScreen() {
 
         <div class="lab-auth-actions">
           <button class="btn btn-primary" id="btn-sign-in">Sign In</button>
-          <button class="btn btn-ghost"   id="btn-sign-up">Create Account</button>
         </div>
+        <p style="margin-top:1rem; font-size:0.8rem; opacity:0.5;">
+          Accounts are provisioned by the researcher. Contact your session lead if you need access.
+        </p>
 
       </div>
     </div>
@@ -131,7 +132,6 @@ function renderAuthScreen() {
     const passwordEl = document.getElementById('auth-password');
     const errorEl = document.getElementById('auth-error');
     const signInBtn = document.getElementById('btn-sign-in');
-    const signUpBtn = document.getElementById('btn-sign-up');
 
     function showError(msg) {
         errorEl.textContent = msg;
@@ -173,7 +173,6 @@ function renderAuthScreen() {
     }
 
     signInBtn.addEventListener('click', () => handleAuth(false));
-    signUpBtn.addEventListener('click', () => handleAuth(true));
 
     // Allow Enter key to trigger sign-in from either field
     [emailEl, passwordEl].forEach(el =>
@@ -184,9 +183,6 @@ function renderAuthScreen() {
 // ── Bootstrap ─────────────────────────────────────────────────────────
 
 function boot() {
-    // Confirm the Cloudflare Worker is reachable (fire-and-forget)
-    ping().catch(err => console.warn('[lab/app] Worker ping failed:', err));
-
     // Render the auth screen once (its HTML lives here, not in a view module)
     renderAuthScreen();
 

@@ -252,8 +252,15 @@ async function handleSubmit(existingSessionId, getDocText) {
             CUE_SYSTEM_PROMPT
         );
 
-        // Step 4 — Parse with extractJSON (five-pass recovery)
-        const cueLibrary = extractJSON(rawResponse);
+        // Step 4 — Check the Worker response, then parse with extractJSON
+        if (!rawResponse.ok) {
+            throw new Error(
+                rawResponse.quota
+                    ? 'AI quota exceeded. Please wait a few minutes and try again.'
+                    : 'The AI call failed. Please try again.'
+            );
+        }
+        const cueLibrary = extractJSON(rawResponse.text);
 
         if (!Array.isArray(cueLibrary) || cueLibrary.length === 0) {
             throw new Error(

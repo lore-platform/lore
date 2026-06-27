@@ -105,7 +105,15 @@ export async function init(container, sessionId) {
                 buildSituationPrompt(session.profile, session.cueLibrary),
                 SIT_SYSTEM_PROMPT
             );
-            situationTexts = extractJSON(raw);
+
+            if (!raw.ok) {
+                throw new Error(
+                raw.quota
+                    ? 'AI quota exceeded. Please wait a few minutes and try again.'
+                    : 'Situation generation failed. Please try again.'
+                );
+            }
+            situationTexts = extractJSON(raw.text);
 
             if (!Array.isArray(situationTexts) || situationTexts.length !== 12) {
                 throw new Error(

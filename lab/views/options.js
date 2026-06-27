@@ -90,7 +90,15 @@ export async function init(container, sessionId) {
                 buildOptionsPrompt(session.profile),
                 OPTIONS_SYSTEM_PROMPT
             );
-            options = extractJSON(raw);
+
+            if (!raw.ok) {
+                throw new Error(
+                    raw.quota
+                        ? 'AI quota exceeded. Please wait a few minutes and try again.'
+                        : 'Option generation failed. Please try again.'
+                );
+            }
+            options = extractJSON(raw.text);
 
             if (!Array.isArray(options) || options.length < 2) {
                 throw new Error(
