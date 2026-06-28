@@ -4,22 +4,23 @@
  * Bootstrap for the Knowledge Extraction Lab.
  *
  * Responsibilities:
- *  - Ping the Cloudflare Worker on load
- *  - Render the auth screen and handle sign-in / sign-up
+ *  - Ping the Cloudflare Worker on load (warms it up before the first AI call)
+ *  - Render the auth screen and handle sign-in
  *  - Maintain shared state: current user + current session ID
  *  - Export showView(), getCurrentUser(), getSessionId(), setSessionId()
  *    for use by view modules
  */
 
-import { onAuthChange, signIn, signOut } from '../engine/auth.js';
+import { onAuthChange, signIn } from '../engine/auth.js';
+import { ping } from '../engine/ai.js';
 
 // ── Shared state ──────────────────────────────────────────────────────
 let _currentUser = null;
 let _sessionId = null;
 
 export const getCurrentUser = () => _currentUser;
-export const getSessionId = () => _sessionId;
-export const setSessionId = (id) => { _sessionId = id; };
+export const getSessionId  = () => _sessionId;
+export const setSessionId  = (id) => { _sessionId = id; };
 
 // ── View registry ─────────────────────────────────────────────────────
 // All view IDs — used to hide every view before showing the target one.
@@ -30,19 +31,17 @@ const ALL_VIEW_IDS = [
 ];
 
 // Dynamic loaders — only imported when the view is first navigated to.
-// Empty placeholder files do not cause errors because they are never
-// imported unless the user actually reaches that screen.
 const VIEW_LOADERS = {
-    'profile': () => import('./views/profile.js'),
-    'sorting': () => import('./views/sorting.js'),
-    'cue-review': () => import('./views/cue-review.js'),
-    'options': () => import('./views/options.js'),
-    'session': () => import('./views/session.js'),
-    'model-view': () => import('./views/model-view.js'),
+    'profile':     () => import('./views/profile.js'),
+    'sorting':     () => import('./views/sorting.js'),
+    'cue-review':  () => import('./views/cue-review.js'),
+    'options':     () => import('./views/options.js'),
+    'session':     () => import('./views/session.js'),
+    'model-view':  () => import('./views/model-view.js'),
     'elicitation': () => import('./views/elicitation.js'),
-    'recipe': () => import('./views/recipe.js'),
-    'transfer': () => import('./views/transfer.js'),
-    'summary': () => import('./views/summary.js'),
+    'recipe':      () => import('./views/recipe.js'),
+    'transfer':    () => import('./views/transfer.js'),
+    'summary':     () => import('./views/summary.js'),
 };
 
 /**
@@ -128,24 +127,26 @@ function renderAuthScreen() {
     </div>
   `;
 
-    const emailEl = document.getElementById('auth-email');
+    const emailEl    = document.getElementById('auth-email');
     const passwordEl = document.getElementById('auth-password');
-    const errorEl = document.getElementById('auth-error');
-    const signInBtn = document.getElementById('btn-sign-in');
+    const errorEl    = document.getElementById('auth-error');
+    const signInBtn  = document.getElementById('btn-sign-in');
 
     function showError(msg) {
         errorEl.textContent = msg;
         errorEl.classList.remove('hidden');
     }
 
+    // FIX: setLoading now only references signInBtn, which IS declared above.
+    // The original code referenced signUpBtn (never declared, no sign-up button
+    // in the HTML), which threw a ReferenceError on every sign-in attempt.
     function setLoading(on) {
-        signInBtn.disabled = on;
-        signUpBtn.disabled = on;
+        signInBtn.disabled    = on;
         signInBtn.textContent = on ? 'Signing in…' : 'Sign In';
     }
 
-    async function handleAuth(isNewUser) {
-        const email = emailEl.value.trim();
+    async function handleSignIn() {
+        const email    = emailEl.value.trim();
         const password = passwordEl.value;
         errorEl.classList.add('hidden');
 
@@ -153,36 +154,38 @@ function renderAuthScreen() {
             showError('Please enter both email and password.');
             return;
         }
-        if (isNewUser && password.length < 8) {
-            showError('Password must be at least 8 characters for a new account.');
-            return;
-        }
 
         setLoading(true);
         try {
-            // signIn(email, password, isNewUser) — this assumes engine/auth.js
-            // accepts a third boolean to switch between sign-in and sign-up.
-            // If your auth.js has separate signIn / signUp functions, import
-            // signUp here and call it when isNewUser is true.
-            await signIn(email, password, isNewUser);
+            // signIn() is from engine/auth.js — returns { ok, error } shape.
             // Firebase's onAuthChange callback handles navigation after success.
+            const result = await signIn(email, password);
+            if (result && !result.ok) {
+                showError(result.error || 'Authentication failed. Please try again.');
+                setLoading(false);
+            }
         } catch (err) {
             showError(err.message || 'Authentication failed. Please try again.');
             setLoading(false);
         }
     }
 
-    signInBtn.addEventListener('click', () => handleAuth(false));
+    signInBtn.addEventListener('click', handleSignIn);
 
     // Allow Enter key to trigger sign-in from either field
     [emailEl, passwordEl].forEach(el =>
-        el.addEventListener('keydown', e => { if (e.key === 'Enter') handleAuth(false); })
+        el.addEventListener('keydown', e => { if (e.key === 'Enter') handleSignIn(); })
     );
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────
 
 function boot() {
+    // FIX: ping() warms up the Cloudflare Worker so the first AI call
+    // (cue extraction on profile submit) does not hit a cold-start delay.
+    // Required by the spec. Fire-and-forget — errors are non-fatal.
+    ping().catch(err => console.warn('[lab/app] ping failed:', err));
+
     // Render the auth screen once (its HTML lives here, not in a view module)
     renderAuthScreen();
 
@@ -192,7 +195,6 @@ function boot() {
 
         if (user) {
             // Signed in — start at the profile screen
-            // (Step 2 will add resume-session logic here)
             showView('profile');
         } else {
             // Signed out — reset session and return to auth
