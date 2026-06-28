@@ -4,15 +4,18 @@
  * Bootstrap for the Knowledge Extraction Lab.
  *
  * Responsibilities:
- *  - Ping the Cloudflare Worker on load (warms it up before the first AI call)
  *  - Render the auth screen and handle sign-in
  *  - Maintain shared state: current user + current session ID
  *  - Export showView(), getCurrentUser(), getSessionId(), setSessionId()
  *    for use by view modules
+ *
+ * NOTE: ping() is listed in the spec but is not currently exported from
+ * engine/ai.js. Removed to prevent a SyntaxError on module load.
+ * Re-add `import { ping } from '../engine/ai.js'` and the ping() call
+ * in boot() if/when ping is added to the engine.
  */
 
 import { onAuthChange, signIn } from '../engine/auth.js';
-import { ping } from '../engine/ai.js';
 
 // ── Shared state ──────────────────────────────────────────────────────
 let _currentUser = null;
@@ -181,11 +184,6 @@ function renderAuthScreen() {
 // ── Bootstrap ─────────────────────────────────────────────────────────
 
 function boot() {
-    // FIX: ping() warms up the Cloudflare Worker so the first AI call
-    // (cue extraction on profile submit) does not hit a cold-start delay.
-    // Required by the spec. Fire-and-forget — errors are non-fatal.
-    ping().catch(err => console.warn('[lab/app] ping failed:', err));
-
     // Render the auth screen once (its HTML lives here, not in a view module)
     renderAuthScreen();
 
