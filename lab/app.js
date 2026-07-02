@@ -27,6 +27,7 @@ import {
 
 import { createSession, getLatestSession, getSession } from './db.js';
 
+import { render as renderIntro     } from './views/intro.js';
 import { render as renderProfile   } from './views/profile.js';
 import { render as renderSorting   } from './views/sorting.js';
 import { render as renderCueReview } from './views/cue-review.js';
@@ -57,7 +58,7 @@ fetch('https://lore-worker.slop-runner.workers.dev', {
 // View names — in screen order.
 // ---------------------------------------------------------------------------
 const ALL_VIEWS = [
-    'auth',
+    'auth', 'intro',
     'profile', 'sorting', 'cue-review', 'options',
     'session', 'model-view', 'elicitation', 'recipe',
     'transfer', 'summary',
@@ -108,6 +109,11 @@ export async function showView(name) {
     const next = _makeAdvance(name);
 
     switch (name) {
+        // Intro is not in SCREEN_SEQ so _makeAdvance would misroute it.
+        // We pass a direct callback to showView('profile') instead.
+        case 'intro':
+            renderIntro(el, _currentSession, () => showView('profile'));
+            break;
         case 'profile':
             renderProfile(el, _currentSession, next);
             break;
@@ -177,7 +183,8 @@ function _getResumeView(s) {
     if (s.cueLibrary?.length)                       return 'cue-review';
     if (s.sortingTask?.situations?.length)          return 'sorting';
     if (s.profile?.role)                            return 'sorting';
-    return 'profile';
+    // No profile data at all — truly first visit. Show the intro guide.
+    return 'intro';
 }
 
 function _makePips(active) {

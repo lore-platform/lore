@@ -56,8 +56,15 @@ export function render(el, session, next) {
         <label class="label" for="f-decisiontypes">
           What kinds of decisions does your work involve?
         </label>
+        <p class="form-hint">
+          Think about the recurring calls you make — not one-off decisions, but the
+          types of judgements that come up regularly. For example: which things to
+          prioritise over others, whether to approve or reject something, when to
+          escalate versus handle it yourself, how to allocate limited resources
+          between competing needs.
+        </p>
         <textarea class="input" id="f-decisiontypes" rows="4"
-          placeholder="The actual calls you make — approve/decline, prioritise, escalate, choose between options."
+          placeholder="e.g. Which features to build next, whether to escalate a client issue, how to allocate the team's time between projects"
           required>${_esc(p.decisionTypes)}</textarea>
       </div>
 
@@ -65,8 +72,14 @@ export function render(el, session, next) {
         <label class="label" for="f-hard">
           What makes a situation in your field genuinely difficult versus routine?
         </label>
+        <p class="form-hint">
+          Routine situations have a clear, quick answer — you barely have to think.
+          Difficult ones make you pause, gather more information, or weigh competing
+          factors before deciding. What is it about the difficult ones that isn't
+          present in the routine ones? What's missing, unclear, or in conflict?
+        </p>
         <textarea class="input" id="f-hard" rows="4"
-          placeholder="What separates a five-minute case from one that makes you stop and think?"
+          placeholder="e.g. When the data points in different directions, when stakeholder priorities conflict, when the risk level is unclear"
           required>${_esc(p.whatMakesItHard)}</textarea>
       </div>
 

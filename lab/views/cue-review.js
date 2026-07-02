@@ -39,6 +39,21 @@ function _draw(el, session, next) {
 
   <div id="cue-err" class="lab-notice lab-err" style="display:none"></div>
 
+  <div class="lab-explain-card">
+    <p>
+      A <strong>cue</strong> is a specific piece of information that changes what
+      you would do in a situation. Not all cues are obvious — many are things
+      experts notice instinctively without being aware they're doing it. The system
+      has proposed these based on your profile and your sorting groups.
+    </p>
+    <div class="lab-explain-actions">
+      <div class="lab-explain-action"><strong>Keep</strong><span>It genuinely affects how you'd respond — the wording is right</span></div>
+      <div class="lab-explain-action"><strong>Edit</strong><span>The factor is real but the name or definition is imprecise</span></div>
+      <div class="lab-explain-action"><strong>Remove</strong><span>This wouldn't actually change your decision — it's not a real driver</span></div>
+      <div class="lab-explain-action"><strong>Add</strong><span>An important factor the system missed — something you notice that isn't listed</span></div>
+    </div>
+  </div>
+
   <div class="lab-card">
     <div id="cue-list">
       ${_cues.map(c => _rowHTML(c)).join('')}

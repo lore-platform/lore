@@ -85,6 +85,25 @@ function _draw(el, session, next) {
 
   <div id="opts-err" class="lab-notice lab-err" style="display:none"></div>
 
+  <div class="lab-explain-card">
+    <p>
+      Decision options are the actual choices you make — not the factors you
+      consider when deciding (those are your cues), but the actions you take
+      as a result. In the scenario session coming up, you'll be shown 30 situations
+      and asked to pick one of these options for each.
+    </p>
+    <p>
+      It's important they represent the real range of decisions you make at the
+      right level of specificity — broad enough to apply across different
+      situations, specific enough that each one means something distinct.
+    </p>
+    <div class="lab-explain-actions">
+      <div class="lab-explain-action"><strong>Edit</strong><span>The option is real but the label or description doesn't match how you'd describe it</span></div>
+      <div class="lab-explain-action"><strong>Remove</strong><span>This isn't a real choice you face in your work</span></div>
+      <div class="lab-explain-action"><strong>Add</strong><span>A genuine option that's missing from this list</span></div>
+    </div>
+  </div>
+
   <div class="lab-card">
     <div id="opts-list">
       ${_options.map(o => _rowHTML(o)).join('')}
