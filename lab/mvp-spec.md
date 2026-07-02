@@ -69,6 +69,7 @@ lore-platform/                  ← existing Lore repo root on GitHub
     ├── app.js
     ├── db.js
     ├── model-fit.js
+    ├── style.css               ← lab-specific styles (loaded after shared style.css)
     └── views/
         ├── profile.js          — step 1: expert profile intake
         ├── sorting.js          — step 2: sorting task
@@ -81,6 +82,17 @@ lore-platform/                  ← existing Lore repo root on GitHub
         ├── transfer.js         — step 9: learner transfer test
         └── summary.js          — step 10: session results
 ```
+
+### CSS
+
+`lab/index.html` links to both stylesheets in this order:
+
+```html
+<link rel="stylesheet" href="../style.css">  <!-- shared design tokens and components -->
+<link rel="stylesheet" href="./style.css">   <!-- lab-specific styles and overrides -->
+```
+
+`lab/style.css` is the lab's own stylesheet. It loads after the shared one, so it can override or extend anything from the root design system without touching the shared file.
 
 ### Import paths from `/lab`
 
@@ -413,6 +425,7 @@ lab/
 ├── app.js
 ├── db.js
 ├── model-fit.js
+├── style.css
 └── views/
     ├── profile.js
     ├── sorting.js
@@ -432,17 +445,18 @@ Commit and push. Confirm `/lab` is visible on GitHub. Move to Step 1.
 
 ### Step 1 — Foundation + Setup Screens
 
-**One chat session. Files: 4 core files + 4 view files.**
+**One chat session. Files: 5 core files + 4 view files.**
 
 Build in this order:
-1. `lab/index.html` — shell with auth screen and view containers, loads `app.js`
-2. `lab/app.js` — auth state listener, `showView()` router, `ping()` on load
-3. `lab/db.js` — all Firestore read/write functions for the `sessions` collection
-4. Auth screen — sign in and sign up via `../engine/auth.js`
-5. `lab/views/profile.js` — Screen 1
-6. `lab/views/sorting.js` — Screen 2
-7. `lab/views/cue-review.js` — Screen 3
-8. `lab/views/options.js` — Screen 4
+1. `lab/style.css` — lab-specific stylesheet, initially empty or with minimal scoping styles; linked after `../style.css` in `lab/index.html`
+2. `lab/index.html` — shell with auth screen and view containers; links to `../style.css` then `./style.css`; loads `app.js` as module
+3. `lab/app.js` — auth state listener, `showView()` router, `ping()` on load
+4. `lab/db.js` — all Firestore read/write functions for the `sessions` collection
+5. Auth screen — sign in and sign up via `../engine/auth.js`
+6. `lab/views/profile.js` — Screen 1
+7. `lab/views/sorting.js` — Screen 2
+8. `lab/views/cue-review.js` — Screen 3
+9. `lab/views/options.js` — Screen 4
 
 **Test before Step 2:** sign in works, profile intake saves a session to Firestore, cue library written with correct shape.
 

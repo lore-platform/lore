@@ -1,423 +1,315 @@
-/**
- * lab/views/sorting.js
- * Screen 2 — Sorting Task
- * ─────────────────────────────────────────────────────────────────────
- * Flow:
- *  1. Load session from Firestore to get profile and cueLibrary
- *  2. If situations already generated (resume), use them; otherwise call
- *     generate() to produce 12 situation descriptions
- *  3. Render drag-and-drop board: ungrouped pool + group columns
- *  4. After expert groups all cards, show per-group question forms
- *  5. Save sortingTask to Firestore and navigate to Screen 3
- */
+// =============================================================================
+// Lab — views/sorting.js
+// Screen 2 — Sorting Task
+//
+// 12 AI-generated situation cards. The expert drags them into groups they
+// define, then answers two prompts per group: what these situations have
+// in common, and what would make a similar-looking situation different.
+//
+// The grouping dimensions feed back into the cue library — a second
+// classify() call merges any new discriminators the expert surfaced here
+// into the cues proposed in Screen 1.
+// =============================================================================
 
-import { generate } from '../../engine/ai.js';
-import { extractJSON } from '../../engine/utils.js';
-import { getSession, updateSortingTask } from '../db.js';
-import { showView } from '../app.js';
+import { generate, classify } from '../../engine/ai.js';
+import { extractJSON }        from '../../engine/utils.js';
+import { saveSortingTask, saveCueLibrary } from '../db.js';
 
-// ── Situation generation prompt ───────────────────────────────────────
+const NUM_SITUATIONS = 12;
 
-const SIT_SYSTEM_PROMPT = `
-You are building a knowledge elicitation exercise for a domain expert.
-Generate 12 short situation descriptions (2–3 sentences each) that this expert
-would recognise from their real work.
+// Module-scoped per render — reset each time render() is called
+let _situations = [];   // [{ id, text }]
+let _groups     = [];   // [{ groupId, situationIds: [], commonality: '', discriminator: '' }]
+let _dragId     = null; // currently dragged situation id
 
-The situations must vary systematically across the cues provided so that they
-span the full range of the expert's decision space — including edge cases,
-routine cases, and genuinely ambiguous ones.
+export async function render(el, session, next) {
+    _situations = [];
+    _groups     = [{ groupId: _newGroupId(), situationIds: [], commonality: '', discriminator: '' }];
 
-Respond ONLY with a valid JSON array of exactly 12 strings.
-No markdown, no explanation, no preamble, no code fences.
-`.trim();
+    el.innerHTML = `
+<div class="lab-wrap">
+  <div class="lab-steps">${_pips(2)}</div>
+  <h1 class="lab-h1">Sort these situations</h1>
+  <p class="lab-sub">
+    Drag each card into a group with situations you'd treat the same way.
+    Make as many or as few groups as you need — there's no right number.
+  </p>
+  <div id="sorting-body">
+    <div class="lab-thinking">
+      <div class="lab-dots"><div class="lab-dot"></div><div class="lab-dot"></div><div class="lab-dot"></div></div>
+      Generating situations from your profile…
+    </div>
+  </div>
+</div>`;
 
-function buildSituationPrompt(profile, cueLibrary) {
-    const cueList = cueLibrary.map((c, i) =>
-        `${i + 1}. ${c.name} (${c.scale}): ${c.definition}`
-    ).join('\n');
+    const body = el.querySelector('#sorting-body');
 
-    return `
-Expert profile:
-  Role: ${profile.role}
-  What they do: ${profile.whatYouDo}
-  Decisions they make: ${profile.decisionTypes}
-  What makes it hard: ${profile.whatMakesItHard}
+    // ---- Generate situations from profile -------------------------------
+    const p = session.profile ?? {};
+    const cueNames = (session.cueLibrary ?? []).map(c => c.name).join(', ');
 
-Situational cues this expert uses:
-${cueList}
+    const systemPrompt = `You write short, realistic situation descriptions for a professional skill-extraction exercise.
+Each situation should be 1-2 sentences, concrete, and varied — covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
+Return a JSON array of exactly ${NUM_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
-Generate 12 realistic, specific, varied situation descriptions.
-Vary the cues across situations so the expert will naturally group some together
-and separate others. Include a mix of clear-cut and ambiguous situations.
-Each description should be 2–3 sentences. Write them in the third person
-(e.g. "A team lead notices…", "A patient presents with…").
+    const prompt = `Area of expertise: ${p.role}
+What their work involves: ${p.whatYouDo}
+Decision types: ${p.decisionTypes}
+What makes situations hard: ${p.whatMakesItHard}
+${cueNames ? `Cues already identified: ${cueNames}` : ''}
 
-Return a JSON array of exactly 12 strings. Nothing else.
-  `.trim();
-}
+Write ${NUM_SITUATIONS} short, varied situation descriptions this person might encounter, as a JSON array of strings.`;
 
-// ── Module-level drag state ───────────────────────────────────────────
-let _draggedId = null;
+    const result = await generate(prompt, systemPrompt);
 
-// ── Entry point ───────────────────────────────────────────────────────
-
-export async function init(container, sessionId) {
-    if (!sessionId) {
-        container.innerHTML = `
-      <div class="lab-page">
-        <div class="lab-error">No active session found. Please go back to Screen 1.</div>
-      </div>`;
+    let texts = result.ok ? extractJSON(result.text) : null;
+    if (!texts || !Array.isArray(texts) || texts.length === 0) {
+        body.innerHTML = `
+<div class="lab-notice lab-err">
+  Couldn't generate situations. Check your connection and try again.
+</div>
+<button class="btn btn-primary" id="retry-gen">Retry</button>`;
+        body.querySelector('#retry-gen').addEventListener('click', () => render(el, session, next));
         return;
     }
 
-    container.innerHTML = `
-    <div class="lab-page">
-      <div class="lab-header">
-        <span class="lab-step-label">Step 2 of 10</span>
-        <h2 class="lab-title">Sorting Task</h2>
-        <p class="lab-subtitle">
-          Drag these situations into groups based on how you would respond to them.
-          There are no right answers — group however feels natural to you.
-        </p>
-      </div>
-      <div id="sorting-loading" class="lab-loading">
-        <p>Generating situations from your profile…</p>
-      </div>
-      <div id="sorting-body" class="hidden"></div>
-    </div>
-  `;
+    _situations = texts.slice(0, NUM_SITUATIONS).map((text, i) => ({ id: `sit-${i}`, text }));
 
-    try {
-        // Load session
-        const session = await getSession(sessionId);
-        if (!session) throw new Error('Session not found in Firestore.');
-
-        // Generate or reuse situations
-        let situationTexts;
-
-        if (session.sortingTask && Array.isArray(session.sortingTask.situations)
-            && session.sortingTask.situations.length === 12) {
-            // Resuming — use already-generated situations
-            situationTexts = session.sortingTask.situations;
-        } else {
-            // Fresh — generate now
-            const raw = await generate(
-                buildSituationPrompt(session.profile, session.cueLibrary),
-                SIT_SYSTEM_PROMPT
-            );
-
-            if (!raw.ok) {
-                throw new Error(
-                raw.quota
-                    ? 'AI quota exceeded. Please wait a few minutes and try again.'
-                    : 'Situation generation failed. Please try again.'
-                );
-            }
-            situationTexts = extractJSON(raw.text);
-
-            if (!Array.isArray(situationTexts) || situationTexts.length !== 12) {
-                throw new Error(
-                    `Expected 12 situations, got ${Array.isArray(situationTexts) ? situationTexts.length : 'invalid JSON'}. Please try again.`
-                );
-            }
-        }
-
-        // Assign stable IDs
-        const situations = situationTexts.map((text, i) => ({
-            id: `sit_${String(i + 1).padStart(3, '0')}`,
-            text,
-        }));
-
-        // Hide loading, render board
-        document.getElementById('sorting-loading').classList.add('hidden');
-        renderBoard(container, situations, sessionId);
-
-    } catch (err) {
-        console.error('[sorting] init error:', err);
-        document.getElementById('sorting-loading').classList.add('hidden');
-        document.getElementById('sorting-body').innerHTML = `
-      <div class="lab-error">${err.message}</div>
-      <div class="lab-actions">
-        <button class="btn btn-ghost" onclick="window.location.reload()">Try Again</button>
-      </div>
-    `;
-        document.getElementById('sorting-body').classList.remove('hidden');
-    }
+    _renderBoard(body, el, session, next);
 }
 
-// ── Board renderer ────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// _renderBoard — draws the pool + groups + submit button, wires drag/drop.
+// ---------------------------------------------------------------------------
+function _renderBoard(body, el, session, next) {
+    const placedIds = new Set(_groups.flatMap(g => g.situationIds));
+    const poolSituations = _situations.filter(s => !placedIds.has(s.id));
 
-function renderBoard(container, situations, sessionId) {
-    // Board state
-    const state = {
-        ungrouped: situations.map(s => s.id),
-        groups: [
-            { id: 'grp_1', label: 'Group 1', situationIds: [] },
-            { id: 'grp_2', label: 'Group 2', situationIds: [] },
-            { id: 'grp_3', label: 'Group 3', situationIds: [] },
-        ],
-        nextGroupNum: 4,
-    };
-
-    // Index for fast text lookup
-    const sitMap = Object.fromEntries(situations.map(s => [s.id, s.text]));
-
-    const body = document.getElementById('sorting-body');
-    body.classList.remove('hidden');
-
-    function moveSituation(sitId, targetId) {
-        // Remove from wherever it is
-        state.ungrouped = state.ungrouped.filter(id => id !== sitId);
-        state.groups.forEach(g => {
-            g.situationIds = g.situationIds.filter(id => id !== sitId);
-        });
-        // Place in target
-        if (targetId === 'ungrouped') {
-            state.ungrouped.push(sitId);
-        } else {
-            const grp = state.groups.find(g => g.id === targetId);
-            if (grp) grp.situationIds.push(sitId);
-        }
-        redraw();
-    }
-
-    function addGroup() {
-        state.groups.push({
-            id: `grp_${state.nextGroupNum}`,
-            label: `Group ${state.nextGroupNum}`,
-            situationIds: [],
-        });
-        state.nextGroupNum++;
-        redraw();
-    }
-
-    function removeGroup(grpId) {
-        const grp = state.groups.find(g => g.id === grpId);
-        if (!grp) return;
-        // Return its cards to ungrouped
-        grp.situationIds.forEach(id => state.ungrouped.push(id));
-        state.groups = state.groups.filter(g => g.id !== grpId);
-        redraw();
-    }
-
-    function buildCard(sitId) {
-        const card = document.createElement('div');
-        card.className = 'situation-card';
-        card.draggable = true;
-        card.dataset.id = sitId;
-        card.textContent = sitMap[sitId];
-
-        card.addEventListener('dragstart', () => {
-            _draggedId = sitId;
-            card.classList.add('dragging');
-        });
-        card.addEventListener('dragend', () => {
-            card.classList.remove('dragging');
-            _draggedId = null;
-        });
-        return card;
-    }
-
-    function buildPool(poolId, title, sitIds) {
-        const pool = document.createElement('div');
-        pool.className = 'sort-pool';
-        pool.dataset.poolId = poolId;
-
-        const titleEl = document.createElement('p');
-        titleEl.className = 'sort-pool-title';
-        titleEl.textContent = title;
-        pool.appendChild(titleEl);
-
-        sitIds.forEach(id => pool.appendChild(buildCard(id)));
-
-        pool.addEventListener('dragover', e => {
-            e.preventDefault();
-            pool.classList.add('drag-over');
-        });
-        pool.addEventListener('dragleave', () => pool.classList.remove('drag-over'));
-        pool.addEventListener('drop', e => {
-            e.preventDefault();
-            pool.classList.remove('drag-over');
-            if (_draggedId) moveSituation(_draggedId, poolId);
-        });
-
-        return pool;
-    }
-
-    function redraw() {
-        body.innerHTML = '';
-
-        // Controls
-        const controls = document.createElement('div');
-        controls.className = 'sort-controls';
-
-        const addBtn = document.createElement('button');
-        addBtn.className = 'btn btn-ghost';
-        addBtn.textContent = '+ Add Group';
-        addBtn.addEventListener('click', addGroup);
-        controls.appendChild(addBtn);
-
-        const allGrouped = state.ungrouped.length === 0;
-        const nextBtn = document.createElement('button');
-        nextBtn.className = 'btn btn-primary';
-        nextBtn.textContent = 'All Sorted — Continue →';
-        nextBtn.disabled = !allGrouped;
-        nextBtn.title = allGrouped ? '' : 'All situations must be in a group to continue';
-        nextBtn.addEventListener('click', () => showQuestions(container, state, sitMap, sessionId));
-        controls.appendChild(nextBtn);
-
-        if (!allGrouped) {
-            const hint = document.createElement('span');
-            hint.className = 'form-hint';
-            hint.textContent = `${state.ungrouped.length} situation(s) not yet grouped`;
-            controls.appendChild(hint);
-        }
-
-        body.appendChild(controls);
-
-        // Drag board
-        const board = document.createElement('div');
-        board.className = 'sort-board';
-
-        // Ungrouped pool (spans full width at top)
-        const ungroupedEl = buildPool('ungrouped', `Ungrouped (${state.ungrouped.length})`, state.ungrouped);
-        ungroupedEl.style.gridColumn = '1 / -1';
-        board.appendChild(ungroupedEl);
-
-        // Group pools
-        state.groups.forEach(grp => {
-            const wrapper = document.createElement('div');
-            const pool = buildPool(grp.id, `${grp.label} (${grp.situationIds.length})`, grp.situationIds);
-
-            // Remove group button
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'btn btn-ghost';
-            removeBtn.textContent = 'Remove group';
-            removeBtn.style.fontSize = '0.75rem';
-            removeBtn.style.marginTop = '0.5rem';
-            removeBtn.addEventListener('click', () => removeGroup(grp.id));
-            pool.appendChild(removeBtn);
-
-            wrapper.appendChild(pool);
-            board.appendChild(wrapper);
-        });
-
-        body.appendChild(board);
-    }
-
-    // Initial draw
-    redraw();
-}
-
-// ── Questions phase ───────────────────────────────────────────────────
-
-function showQuestions(container, state, sitMap, sessionId) {
-    // Only groups with ≥1 card need questions
-    const populated = state.groups.filter(g => g.situationIds.length > 0);
-
-    const body = document.getElementById('sorting-body');
     body.innerHTML = `
-    <h3 style="margin:1.5rem 0 0.5rem">For each group you created</h3>
-    <p class="lab-subtitle" style="margin-bottom:1.5rem">
-      Answer two quick questions about what the situations in each group have in common
-      and what would make an apparently similar situation need a different response.
-    </p>
-    <div id="group-error" class="lab-error hidden"></div>
-    <div id="group-questions"></div>
-    <div class="lab-actions" style="margin-top:2rem">
-      <button class="btn btn-ghost" id="btn-back-to-sort">← Back to Board</button>
-      <button class="btn btn-primary" id="btn-sorting-submit">Save and Continue →</button>
-    </div>
-    <div id="sorting-save-loading" class="lab-loading hidden">
-      <p>Saving…</p>
-    </div>
-  `;
+  <div id="sorting-err" class="lab-notice lab-err" style="display:none"></div>
 
-    const questionsEl = document.getElementById('group-questions');
+  <div class="sort-label">Unsorted situations</div>
+  <div class="sort-pool" id="pool">
+    ${poolSituations.map(s => _chipHTML(s)).join('') || '<span style="color:var(--warm-grey);font-size:var(--text-sm)">All situations sorted.</span>'}
+  </div>
 
-    populated.forEach(grp => {
-        const section = document.createElement('div');
-        section.style.cssText = 'margin-bottom:2rem; padding:1rem 1.25rem; border:1px solid rgba(0,0,0,0.1); border-radius:10px;';
-        section.innerHTML = `
-      <p class="sort-pool-title" style="margin-bottom:0.75rem">${grp.label}</p>
-      <div style="margin-bottom:0.75rem; font-size:0.82rem; opacity:0.65;">
-        ${grp.situationIds.map(id => `<div style="margin-bottom:0.3rem">• ${sitMap[id]}</div>`).join('')}
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="common-${grp.id}">
-          What do these situations have in common? <span class="required">*</span>
-        </label>
-        <textarea class="input textarea" id="common-${grp.id}" rows="2"
-                  placeholder="What pattern or feature links these situations?"></textarea>
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="discrim-${grp.id}">
-          What would make a situation that <em>looks</em> like one of these actually need a different response? <span class="required">*</span>
-        </label>
-        <textarea class="input textarea" id="discrim-${grp.id}" rows="2"
-                  placeholder="What hidden feature or edge case would change your approach?"></textarea>
-      </div>
-    `;
-        questionsEl.appendChild(section);
-    });
+  <div id="groups-wrap">
+    ${_groups.map((g, i) => _groupHTML(g, i)).join('')}
+  </div>
 
-    document.getElementById('btn-back-to-sort').addEventListener('click', () => {
-        // Re-render the board — pass situations rebuilt from state
-        const allSits = [
-            ...state.ungrouped,
-            ...state.groups.flatMap(g => g.situationIds),
-        ].map(id => ({ id, text: sitMap[id] }));
-        document.getElementById('sorting-body').innerHTML = '';
-        renderBoard(container, allSits, sessionId);
+  <button type="button" class="lab-add-btn" id="add-group">+ Add another group</button>
 
-        // Restore grouping from state (re-assign from stored state)
-        // Board always starts fresh; for simplicity in MVP, state is preserved
-        // because renderBoard closes over the same state object passed in.
-        // NOTE: the board's closure won't have the old state. For a clean
-        // resume, re-navigate. In a future iteration, extract state management.
-    });
+  <div class="lab-btn-row">
+    <button type="button" class="btn btn-primary" id="sorting-submit">Continue</button>
+  </div>`;
 
-    document.getElementById('btn-sorting-submit').addEventListener('click', async () => {
-        const errorEl = document.getElementById('group-error');
-        const loadingEl = document.getElementById('sorting-save-loading');
-        errorEl.classList.add('hidden');
-
-        // Collect and validate answers
-        let valid = true;
-        const groups = populated.map(grp => {
-            const commonality = document.getElementById(`common-${grp.id}`)?.value.trim();
-            const discriminator = document.getElementById(`discrim-${grp.id}`)?.value.trim();
-            if (!commonality || !discriminator) valid = false;
-            return {
-                situationIds: grp.situationIds,
-                commonality: commonality || '',
-                discriminator: discriminator || '',
-            };
+    // ---- Drag and drop wiring -------------------------------------------
+    body.querySelectorAll('.sit-chip').forEach(chip => {
+        chip.addEventListener('dragstart', (e) => {
+            _dragId = chip.dataset.id;
+            chip.classList.add('active');
+            e.dataTransfer.effectAllowed = 'move';
         });
+        chip.addEventListener('dragend', () => chip.classList.remove('active'));
+    });
 
-        if (!valid) {
-            errorEl.textContent = 'Please answer both questions for every group before continuing.';
-            errorEl.classList.remove('hidden');
+    const dropTargets = body.querySelectorAll('.sort-pool, .sort-drop');
+    dropTargets.forEach(target => {
+        target.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            target.classList.add('over');
+        });
+        target.addEventListener('dragleave', () => target.classList.remove('over'));
+        target.addEventListener('drop', (e) => {
+            e.preventDefault();
+            target.classList.remove('over');
+            if (!_dragId) return;
+
+            // Remove from whichever group currently holds it
+            _groups.forEach(g => {
+                g.situationIds = g.situationIds.filter(id => id !== _dragId);
+            });
+
+            const destGroupId = target.dataset.groupId;
+            if (destGroupId) {
+                const grp = _groups.find(g => g.groupId === destGroupId);
+                if (grp && !grp.situationIds.includes(_dragId)) {
+                    grp.situationIds.push(_dragId);
+                }
+            }
+            // If dropped on pool (no destGroupId), it's already removed from groups above
+
+            _dragId = null;
+            _renderBoard(body, el, session, next);
+        });
+    });
+
+    // ---- Group prompt inputs ---------------------------------------------
+    body.querySelectorAll('[data-commonality]').forEach(ta => {
+        ta.addEventListener('input', () => {
+            const g = _groups.find(g => g.groupId === ta.dataset.commonality);
+            if (g) g.commonality = ta.value;
+        });
+    });
+    body.querySelectorAll('[data-discriminator]').forEach(ta => {
+        ta.addEventListener('input', () => {
+            const g = _groups.find(g => g.groupId === ta.dataset.discriminator);
+            if (g) g.discriminator = ta.value;
+        });
+    });
+
+    // ---- Remove group ------------------------------------------------------
+    body.querySelectorAll('.remove-group').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (_groups.length <= 1) return; // always keep at least one group
+            _groups = _groups.filter(g => g.groupId !== btn.dataset.groupId);
+            _renderBoard(body, el, session, next);
+        });
+    });
+
+    // ---- Add group ---------------------------------------------------------
+    body.querySelector('#add-group').addEventListener('click', () => {
+        _groups.push({ groupId: _newGroupId(), situationIds: [], commonality: '', discriminator: '' });
+        _renderBoard(body, el, session, next);
+    });
+
+    // ---- Submit --------------------------------------------------------------
+    body.querySelector('#sorting-submit').addEventListener('click', async () => {
+        const errEl = body.querySelector('#sorting-err');
+        errEl.style.display = 'none';
+
+        const unsorted = _situations.length - _groups.flatMap(g => g.situationIds).length;
+        if (unsorted > 0) {
+            errEl.textContent = `${unsorted} situation${unsorted === 1 ? '' : 's'} still unsorted — drag every card into a group before continuing.`;
+            errEl.style.display = '';
             return;
         }
 
-        document.getElementById('btn-sorting-submit').disabled = true;
-        loadingEl.classList.remove('hidden');
-
-        try {
-            const sortingTask = {
-                situations: Object.values(sitMap),   // original 12 texts in order
-                groups,
-            };
-            await updateSortingTask(sessionId, sortingTask);
-            showView('cue-review');
-        } catch (err) {
-            console.error('[sorting] save error:', err);
-            errorEl.textContent = err.message || 'Save failed. Please try again.';
-            errorEl.classList.remove('hidden');
-            document.getElementById('btn-sorting-submit').disabled = false;
-        } finally {
-            loadingEl.classList.add('hidden');
+        const nonEmptyGroups = _groups.filter(g => g.situationIds.length > 0);
+        const missingPrompts = nonEmptyGroups.some(g => !g.commonality.trim() || !g.discriminator.trim());
+        if (missingPrompts) {
+            errEl.textContent = 'Answer both questions for every group before continuing.';
+            errEl.style.display = '';
+            return;
         }
+
+        const btn = body.querySelector('#sorting-submit');
+        btn.disabled    = true;
+        btn.textContent = 'Saving…';
+
+        const sortingTask = {
+            situations: _situations.map(s => s.text),
+            groups: nonEmptyGroups.map(g => ({
+                situationIds: g.situationIds,
+                commonality:  g.commonality.trim(),
+                discriminator: g.discriminator.trim(),
+            })),
+        };
+
+        const sortOk = await saveSortingTask(session.id, sortingTask);
+        if (!sortOk) {
+            errEl.textContent = "Couldn't save your groupings. Try again.";
+            errEl.style.display = '';
+            btn.disabled    = false;
+            btn.textContent = 'Continue';
+            return;
+        }
+        session.sortingTask = sortingTask;
+
+        // ---- Merge grouping dimensions into the cue library --------------
+        btn.textContent = 'Refining cue library…';
+
+        const existing = session.cueLibrary ?? [];
+        const systemPrompt = `You are refining a professional's cue library using new evidence from a sorting exercise.
+The expert grouped situations and explained what makes each group distinct from situations that look similar but need a different response.
+Decide whether these discriminators are already covered by the existing cues, or whether they reveal a genuinely new cue that should be added.
+
+Return a JSON array only — no markdown fences, no other text — of the FULL updated cue list (existing cues you keep, plus any new ones). Each element must have exactly these fields:
+{ "name": string, "definition": string, "scale": "binary" or "three-point", "layer": 1, 2, or 3, "options": array of 2 strings if binary, 3 if three-point }
+Do not duplicate a cue that already captures the same distinction under a different name.`;
+
+        const prompt = `Existing cue library:
+${existing.map(c => `- ${c.name}: ${c.definition}`).join('\n') || '(none yet)'}
+
+New evidence from sorting groups:
+${nonEmptyGroups.map((g, i) => `Group ${i + 1} — what's common: ${g.commonality}\nWhat would make it different: ${g.discriminator}`).join('\n\n')}
+
+Return the full updated cue list as a JSON array.`;
+
+        const mergeResult = await classify(prompt, systemPrompt);
+        const merged = mergeResult.ok ? extractJSON(mergeResult.text) : null;
+
+        if (merged && Array.isArray(merged) && merged.length > 0) {
+            const cueLibrary = merged.map((c, i) => ({
+                id:         existing.find(e => e.name === c.name)?.id ?? `cue-${Date.now()}-${i}`,
+                name:       c.name ?? `Cue ${i + 1}`,
+                definition: c.definition ?? '',
+                scale:      c.scale === 'three-point' ? 'three-point' : 'binary',
+                layer:      [1, 2, 3].includes(c.layer) ? c.layer : 2,
+                options:    Array.isArray(c.options) && c.options.length > 0
+                    ? c.options
+                    : (c.scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No']),
+            }));
+            await saveCueLibrary(session.id, cueLibrary);
+            session.cueLibrary = cueLibrary;
+        }
+        // If the merge call fails, we simply proceed with the cue library
+        // from Screen 1 — non-fatal, the expert reviews and can add cues
+        // manually in the next screen anyway.
+
+        next();
     });
+}
+
+// ---------------------------------------------------------------------------
+// HTML builders
+// ---------------------------------------------------------------------------
+function _chipHTML(s) {
+    return `<div class="sit-chip" draggable="true" data-id="${s.id}">${_esc(s.text)}</div>`;
+}
+
+function _groupHTML(g, index) {
+    const members = g.situationIds
+        .map(id => _situations.find(s => s.id === id))
+        .filter(Boolean);
+
+    return `
+<div class="sort-group-wrap">
+  <div class="sort-group-head">
+    <span>Group ${index + 1}</span>
+    <button type="button" class="btn btn-ghost btn-sm remove-group" data-group-id="${g.groupId}">Remove group</button>
+  </div>
+  <div class="sort-drop" data-group-id="${g.groupId}">
+    ${members.map(s => _chipHTML(s)).join('') || ''}
+  </div>
+  <div class="group-prompt">
+    <label>What do these situations have in common?</label>
+    <textarea class="input" rows="2" data-commonality="${g.groupId}"
+      placeholder="What links these together?">${_esc(g.commonality)}</textarea>
+    <label style="margin-top:0.6rem">What would make a situation that looks like one of these actually need a different response?</label>
+    <textarea class="input" rows="2" data-discriminator="${g.groupId}"
+      placeholder="What would be different enough to change your approach?">${_esc(g.discriminator)}</textarea>
+  </div>
+</div>`;
+}
+
+function _newGroupId() {
+    return `grp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function _pips(active) {
+    return Array.from({ length: 10 }, (_, i) => {
+        const n   = i + 1;
+        const cls = n === active ? 'active' : n < active ? 'done' : '';
+        return `<div class="lab-pip ${cls}" title="Screen ${n}"></div>`;
+    }).join('');
+}
+
+function _esc(s) {
+    if (!s) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }

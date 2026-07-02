@@ -1,301 +1,220 @@
-/**
- * lab/views/options.js
- * Screen 4 — Decision Option Set Review
- * ─────────────────────────────────────────────────────────────────────
- * Flow:
- *  1. Load session from Firestore (needs profile for the classify call)
- *  2. If decisionOptions are already set (resume), display them directly
- *  3. Otherwise call classify() to generate 4–6 proposed options from profile
- *  4. Render each option as an editable card
- *  5. Expert can edit labels/descriptions, add an option, or remove one
- *  6. On confirm: save decisionOptions to Firestore, navigate to Screen 5
- */
+// =============================================================================
+// Lab — views/options.js
+// Screen 4 — Decision Option Set Review
+//
+// Proposes 4-6 response options the expert will choose between during the
+// 30-scenario session (Screen 5). One classify() call on entry if the set
+// doesn't already exist; the expert can edit, add, or remove options before
+// locking the set.
+// =============================================================================
 
-import { classify } from '../../engine/ai.js';
-import { extractJSON } from '../../engine/utils.js';
-import { getSession, updateDecisionOptions } from '../db.js';
-import { showView } from '../app.js';
+import { classify }            from '../../engine/ai.js';
+import { extractJSON }         from '../../engine/utils.js';
+import { saveDecisionOptions } from '../db.js';
 
-// ── Classify prompt for option generation ─────────────────────────────
+const MIN_OPTIONS = 2;
+const MAX_OPTIONS = 8;
 
-const OPTIONS_SYSTEM_PROMPT = `
-You are a knowledge engineer extracting the decision response options for an expert.
-A response option is a distinct type of action or decision the expert can make in their domain.
+let _options = []; // [{ id, label, description, _removed, _editing }]
 
-These options will be used as the answer choices in a 30-scenario decision capture session,
-so they must cover the full range of what the expert could legitimately do, be mutually exclusive
-at the level of the primary decision, and be specific to this domain (not generic like "do nothing").
-
-Respond ONLY with a valid JSON array. No markdown, no explanation, no preamble, no code fences.
-Each object must have exactly these fields:
-  id:          string  — unique key, format "opt_001", "opt_002", etc.
-  label:       string  — short name for the option, 2–5 words
-  description: string  — 1–2 sentences explaining what this option means in practice
-`.trim();
-
-function buildOptionsPrompt(profile) {
-    return `
-Here is an expert's profile. Extract 4–6 response options that represent the
-main distinct decisions this expert can make.
-
-These should be the primary choices — the branching points — not sub-steps or tactics.
-Think about what someone would write in the "Decision" column of a decision log.
-
-PROFILE:
-Role: ${profile.role}
-What they do: ${profile.whatYouDo}
-Types of decisions they make: ${profile.decisionTypes}
-What makes it hard: ${profile.whatMakesItHard}
-
-Return a JSON array of 4–6 option objects. Nothing else.
-  `.trim();
-}
-
-// ── Entry point ───────────────────────────────────────────────────────
-
-export async function init(container, sessionId) {
-    if (!sessionId) {
-        container.innerHTML = `<div class="lab-page"><div class="lab-error">No active session. Please start from Screen 1.</div></div>`;
+export async function render(el, session, next) {
+    if (session.decisionOptions && session.decisionOptions.length > 0) {
+        _options = session.decisionOptions.map(o => ({ ...o, _removed: false, _editing: false }));
+        _draw(el, session, next);
         return;
     }
 
-    container.innerHTML = `
-    <div class="lab-page">
-      <div class="lab-header">
-        <span class="lab-step-label">Step 4 of 10</span>
-        <h2 class="lab-title">Decision Option Set</h2>
-        <p class="lab-subtitle">
-          These are the possible responses you can give in a scenario. Review and edit them
-          so they accurately represent the choices you actually make. This set will be used
-          for every scenario in your session.
-        </p>
-      </div>
-      <div id="options-loading" class="lab-loading"><p>Generating response options…</p></div>
-      <div id="options-body" class="hidden"></div>
+    el.innerHTML = `
+<div class="lab-wrap">
+  <div class="lab-steps">${_pips(4)}</div>
+  <h1 class="lab-h1">Confirm your decision options</h1>
+  <div class="lab-thinking">
+    <div class="lab-dots"><div class="lab-dot"></div><div class="lab-dot"></div><div class="lab-dot"></div></div>
+    Drafting the response options you'll choose between…
+  </div>
+</div>`;
+
+    const p = session.profile ?? {};
+    const cueSummary = (session.cueLibrary ?? []).map(c => `${c.name} (${c.definition})`).join('; ');
+
+    const systemPrompt = `You are proposing the set of response options a professional will choose between when facing decisions in their field.
+These are not yes/no on a single cue — they are the actual range of actions or judgements this person makes day to day.
+
+Return a JSON array only — no markdown fences, no other text — of 4 to 6 objects, each with exactly these fields:
+{ "label": "Short option name, 2-5 words", "description": "One sentence describing what choosing this option means in practice" }
+The options should be mutually distinct and together cover the realistic range of responses, from most cautious to most assertive where that applies.`;
+
+    const prompt = `Area of expertise: ${p.role}
+What their work involves: ${p.whatYouDo}
+Kinds of decisions: ${p.decisionTypes}
+${cueSummary ? `Cues that drive their decisions: ${cueSummary}` : ''}
+
+Return a JSON array of 4-6 proposed decision options.`;
+
+    const result = await classify(prompt, systemPrompt);
+    const parsed = result.ok ? extractJSON(result.text) : null;
+
+    if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
+        el.querySelector('.lab-wrap').innerHTML += `
+<div class="lab-notice lab-err">Couldn't generate decision options. Check your connection and try again.</div>
+<button class="btn btn-primary" id="retry-opts">Retry</button>`;
+        el.querySelector('#retry-opts').addEventListener('click', () => render(el, session, next));
+        return;
+    }
+
+    _options = parsed.slice(0, MAX_OPTIONS).map((o, i) => ({
+        id:          `opt-${Date.now()}-${i}`,
+        label:       o.label ?? `Option ${i + 1}`,
+        description: o.description ?? '',
+        _removed:    false,
+        _editing:    false,
+    }));
+
+    _draw(el, session, next);
+}
+
+function _draw(el, session, next) {
+    el.innerHTML = `
+<div class="lab-wrap">
+  <div class="lab-steps">${_pips(4)}</div>
+  <h1 class="lab-h1">Confirm your decision options</h1>
+  <p class="lab-sub">
+    These are the choices you'll select between during the scenario session.
+    Edit anything that doesn't sound like a real option in your field.
+  </p>
+
+  <div id="opts-err" class="lab-notice lab-err" style="display:none"></div>
+
+  <div class="lab-card">
+    <div id="opts-list">
+      ${_options.map(o => _rowHTML(o)).join('')}
     </div>
-  `;
+    ${_options.filter(o => !o._removed).length < MAX_OPTIONS
+      ? `<button type="button" class="lab-add-btn" id="add-opt">+ Add another option</button>`
+      : ''}
+  </div>
 
-    try {
-        const session = await getSession(sessionId);
-        if (!session) throw new Error('Session not found.');
+  <div class="lab-btn-row">
+    <button type="button" class="btn btn-primary" id="opts-confirm">Confirm options</button>
+  </div>
+</div>`;
 
-        let options;
+    el.querySelectorAll('.opt-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const o = _options.find(o => o.id === btn.dataset.id);
+            if (o) o._editing = !o._editing;
+            _draw(el, session, next);
+        });
+    });
 
-        if (session.decisionOptions && session.decisionOptions.length > 0) {
-            // Resuming — show existing options
-            options = session.decisionOptions;
-        } else {
-            // Generate from profile
-            const raw = await classify(
-                buildOptionsPrompt(session.profile),
-                OPTIONS_SYSTEM_PROMPT
-            );
+    el.querySelectorAll('.opt-remove-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const remaining = _options.filter(o => !o._removed).length;
+            const o = _options.find(o => o.id === btn.dataset.id);
+            if (!o) return;
+            if (!o._removed && remaining <= MIN_OPTIONS) return; // keep a minimum
+            o._removed = !o._removed;
+            _draw(el, session, next);
+        });
+    });
 
-            if (!raw.ok) {
-                throw new Error(
-                    raw.quota
-                        ? 'AI quota exceeded. Please wait a few minutes and try again.'
-                        : 'Option generation failed. Please try again.'
-                );
-            }
-            options = extractJSON(raw.text);
+    el.querySelectorAll('.opt-save-edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const o = _options.find(o => o.id === btn.dataset.id);
+            if (!o) return;
+            const row = el.querySelector(`[data-row-id="${o.id}"]`);
+            o.label       = row.querySelector('.edit-label').value.trim()       || o.label;
+            o.description = row.querySelector('.edit-opt-def').value.trim()    || o.description;
+            o._editing    = false;
+            _draw(el, session, next);
+        });
+    });
 
-            if (!Array.isArray(options) || options.length < 2) {
-                throw new Error(
-                    'Option generation returned an unexpected result. Please go back to Screen 1 ' +
-                    'and add more detail to your profile, then return here.'
-                );
-            }
+    const addBtn = el.querySelector('#add-opt');
+    if (addBtn) {
+        addBtn.addEventListener('click', () => {
+            _options.push({
+                id: `opt-${Date.now()}`,
+                label: '',
+                description: '',
+                _removed: false,
+                _editing: true,
+            });
+            _draw(el, session, next);
+        });
+    }
+
+    el.querySelector('#opts-confirm').addEventListener('click', async () => {
+        const final = _options.filter(o => !o._removed && o.label.trim())
+            .map(({ _removed, _editing, ...o }) => o);
+
+        const errEl = el.querySelector('#opts-err');
+        if (final.length < MIN_OPTIONS) {
+            errEl.textContent   = `You need at least ${MIN_OPTIONS} options to continue.`;
+            errEl.style.display = '';
+            return;
+        }
+        errEl.style.display = 'none';
+
+        const btn = el.querySelector('#opts-confirm');
+        btn.disabled    = true;
+        btn.textContent = 'Saving…';
+
+        const ok = await saveDecisionOptions(session.id, final);
+        if (!ok) {
+            errEl.textContent   = "Couldn't save the option set. Try again.";
+            errEl.style.display = '';
+            btn.disabled    = false;
+            btn.textContent = 'Confirm options';
+            return;
         }
 
-        document.getElementById('options-loading').classList.add('hidden');
-        renderOptions(options, sessionId);
-
-    } catch (err) {
-        console.error('[options] init error:', err);
-        document.getElementById('options-loading').classList.add('hidden');
-        document.getElementById('options-body').innerHTML = `
-      <div class="lab-error">${err.message}</div>
-      <div class="lab-actions">
-        <button class="btn btn-ghost" onclick="window.location.reload()">Try Again</button>
-      </div>
-    `;
-        document.getElementById('options-body').classList.remove('hidden');
-    }
+        session.decisionOptions = final;
+        next();
+    });
 }
 
-// ── Render ────────────────────────────────────────────────────────────
-
-function renderOptions(initialOptions, sessionId) {
-    // Deep-copy so edits don't mutate the source
-    let options = initialOptions.map(o => ({ ...o }));
-
-    const body = document.getElementById('options-body');
-    body.classList.remove('hidden');
-
-    function redraw() {
-        body.innerHTML = '';
-
-        // ── Option cards ───────────────────────────────────────────────────
-        const listEl = document.createElement('div');
-        listEl.id = 'option-list';
-
-        options.forEach((opt, idx) => {
-            const card = document.createElement('div');
-            card.className = 'option-card';
-            card.innerHTML = `
-        <div class="option-label-row">
-          <span class="option-label" id="display-label-${idx}">${escHtml(opt.label)}</span>
-          <button class="btn btn-ghost btn-sm" data-action="edit" data-idx="${idx}">Edit</button>
-          <button class="btn btn-ghost btn-sm" data-action="remove" data-idx="${idx}">Remove</button>
-        </div>
-        <p class="option-desc" id="display-desc-${idx}">${escHtml(opt.description)}</p>
-
-        <div class="cue-edit-area hidden" id="opt-edit-${idx}">
-          <div class="form-group">
-            <label class="form-label">Label (2–5 words)</label>
-            <input class="input" type="text" id="opt-edit-label-${idx}"
-                   value="${escHtml(opt.label)}" maxlength="60" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Description</label>
-            <textarea class="input textarea" id="opt-edit-desc-${idx}" rows="2">${escHtml(opt.description)}</textarea>
-          </div>
-          <button class="btn btn-primary btn-sm" data-action="save-edit" data-idx="${idx}">Save</button>
-          <button class="btn btn-ghost btn-sm"   data-action="cancel-edit" data-idx="${idx}">Cancel</button>
-        </div>
-      `;
-            listEl.appendChild(card);
-        });
-
-        body.appendChild(listEl);
-
-        // Wire card action buttons
-        listEl.addEventListener('click', e => {
-            const btn = e.target.closest('[data-action]');
-            if (!btn) return;
-            const idx = parseInt(btn.dataset.idx, 10);
-            const action = btn.dataset.action;
-
-            if (action === 'edit') {
-                document.getElementById(`opt-edit-${idx}`)?.classList.toggle('hidden');
-            }
-
-            if (action === 'cancel-edit') {
-                document.getElementById(`opt-edit-${idx}`)?.classList.add('hidden');
-            }
-
-            if (action === 'save-edit') {
-                const label = document.getElementById(`opt-edit-label-${idx}`)?.value.trim();
-                const desc = document.getElementById(`opt-edit-desc-${idx}`)?.value.trim();
-                if (!label || !desc) { alert('Both label and description are required.'); return; }
-                options[idx] = { ...options[idx], label, description: desc };
-                redraw();
-            }
-
-            if (action === 'remove') {
-                if (options.length <= 2) {
-                    alert('You must keep at least 2 options.');
-                    return;
-                }
-                options.splice(idx, 1);
-                // Re-sequence IDs
-                options = options.map((o, i) => ({
-                    ...o,
-                    id: `opt_${String(i + 1).padStart(3, '0')}`,
-                }));
-                redraw();
-            }
-        });
-
-        // ── Add option form ────────────────────────────────────────────────
-        const addSection = document.createElement('div');
-        addSection.style.cssText = 'margin-top:1.5rem; padding:1rem 1.25rem; border:1px dashed rgba(0,0,0,0.15); border-radius:10px;';
-        addSection.innerHTML = `
-      <p class="form-label" style="margin-bottom:0.75rem">Add a missing option</p>
-      <div class="form-group">
-        <label class="form-label" for="new-opt-label">Label</label>
-        <input class="input" type="text" id="new-opt-label" placeholder="e.g. Escalate immediately" maxlength="60" />
-      </div>
-      <div class="form-group">
-        <label class="form-label" for="new-opt-desc">Description</label>
-        <textarea class="input textarea" id="new-opt-desc" rows="2"
-                  placeholder="What does choosing this option mean in practice?"></textarea>
-      </div>
-      <button class="btn btn-ghost btn-sm" id="btn-add-option">Add Option</button>
-    `;
-        body.appendChild(addSection);
-
-        document.getElementById('btn-add-option').addEventListener('click', () => {
-            const label = document.getElementById('new-opt-label').value.trim();
-            const desc = document.getElementById('new-opt-desc').value.trim();
-            if (!label || !desc) { alert('Please enter a label and description.'); return; }
-            if (options.length >= 8) { alert('Maximum 8 options allowed.'); return; }
-
-            options.push({
-                id: `opt_${String(options.length + 1).padStart(3, '0')}`,
-                label,
-                description: desc,
-            });
-            redraw();
-        });
-
-        // ── Footer ─────────────────────────────────────────────────────────
-        const footer = document.createElement('div');
-        footer.innerHTML = `
-      <div id="options-error" class="lab-error hidden"></div>
-      <div class="lab-actions" style="margin-top:2rem">
-        <button class="btn btn-primary" id="btn-options-confirm">
-          Lock Option Set and Continue →
-        </button>
-        <span class="form-hint">${options.length} options</span>
-      </div>
-      <div id="options-save-loading" class="lab-loading hidden"><p>Saving…</p></div>
-    `;
-        body.appendChild(footer);
-
-        document.getElementById('btn-options-confirm').addEventListener('click', () => {
-            handleConfirm(options, sessionId);
-        });
+// ---------------------------------------------------------------------------
+// HTML builders
+// ---------------------------------------------------------------------------
+function _rowHTML(o) {
+    if (o._editing) {
+        return `
+<div class="opt-row" data-row-id="${o.id}">
+  <div class="cue-edit-area" style="grid-column:1/-1">
+    <input class="lab-edit-input edit-label" value="${_esc(o.label)}" placeholder="Option label">
+    <textarea class="lab-edit-ta edit-opt-def" placeholder="What choosing this means in practice">${_esc(o.description)}</textarea>
+    <button type="button" class="btn btn-primary btn-sm opt-save-edit" data-id="${o.id}">Save</button>
+  </div>
+</div>`;
     }
 
-    redraw();
+    return `
+<div class="opt-row ${o._removed ? 'removed' : ''}">
+  <div>
+    <div class="opt-label">${_esc(o.label)}</div>
+    <div class="opt-desc">${_esc(o.description)}</div>
+  </div>
+  <div class="opt-actions" style="display:flex;gap:0.4rem">
+    <button type="button" class="btn btn-ghost btn-sm opt-edit-btn" data-id="${o.id}">Edit</button>
+    <button type="button" class="btn btn-ghost btn-sm opt-remove-btn" data-id="${o.id}">
+      ${o._removed ? 'Undo' : 'Remove'}
+    </button>
+  </div>
+</div>`;
 }
 
-// ── Save and navigate ─────────────────────────────────────────────────
-
-async function handleConfirm(options, sessionId) {
-    const errorEl = document.getElementById('options-error');
-    const loadingEl = document.getElementById('options-save-loading');
-    const confirmBtn = document.getElementById('btn-options-confirm');
-    errorEl.classList.add('hidden');
-
-    if (options.length < 2) {
-        errorEl.textContent = 'You need at least 2 decision options to run the scenario session.';
-        errorEl.classList.remove('hidden');
-        return;
-    }
-
-    confirmBtn.disabled = true;
-    loadingEl.classList.remove('hidden');
-
-    try {
-        await updateDecisionOptions(sessionId, options);
-        showView('session');
-    } catch (err) {
-        console.error('[options] save error:', err);
-        errorEl.textContent = err.message || 'Save failed. Please try again.';
-        errorEl.classList.remove('hidden');
-        confirmBtn.disabled = false;
-    } finally {
-        loadingEl.classList.add('hidden');
-    }
+function _pips(active) {
+    return Array.from({ length: 10 }, (_, i) => {
+        const n   = i + 1;
+        const cls = n === active ? 'active' : n < active ? 'done' : '';
+        return `<div class="lab-pip ${cls}" title="Screen ${n}"></div>`;
+    }).join('');
 }
 
-// ── HTML escape helper ────────────────────────────────────────────────
-
-function escHtml(str) {
-    return (str || '')
+function _esc(s) {
+    if (!s) return '';
+    return String(s)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')

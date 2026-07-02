@@ -76,6 +76,7 @@ lab/
 ├── app.js
 ├── db.js
 ├── model-fit.js
+├── style.css
 └── views/
     ├── profile.js
     ├── sorting.js
@@ -90,12 +91,17 @@ lab/
 ```
 All files as empty placeholders.
 
+> **Already completed Step 0 without `style.css`?** Run this one command to add the missing file, then commit and push:
+> ```powershell
+> New-Item -Path "lab/style.css" -ItemType File
+> ```
+
 2. Confirm these shared files exist in the repo root:
 `firebase.js`, `style.css`, `engine/ai.js`, `engine/utils.js`, `engine/auth.js`, `engine/ingest.js`
 
 3. Commit and push via VS Code Git panel
 
-Once `/lab` is visible on GitHub, start a new chat for Step 1.
+Once `/lab` is visible on GitHub with `style.css` included, start a new chat for Step 1.
 
 ---
 
@@ -103,14 +109,15 @@ Once `/lab` is visible on GitHub, start a new chat for Step 1.
 
 Tell me at the start of this chat that we are on Step 1. Build in this order:
 
-1. `lab/index.html` — shell with auth screen div and all view divs, loads `app.js` as a module
-2. `lab/app.js` — auth state listener using `onAuthChange`, `showView()` router, calls `ping()` on load
-3. `lab/db.js` — all Firestore read/write functions for the `sessions` collection (full data model from spec)
-4. Auth screen wired up — sign in and sign up using `signIn()` from `../engine/auth.js`
-5. `lab/views/profile.js` — Screen 1: profile intake form, classify call for cue extraction, saves to Firestore
-6. `lab/views/sorting.js` — Screen 2: AI-generated situation descriptions, grouping UI, discrimination prompts
-7. `lab/views/cue-review.js` — Screen 3: cue library review, keep/edit/remove
-8. `lab/views/options.js` — Screen 4: decision option set review and confirmation
+1. `lab/style.css` — lab-specific stylesheet; starts minimal (a comment and one scoping rule is fine); linked after `../style.css` in `lab/index.html` so it can override or extend the shared design system without touching the shared file
+2. `lab/index.html` — shell with auth screen div and all view divs; links to `../style.css` then `./style.css` in that order; loads `app.js` as a module
+3. `lab/app.js` — auth state listener using `onAuthChange`, `showView()` router, calls `ping()` on load
+4. `lab/db.js` — all Firestore read/write functions for the `sessions` collection (full data model from spec)
+5. Auth screen wired up — sign in and sign up using `signIn()` from `../engine/auth.js`
+6. `lab/views/profile.js` — Screen 1: profile intake form, classify call for cue extraction, saves to Firestore
+7. `lab/views/sorting.js` — Screen 2: AI-generated situation descriptions, grouping UI, discrimination prompts
+8. `lab/views/cue-review.js` — Screen 3: cue library review, keep/edit/remove
+9. `lab/views/options.js` — Screen 4: decision option set review and confirmation
 
 **Test before moving to Step 2:** sign in works, profile intake saves a session document to Firestore with the correct shape, cue library written correctly.
 

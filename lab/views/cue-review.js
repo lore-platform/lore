@@ -1,288 +1,229 @@
-/**
- * lab/views/cue-review.js
- * Screen 3 — Cue Library Review
- * ─────────────────────────────────────────────────────────────────────
- * Flow:
- *  1. Load session from Firestore to get the current cueLibrary
- *  2. Render each cue as a card with Keep / Edit / Remove actions
- *  3. Show two diagnostic prompts for adding or flagging cues
- *  4. On confirm: save updated cueLibrary to Firestore, navigate to Screen 4
- */
+// =============================================================================
+// Lab — views/cue-review.js
+// Screen 3 — Cue Library Review
+//
+// The expert reviews the AI-proposed cue library (built in Screens 1 and 2)
+// before it is locked. Keep / Edit / Remove per cue, plus two reflection
+// prompts that nudge the expert to spot gaps before confirming.
+//
+// NOTE on the two reflection prompts in the spec ("would these look
+// identical but need a different response?" / "wouldn't actually change
+// what you'd do?"): the data model has no dedicated field for the prompt
+// answers themselves — only the resulting cueLibrary is persisted. So here
+// they're rendered as guided actions: prompt 1 opens the "add a cue" form,
+// prompt 2 points at the Remove action already on each row. Flagging this
+// interpretation in case you want the raw reflection answers stored too.
+// =============================================================================
 
-import { getSession, updateCueLibrary } from '../db.js';
-import { showView } from '../app.js';
+import { saveCueLibrary } from '../db.js';
 
-export async function init(container, sessionId) {
-    if (!sessionId) {
-        container.innerHTML = `<div class="lab-page"><div class="lab-error">No active session. Please start from Screen 1.</div></div>`;
-        return;
-    }
+let _cues       = [];   // working copy: [{ id, name, definition, scale, layer, options, _removed, _editing }]
+let _addingCue  = false;
 
-    container.innerHTML = `
-    <div class="lab-page">
-      <div class="lab-header">
-        <span class="lab-step-label">Step 3 of 10</span>
-        <h2 class="lab-title">Your Cue Library</h2>
-        <p class="lab-subtitle">
-          These are the features of a situation the system thinks you pay attention to
-          when deciding what to do. Review each one — keep it, edit it, or remove it.
-        </p>
-      </div>
-      <div id="cue-review-loading" class="lab-loading"><p>Loading cue library…</p></div>
-      <div id="cue-review-body" class="hidden"></div>
-    </div>
-  `;
-
-    try {
-        const session = await getSession(sessionId);
-        if (!session) throw new Error('Session not found.');
-        if (!session.cueLibrary || session.cueLibrary.length === 0) {
-            throw new Error('No cue library found. Please go back to Screen 1 and resubmit your profile.');
-        }
-
-        document.getElementById('cue-review-loading').classList.add('hidden');
-        renderCueReview(session.cueLibrary, sessionId);
-
-    } catch (err) {
-        console.error('[cue-review] init error:', err);
-        document.getElementById('cue-review-loading').classList.add('hidden');
-        document.getElementById('cue-review-body').innerHTML = `<div class="lab-error">${err.message}</div>`;
-        document.getElementById('cue-review-body').classList.remove('hidden');
-    }
+export function render(el, session, next) {
+    _cues = (session.cueLibrary ?? []).map(c => ({ ...c, _removed: false, _editing: false }));
+    _addingCue = false;
+    _draw(el, session, next);
 }
 
-// ── Render ────────────────────────────────────────────────────────────
+function _draw(el, session, next) {
+    el.innerHTML = `
+<div class="lab-wrap">
+  <div class="lab-steps">${_pips(3)}</div>
+  <h1 class="lab-h1">Review your cue library</h1>
+  <p class="lab-sub">
+    These are the cues the system thinks drive your decisions. Correct anything
+    that's off before they're used to build scenarios — this is the foundation
+    everything else is built on.
+  </p>
 
-function renderCueReview(initialCues, sessionId) {
-    // Deep-copy so we can edit without mutating the original
-    let cues = initialCues.map(c => ({ ...c, _status: 'keep' }));
+  <div id="cue-err" class="lab-notice lab-err" style="display:none"></div>
 
-    const body = document.getElementById('cue-review-body');
-    body.classList.remove('hidden');
+  <div class="lab-card">
+    <div id="cue-list">
+      ${_cues.map(c => _rowHTML(c)).join('')}
+    </div>
 
-    function redraw() {
-        body.innerHTML = '';
+    ${_addingCue ? _addFormHTML() : `<button type="button" class="lab-add-btn" id="show-add">+ Add a cue I noticed is missing</button>`}
+  </div>
 
-        // ── Cue cards ─────────────────────────────────────────────────────
-        const listEl = document.createElement('div');
-        listEl.id = 'cue-list';
+  <div class="lab-card">
+    <div class="lab-section-head">Before you confirm</div>
+    <p style="font-size:var(--text-sm);color:var(--warm-grey);line-height:1.6;margin-bottom:var(--space-2)">
+      Are there situations in your work that would need a different response but would
+      look identical using only these cues? If so, add the missing cue above.
+    </p>
+    <p style="font-size:var(--text-sm);color:var(--warm-grey);line-height:1.6;margin:0">
+      Are there any cues below that wouldn't actually change what you'd do? Remove them.
+    </p>
+  </div>
 
-        cues.forEach((cue, idx) => {
-            const card = document.createElement('div');
-            card.className = `cue-card${cue._status === 'remove' ? ' removed' : ''}`;
-            card.innerHTML = `
-        <p class="cue-name">${cue.name}</p>
-        <p class="cue-def">${cue.definition}</p>
-        <p class="cue-meta">
-          Scale: <strong>${cue.scale}</strong> &nbsp;·&nbsp;
-          Layer: <strong>${cue.layer}</strong> &nbsp;·&nbsp;
-          Options: <strong>${(cue.options || []).join(' / ')}</strong>
-        </p>
-        <div class="cue-actions">
-          <button class="btn btn-ghost btn-sm" data-action="keep"   data-idx="${idx}">✓ Keep</button>
-          <button class="btn btn-ghost btn-sm" data-action="edit"   data-idx="${idx}">Edit</button>
-          <button class="btn btn-ghost btn-sm" data-action="remove" data-idx="${idx}">Remove</button>
-        </div>
-        <div class="cue-edit-area hidden" id="edit-area-${idx}">
-          <div class="form-group">
-            <label class="form-label">Name</label>
-            <input class="input" type="text" id="edit-name-${idx}" value="${escHtml(cue.name)}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Definition</label>
-            <textarea class="input textarea" id="edit-def-${idx}" rows="2">${escHtml(cue.definition)}</textarea>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Scale</label>
-            <select class="input" id="edit-scale-${idx}">
-              <option value="binary"      ${cue.scale === 'binary' ? 'selected' : ''}>Binary (2 options)</option>
-              <option value="three-point" ${cue.scale === 'three-point' ? 'selected' : ''}>Three-point (3 options)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Options (comma-separated)</label>
-            <input class="input" type="text" id="edit-options-${idx}"
-                   value="${escHtml((cue.options || []).join(', '))}" />
-          </div>
-          <button class="btn btn-primary btn-sm" data-action="save-edit" data-idx="${idx}">Save Changes</button>
-        </div>
-      `;
-            listEl.appendChild(card);
+  <div class="lab-btn-row">
+    <button type="button" class="btn btn-primary" id="cue-confirm">Confirm cue library</button>
+  </div>
+</div>`;
+
+    // ---- Per-row actions ---------------------------------------------------
+    el.querySelectorAll('.cue-edit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const c = _cues.find(c => c.id === btn.dataset.id);
+            if (c) c._editing = !c._editing;
+            _draw(el, session, next);
         });
+    });
 
-        body.appendChild(listEl);
-
-        // Wire action buttons
-        listEl.addEventListener('click', e => {
-            const btn = e.target.closest('[data-action]');
-            if (!btn) return;
-            const idx = parseInt(btn.dataset.idx, 10);
-            const action = btn.dataset.action;
-
-            if (action === 'keep') {
-                cues[idx]._status = 'keep';
-                redraw();
-            }
-
-            if (action === 'remove') {
-                cues[idx]._status = 'remove';
-                redraw();
-            }
-
-            if (action === 'edit') {
-                const editArea = document.getElementById(`edit-area-${idx}`);
-                if (editArea) editArea.classList.toggle('hidden');
-            }
-
-            if (action === 'save-edit') {
-                const name = document.getElementById(`edit-name-${idx}`)?.value.trim();
-                const def = document.getElementById(`edit-def-${idx}`)?.value.trim();
-                const scale = document.getElementById(`edit-scale-${idx}`)?.value;
-                const optStr = document.getElementById(`edit-options-${idx}`)?.value;
-                const options = optStr ? optStr.split(',').map(s => s.trim()).filter(Boolean) : [];
-
-                if (!name || !def) { alert('Name and definition are required.'); return; }
-
-                cues[idx] = { ...cues[idx], name, definition: def, scale, options, _status: 'keep' };
-                redraw();
-            }
+    el.querySelectorAll('.cue-remove-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const c = _cues.find(c => c.id === btn.dataset.id);
+            if (c) c._removed = !c._removed;
+            _draw(el, session, next);
         });
+    });
 
-        // ── Add-cue form ───────────────────────────────────────────────────
-        const addSection = document.createElement('div');
-        addSection.style.marginTop = '2rem';
-        addSection.innerHTML = `
-      <h4 style="margin:0 0 0.5rem">Diagnostic questions</h4>
-      <p class="form-hint" style="margin-bottom:1.25rem">
-        Use these to spot missing cues before the session is locked.
-      </p>
+    el.querySelectorAll('.cue-save-edit').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const c = _cues.find(c => c.id === btn.dataset.id);
+            if (!c) return;
+            const row = el.querySelector(`[data-row-id="${c.id}"]`);
+            c.name       = row.querySelector('.edit-name').value.trim()       || c.name;
+            c.definition = row.querySelector('.edit-def').value.trim()       || c.definition;
+            c._editing   = false;
+            _draw(el, session, next);
+        });
+    });
 
-      <div style="padding:1rem 1.25rem; border:1px solid rgba(0,0,0,0.1); border-radius:10px; margin-bottom:1rem;">
-        <label class="form-label">
-          Are there situations in your work that would need a different response
-          but would look identical using only these cues?
-        </label>
-        <p class="form-hint">If yes, describe the missing cue below and add it.</p>
-        <div class="form-group" style="margin-top:0.75rem">
-          <label class="form-label" for="new-cue-name">New cue name <span class="optional">(optional)</span></label>
-          <input class="input" type="text" id="new-cue-name" placeholder="e.g. Time available before deadline" />
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="new-cue-def">Definition</label>
-          <textarea class="input textarea" id="new-cue-def" rows="2"
-                    placeholder="What does this cue mean in practice?"></textarea>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="new-cue-scale">Scale</label>
-          <select class="input" id="new-cue-scale">
-            <option value="binary">Binary (2 options)</option>
-            <option value="three-point">Three-point (3 options)</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label" for="new-cue-options">Options (comma-separated)</label>
-          <input class="input" type="text" id="new-cue-options" placeholder="e.g. Short, Adequate, Plenty" />
-        </div>
-        <button class="btn btn-ghost btn-sm" id="btn-add-cue">Add This Cue</button>
-      </div>
+    // ---- Add-cue form --------------------------------------------------------
+    const showAddBtn = el.querySelector('#show-add');
+    if (showAddBtn) {
+        showAddBtn.addEventListener('click', () => {
+            _addingCue = true;
+            _draw(el, session, next);
+        });
+    }
 
-      <div style="padding:1rem 1.25rem; border:1px solid rgba(0,0,0,0.1); border-radius:10px;">
-        <label class="form-label">
-          Are there any cues above that would not actually change what you do?
-        </label>
-        <p class="form-hint">
-          If so, use the Remove button on those cards above. Cues that don't change
-          your decision add noise to the model.
-        </p>
-      </div>
-    `;
-        body.appendChild(addSection);
+    const cancelAddBtn = el.querySelector('#cancel-add');
+    if (cancelAddBtn) {
+        cancelAddBtn.addEventListener('click', () => {
+            _addingCue = false;
+            _draw(el, session, next);
+        });
+    }
 
-        // Add cue handler
-        document.getElementById('btn-add-cue').addEventListener('click', () => {
-            const name = document.getElementById('new-cue-name').value.trim();
-            const def = document.getElementById('new-cue-def').value.trim();
-            const scale = document.getElementById('new-cue-scale').value;
-            const optStr = document.getElementById('new-cue-options').value;
-            const options = optStr ? optStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const saveAddBtn = el.querySelector('#save-add');
+    if (saveAddBtn) {
+        saveAddBtn.addEventListener('click', () => {
+            const name  = el.querySelector('#new-cue-name').value.trim();
+            const def   = el.querySelector('#new-cue-def').value.trim();
+            const scale = el.querySelector('#new-cue-scale').value;
+            if (!name || !def) return;
 
-            if (!name || !def) {
-                alert('Please enter at least a name and definition for the new cue.');
-                return;
-            }
-
-            const newCue = {
-                id: `cue_${String(cues.length + 1).padStart(3, '0')}`,
+            _cues.push({
+                id: `cue-${Date.now()}`,
                 name,
                 definition: def,
                 scale,
-                layer: 1,   // default — expert can edit after redraw
-                options,
-                _status: 'keep',
-            };
-            cues.push(newCue);
-            redraw();
-        });
-
-        // ── Confirm / error ────────────────────────────────────────────────
-        const footer = document.createElement('div');
-        footer.innerHTML = `
-      <div id="cue-review-error" class="lab-error hidden"></div>
-      <div class="lab-actions" style="margin-top:2rem">
-        <button class="btn btn-primary" id="btn-cue-confirm">Confirm Cue Library →</button>
-        <span class="form-hint">${cues.filter(c => c._status === 'keep').length} cues will be kept</span>
-      </div>
-      <div id="cue-confirm-loading" class="lab-loading hidden"><p>Saving…</p></div>
-    `;
-        body.appendChild(footer);
-
-        document.getElementById('btn-cue-confirm').addEventListener('click', () => {
-            handleConfirm(cues, sessionId);
+                layer: 2,
+                options: scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No'],
+                _removed: false,
+                _editing: false,
+            });
+            _addingCue = false;
+            _draw(el, session, next);
         });
     }
 
-    redraw();
+    // ---- Confirm -------------------------------------------------------------
+    el.querySelector('#cue-confirm').addEventListener('click', async () => {
+        const final = _cues.filter(c => !c._removed)
+            .map(({ _removed, _editing, ...c }) => c);
+
+        const errEl = el.querySelector('#cue-err');
+        if (final.length === 0) {
+            errEl.textContent   = 'You need at least one cue to continue.';
+            errEl.style.display = '';
+            return;
+        }
+        errEl.style.display = 'none';
+
+        const btn = el.querySelector('#cue-confirm');
+        btn.disabled    = true;
+        btn.textContent = 'Saving…';
+
+        const ok = await saveCueLibrary(session.id, final);
+        if (!ok) {
+            errEl.textContent   = "Couldn't save the cue library. Try again.";
+            errEl.style.display = '';
+            btn.disabled    = false;
+            btn.textContent = 'Confirm cue library';
+            return;
+        }
+
+        session.cueLibrary = final;
+        next();
+    });
 }
 
-// ── Save and navigate ─────────────────────────────────────────────────
-
-async function handleConfirm(cues, sessionId) {
-    const errorEl = document.getElementById('cue-review-error');
-    const loadingEl = document.getElementById('cue-confirm-loading');
-    const confirmBtn = document.getElementById('btn-cue-confirm');
-    errorEl.classList.add('hidden');
-
-    // Filter out removed cues and strip the internal _status field
-    const finalLibrary = cues
-        .filter(c => c._status !== 'remove')
-        .map(({ _status, ...cue }) => cue);
-
-    if (finalLibrary.length < 3) {
-        errorEl.textContent = 'Please keep at least 3 cues. The model needs sufficient variation to fit a pattern.';
-        errorEl.classList.remove('hidden');
-        return;
+// ---------------------------------------------------------------------------
+// HTML builders
+// ---------------------------------------------------------------------------
+function _rowHTML(c) {
+    if (c._editing) {
+        return `
+<div class="cue-row" data-row-id="${c.id}">
+  <div class="cue-edit-area">
+    <input class="lab-edit-input edit-name" value="${_esc(c.name)}" placeholder="Cue name">
+    <textarea class="lab-edit-ta edit-def" placeholder="Definition">${_esc(c.definition)}</textarea>
+    <button type="button" class="btn btn-primary btn-sm cue-save-edit" data-id="${c.id}">Save</button>
+  </div>
+</div>`;
     }
 
-    confirmBtn.disabled = true;
-    loadingEl.classList.remove('hidden');
-
-    try {
-        await updateCueLibrary(sessionId, finalLibrary);
-        showView('options');
-    } catch (err) {
-        console.error('[cue-review] save error:', err);
-        errorEl.textContent = err.message || 'Save failed. Please try again.';
-        errorEl.classList.remove('hidden');
-        confirmBtn.disabled = false;
-    } finally {
-        loadingEl.classList.add('hidden');
-    }
+    return `
+<div class="cue-row ${c._removed ? 'removed' : ''}">
+  <div>
+    <div class="cue-name">${_esc(c.name)}</div>
+    <div class="cue-def">${_esc(c.definition)}</div>
+    <span class="cue-scale-badge">${c.scale === 'three-point' ? '3-point' : 'binary'} · layer ${c.layer}</span>
+  </div>
+  <div class="cue-actions">
+    <button type="button" class="btn btn-ghost btn-sm cue-edit-btn" data-id="${c.id}">Edit</button>
+    <button type="button" class="btn btn-ghost btn-sm cue-remove-btn" data-id="${c.id}">
+      ${c._removed ? 'Undo' : 'Remove'}
+    </button>
+  </div>
+</div>`;
 }
 
-// ── HTML escape helper ────────────────────────────────────────────────
+function _addFormHTML() {
+    return `
+<div class="group-prompt" style="margin-top:1rem">
+  <label>Cue name</label>
+  <input class="lab-edit-input" id="new-cue-name" placeholder="e.g. Time pressure on the decision">
+  <label style="margin-top:0.5rem">Definition</label>
+  <textarea class="lab-edit-ta" id="new-cue-def" placeholder="What this cue means and how you'd recognise it"></textarea>
+  <label style="margin-top:0.5rem">Scale</label>
+  <select class="input" id="new-cue-scale" style="margin-bottom:0.6rem">
+    <option value="binary">Binary (yes/no)</option>
+    <option value="three-point">Three-point (low/medium/high)</option>
+  </select>
+  <div style="display:flex;gap:0.5rem">
+    <button type="button" class="btn btn-primary btn-sm" id="save-add">Add cue</button>
+    <button type="button" class="btn btn-ghost btn-sm" id="cancel-add">Cancel</button>
+  </div>
+</div>`;
+}
 
-function escHtml(str) {
-    return (str || '')
+function _pips(active) {
+    return Array.from({ length: 10 }, (_, i) => {
+        const n   = i + 1;
+        const cls = n === active ? 'active' : n < active ? 'done' : '';
+        return `<div class="lab-pip ${cls}" title="Screen ${n}"></div>`;
+    }).join('');
+}
+
+function _esc(s) {
+    if (!s) return '';
+    return String(s)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')

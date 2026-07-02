@@ -1,205 +1,296 @@
-/**
- * lab/app.js
- * ─────────────────────────────────────────────────────────────────────
- * Bootstrap for the Knowledge Extraction Lab.
- *
- * Responsibilities:
- *  - Render the auth screen and handle sign-in
- *  - Maintain shared state: current user + current session ID
- *  - Export showView(), getCurrentUser(), getSessionId(), setSessionId()
- *    for use by view modules
- *
- * NOTE: ping() is listed in the spec but is not currently exported from
- * engine/ai.js. Removed to prevent a SyntaxError on module load.
- * Re-add `import { ping } from '../engine/ai.js'` and the ping() call
- * in boot() if/when ping is added to the engine.
- */
+// =============================================================================
+// Lab — app.js
+// Auth state listener, view router, session manager, and auth form handler.
+//
+// This file coordinates the entire lab:
+//   - onAuthChange() drives everything — all routing starts here.
+//   - showView(name) is the single function that switches the active screen.
+//   - Each view's render(el, session, next) is called when that screen is shown.
+//   - next() reloads the session from Firestore and advances to the next screen.
+//
+// Auth note: The Lab uses open self-registration (email + password, no invite).
+// This is deliberate — the Lab is a standalone MVP with no org-level access
+// control. signIn() and signOut() come from engine/auth.js; createUserWithEmail
+// is called directly from Firebase Auth since auth.js has no sign-up function.
+//
+// Ping note: engine/ai.js does not currently export ping(). The Worker is
+// warmed up here with a direct fire-and-forget fetch. The page renders
+// immediately regardless of whether it succeeds — no blocking.
+// =============================================================================
 
-import { onAuthChange, signIn } from '../engine/auth.js';
+import { onAuthChange, signIn, signOut } from '../engine/auth.js';
+import { friendlyAuthError }             from '../engine/utils.js';
+import { auth }                          from '../firebase.js';
+import {
+    createUserWithEmailAndPassword,
+} from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
-// ── Shared state ──────────────────────────────────────────────────────
-let _currentUser = null;
-let _sessionId = null;
+import { createSession, getLatestSession, getSession } from './db.js';
 
-export const getCurrentUser = () => _currentUser;
-export const getSessionId  = () => _sessionId;
-export const setSessionId  = (id) => { _sessionId = id; };
+import { render as renderProfile   } from './views/profile.js';
+import { render as renderSorting   } from './views/sorting.js';
+import { render as renderCueReview } from './views/cue-review.js';
+import { render as renderOptions   } from './views/options.js';
 
-// ── View registry ─────────────────────────────────────────────────────
-// All view IDs — used to hide every view before showing the target one.
-const ALL_VIEW_IDS = [
-    'auth', 'profile', 'sorting', 'cue-review',
-    'options', 'session', 'model-view', 'elicitation',
-    'recipe', 'transfer', 'summary',
+// Step 2 view imports — uncomment as each file is built:
+// import { render as renderSession     } from './views/session.js';
+// import { render as renderModelView   } from './views/model-view.js';
+// import { render as renderElicitation } from './views/elicitation.js';
+// import { render as renderRecipe      } from './views/recipe.js';
+
+// Step 3 view imports — uncomment as each file is built:
+// import { render as renderTransfer  } from './views/transfer.js';
+// import { render as renderSummary   } from './views/summary.js';
+
+// ---------------------------------------------------------------------------
+// Warm up the Worker on load — fire-and-forget, never blocks rendering.
+// engine/ai.js does not export ping(); this direct call is intentional.
+// The Worker handles mode:'ping' (same as the pattern in engine/auth.js).
+// ---------------------------------------------------------------------------
+fetch('https://lore-worker.slop-runner.workers.dev', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ mode: 'ping' }),
+}).catch(() => {}); // Non-fatal — error is silently swallowed
+
+// ---------------------------------------------------------------------------
+// View names — in screen order.
+// ---------------------------------------------------------------------------
+const ALL_VIEWS = [
+    'auth',
+    'profile', 'sorting', 'cue-review', 'options',
+    'session', 'model-view', 'elicitation', 'recipe',
+    'transfer', 'summary',
 ];
 
-// Dynamic loaders — only imported when the view is first navigated to.
-const VIEW_LOADERS = {
-    'profile':     () => import('./views/profile.js'),
-    'sorting':     () => import('./views/sorting.js'),
-    'cue-review':  () => import('./views/cue-review.js'),
-    'options':     () => import('./views/options.js'),
-    'session':     () => import('./views/session.js'),
-    'model-view':  () => import('./views/model-view.js'),
-    'elicitation': () => import('./views/elicitation.js'),
-    'recipe':      () => import('./views/recipe.js'),
-    'transfer':    () => import('./views/transfer.js'),
-    'summary':     () => import('./views/summary.js'),
+const SCREEN_NUM = {
+    'profile': 1, 'sorting': 2, 'cue-review': 3, 'options': 4,
+    'session': 5, 'model-view': 6, 'elicitation': 7, 'recipe': 8,
+    'transfer': 9, 'summary': 10,
 };
 
-/**
- * showView(name)
- *
- * Hides every view, reveals the named one, then imports the matching
- * view module and calls its exported init(container, sessionId) function.
- *
- * Calling init() on every navigation (rather than caching) allows each
- * view to reload fresh data from Firestore on each visit, which is safer
- * for a multi-step flow where earlier screens can change later ones.
- *
- * @param {string} name — must match one of ALL_VIEW_IDS
- */
+const SCREEN_SEQ = [
+    'profile', 'sorting', 'cue-review', 'options',
+    'session', 'model-view', 'elicitation', 'recipe',
+    'transfer', 'summary',
+];
+
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
+let _currentUser    = null;
+let _currentSession = null;
+
+// ---------------------------------------------------------------------------
+// showView(name) — hides all views, shows the target, calls its render fn.
+// ---------------------------------------------------------------------------
 export async function showView(name) {
-    // Hide all views
-    ALL_VIEW_IDS.forEach(id => {
-        document.getElementById(`view-${id}`)?.classList.add('hidden');
+    ALL_VIEWS.forEach(v => {
+        const el = document.getElementById(`view-${v}`);
+        if (el) el.style.display = 'none';
     });
 
-    // Show the target view
-    const target = document.getElementById(`view-${name}`);
-    if (!target) {
-        console.error(`[lab/app] showView: no element found for #view-${name}`);
+    const el = document.getElementById(`view-${name}`);
+    if (!el) {
+        console.warn('Lab app.js: no container for view:', name);
         return;
     }
-    target.classList.remove('hidden');
+    el.style.display = 'block';
 
-    // Load and call the view module's init() — auth view has no loader
-    const loader = VIEW_LOADERS[name];
-    if (!loader) return;
+    if (name === 'auth') return;
+
+    if (!_currentSession) {
+        console.warn('Lab app.js: showView called with no session — returning to auth');
+        showView('auth');
+        return;
+    }
+
+    const next = _makeAdvance(name);
+
+    switch (name) {
+        case 'profile':
+            renderProfile(el, _currentSession, next);
+            break;
+        case 'sorting':
+            renderSorting(el, _currentSession, next);
+            break;
+        case 'cue-review':
+            renderCueReview(el, _currentSession, next);
+            break;
+        case 'options':
+            renderOptions(el, _currentSession, next);
+            break;
+
+        // Step 2 — swap placeholder for real render call when built:
+        case 'session':
+        case 'model-view':
+        case 'elicitation':
+        case 'recipe':
+        case 'transfer':
+        case 'summary':
+            el.innerHTML = `
+<div class="lab-wrap">
+  <div class="lab-steps">${_makePips(SCREEN_NUM[name])}</div>
+  <p style="color:var(--warm-grey);padding:var(--space-8) 0;font-size:var(--text-base)">
+    Screen ${SCREEN_NUM[name]} — built in Step 2.
+  </p>
+</div>`;
+            break;
+
+        default:
+            console.warn('Lab app.js: unknown view:', name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// _makeAdvance(currentView) — builds the `next` callback passed to each view.
+// ---------------------------------------------------------------------------
+function _makeAdvance(currentView) {
+    const idx      = SCREEN_SEQ.indexOf(currentView);
+    const nextView = idx >= 0 && idx < SCREEN_SEQ.length - 1
+        ? SCREEN_SEQ[idx + 1]
+        : 'summary';
+
+    return async () => {
+        if (_currentSession?.id) {
+            const fresh = await getSession(_currentSession.id);
+            if (fresh) _currentSession = fresh;
+        }
+        showView(nextView);
+    };
+}
+
+// ---------------------------------------------------------------------------
+// _getResumeView(session) — finds the correct screen to resume from.
+// ---------------------------------------------------------------------------
+function _getResumeView(s) {
+    if (!s) return 'profile';
+    if (s.recipe?.status === 'confirmed')           return 'summary';
+    if (s.recipe?.trigger)                          return 'recipe';
+    if (s.elicitation?.triad?.discriminationAnswer) return 'recipe';
+    if (s.elicitation?.cases?.length)               return 'elicitation';
+    if (s.policyModel?.expertAccuracyRating)        return 'elicitation';
+    if (s.policyModel?.summaryText)                 return 'model-view';
+    if ((s.scenarios?.length ?? 0) >= 30)           return 'model-view';
+    if (s.decisionOptions?.length)                  return 'session';
+    if (s.cueLibrary?.length && s.sortingTask?.groups?.length) return 'options';
+    if (s.cueLibrary?.length)                       return 'cue-review';
+    if (s.sortingTask?.situations?.length)          return 'sorting';
+    if (s.profile?.role)                            return 'sorting';
+    return 'profile';
+}
+
+function _makePips(active) {
+    return Array.from({ length: 10 }, (_, i) => {
+        const n   = i + 1;
+        const cls = n === active ? 'active' : n < active ? 'done' : '';
+        return `<div class="lab-pip ${cls}" title="Screen ${n}"></div>`;
+    }).join('');
+}
+
+// ============================================================================
+// Auth state listener
+// ============================================================================
+onAuthChange(async (user) => {
+    _currentUser = user;
+
+    if (!user) {
+        _currentSession = null;
+        document.getElementById('lab-nav').style.display = 'none';
+        showView('auth');
+        return;
+    }
+
+    document.getElementById('lab-nav').style.display  = '';
+    document.getElementById('nav-email').textContent   = user.email;
+
+    let session = await getLatestSession(user.uid);
+    if (!session) {
+        session = await createSession(user.uid);
+    }
+    if (!session) {
+        console.error('Lab app.js: could not load or create a session');
+        showView('auth');
+        return;
+    }
+
+    _currentSession = session;
+    showView(_getResumeView(session));
+});
+
+// ============================================================================
+// Auth form — tab switching
+// ============================================================================
+function _switchTab(tab) {
+    const isSignin = tab === 'signin';
+
+    document.getElementById('form-signin').style.display = isSignin ? '' : 'none';
+    document.getElementById('form-signup').style.display = isSignin ? 'none' : '';
+
+    document.getElementById('tab-signin').classList.toggle('active', isSignin);
+    document.getElementById('tab-signup').classList.toggle('active', !isSignin);
+
+    // Clear any previous error when switching tabs
+    document.getElementById('auth-err').classList.remove('visible');
+}
+
+// Auth error uses .auth-error.visible from root style.css
+function _showAuthErr(msg) {
+    const el = document.getElementById('auth-err');
+    el.textContent = msg;
+    el.classList.add('visible');
+}
+
+function _setFormBusy(formId, btnId, busy, idleLabel) {
+    const btn = document.getElementById(btnId);
+    btn.disabled    = busy;
+    btn.textContent = busy ? 'Please wait…' : idleLabel;
+    document.getElementById(formId)
+        .querySelectorAll('input')
+        .forEach(i => { i.disabled = busy; });
+}
+
+document.getElementById('tab-signin').addEventListener('click', () => _switchTab('signin'));
+document.getElementById('tab-signup').addEventListener('click', () => _switchTab('signup'));
+
+// Sign-in form
+document.getElementById('form-signin').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email    = document.getElementById('si-email').value.trim();
+    const password = document.getElementById('si-password').value;
+    if (!email || !password) return;
+
+    document.getElementById('auth-err').classList.remove('visible');
+    _setFormBusy('form-signin', 'btn-signin', true, 'Sign in');
+
+    const result = await signIn(email, password);
+
+    _setFormBusy('form-signin', 'btn-signin', false, 'Sign in');
+    if (!result.ok) _showAuthErr(result.error);
+    // On success, onAuthChange fires and handles routing
+});
+
+// Create account form
+document.getElementById('form-signup').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email    = document.getElementById('su-email').value.trim();
+    const password = document.getElementById('su-password').value;
+    if (!email || !password) return;
+
+    document.getElementById('auth-err').classList.remove('visible');
+    _setFormBusy('form-signup', 'btn-signup', true, 'Create account');
 
     try {
-        const mod = await loader();
-        if (typeof mod.init === 'function') {
-            await mod.init(target, _sessionId);
-        }
+        await createUserWithEmailAndPassword(auth, email, password);
+        // onAuthChange fires on success and handles routing
     } catch (err) {
-        console.error(`[lab/app] showView: failed to load view "${name}"`, err);
-        target.innerHTML = `
-      <div class="lab-page">
-        <div class="lab-error">
-          Failed to load this screen. Check the browser console for details.
-        </div>
-      </div>
-    `;
+        _setFormBusy('form-signup', 'btn-signup', false, 'Create account');
+        _showAuthErr(friendlyAuthError(err.code));
     }
-}
+});
 
-// ── Auth screen ───────────────────────────────────────────────────────
-
-function renderAuthScreen() {
-    const container = document.getElementById('view-auth');
-    container.innerHTML = `
-    <div class="lab-auth">
-      <div class="lab-auth-card card">
-
-        <h1 class="lab-auth-title">Knowledge Extraction Lab</h1>
-        <p class="lab-auth-subtitle">Sign in to begin or continue a session.</p>
-
-        <div id="auth-error" class="lab-error hidden"></div>
-
-        <div class="form-group">
-          <label class="form-label" for="auth-email">Email</label>
-          <input class="input" type="email" id="auth-email"
-                 placeholder="you@example.com" autocomplete="email" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label" for="auth-password">Password</label>
-          <input class="input" type="password" id="auth-password"
-                 placeholder="••••••••" autocomplete="current-password" />
-        </div>
-
-        <div class="lab-auth-actions">
-          <button class="btn btn-primary" id="btn-sign-in">Sign In</button>
-        </div>
-        <p style="margin-top:1rem; font-size:0.8rem; opacity:0.5;">
-          Accounts are provisioned by the researcher. Contact your session lead if you need access.
-        </p>
-
-      </div>
-    </div>
-  `;
-
-    const emailEl    = document.getElementById('auth-email');
-    const passwordEl = document.getElementById('auth-password');
-    const errorEl    = document.getElementById('auth-error');
-    const signInBtn  = document.getElementById('btn-sign-in');
-
-    function showError(msg) {
-        errorEl.textContent = msg;
-        errorEl.classList.remove('hidden');
-    }
-
-    // FIX: setLoading now only references signInBtn, which IS declared above.
-    // The original code referenced signUpBtn (never declared, no sign-up button
-    // in the HTML), which threw a ReferenceError on every sign-in attempt.
-    function setLoading(on) {
-        signInBtn.disabled    = on;
-        signInBtn.textContent = on ? 'Signing in…' : 'Sign In';
-    }
-
-    async function handleSignIn() {
-        const email    = emailEl.value.trim();
-        const password = passwordEl.value;
-        errorEl.classList.add('hidden');
-
-        if (!email || !password) {
-            showError('Please enter both email and password.');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            // signIn() is from engine/auth.js — returns { ok, error } shape.
-            // Firebase's onAuthChange callback handles navigation after success.
-            const result = await signIn(email, password);
-            if (result && !result.ok) {
-                showError(result.error || 'Authentication failed. Please try again.');
-                setLoading(false);
-            }
-        } catch (err) {
-            showError(err.message || 'Authentication failed. Please try again.');
-            setLoading(false);
-        }
-    }
-
-    signInBtn.addEventListener('click', handleSignIn);
-
-    // Allow Enter key to trigger sign-in from either field
-    [emailEl, passwordEl].forEach(el =>
-        el.addEventListener('keydown', e => { if (e.key === 'Enter') handleSignIn(); })
-    );
-}
-
-// ── Bootstrap ─────────────────────────────────────────────────────────
-
-function boot() {
-    // Render the auth screen once (its HTML lives here, not in a view module)
-    renderAuthScreen();
-
-    // React to Firebase auth state changes
-    onAuthChange(user => {
-        _currentUser = user;
-
-        if (user) {
-            // Signed in — start at the profile screen
-            showView('profile');
-        } else {
-            // Signed out — reset session and return to auth
-            _sessionId = null;
-            showView('auth');
-        }
-    });
-}
-
-boot();
+// Sign-out button
+document.getElementById('nav-signout').addEventListener('click', async () => {
+    await signOut();
+    // onAuthChange fires and routes to auth screen
+});

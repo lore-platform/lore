@@ -1,313 +1,101 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Knowledge Extraction Lab — Lore</title>
-    <link rel="stylesheet" href="../style.css" />
-    <style>
-        /* ── Core layout ───────────────────────────────────── */
-        .hidden {
-            display: none !important;
-        }
-
-        #app {
-            min-height: 100vh;
-        }
-
-        .lab-page {
-            max-width: 720px;
-            margin: 0 auto;
-            padding: 2rem 1.5rem 4rem;
-        }
-
-        /* ── Lab header block ──────────────────────────────── */
-        .lab-header {
-            margin-bottom: 2rem;
-        }
-
-        .lab-step-label {
-            font-size: 0.75rem;
-            font-weight: 600;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            opacity: 0.5;
-            display: block;
-            margin-bottom: 0.5rem;
-        }
-
-        .lab-title {
-            margin: 0 0 0.5rem;
-            font-size: 1.75rem;
-        }
-
-        .lab-subtitle {
-            margin: 0;
-            opacity: 0.65;
-        }
-
-        /* ── Forms ─────────────────────────────────────────── */
-        .form-group {
-            margin-bottom: 1.25rem;
-        }
-
-        .form-label {
-            display: block;
-            font-weight: 600;
-            margin-bottom: 0.35rem;
-            font-size: 0.9rem;
-        }
-
-        .form-hint {
-            font-size: 0.8rem;
-            opacity: 0.6;
-            margin-top: 0.25rem;
-        }
-
-        .required {
-            color: #e53e3e;
-        }
-
-        .optional {
-            font-weight: 400;
-            opacity: 0.55;
-        }
-
-        .textarea {
-            min-height: 90px;
-            resize: vertical;
-            width: 100%;
-            box-sizing: border-box;
-        }
-
-        /* ── Lab actions bar ───────────────────────────────── */
-        .lab-actions {
-            margin-top: 2rem;
-            display: flex;
-            gap: 0.75rem;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        /* ── Feedback states ───────────────────────────────── */
-        .lab-error {
-            color: #c53030;
-            background: #fff5f5;
-            border: 1px solid #fed7d7;
-            border-radius: 6px;
-            padding: 0.6rem 0.9rem;
-            font-size: 0.875rem;
-            margin-bottom: 1rem;
-        }
-
-        .lab-success {
-            color: #276749;
-            background: #f0fff4;
-            border: 1px solid #c6f6d5;
-            border-radius: 6px;
-            padding: 0.6rem 0.9rem;
-            font-size: 0.875rem;
-            margin-bottom: 1rem;
-        }
-
-        .lab-loading {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 1rem 0;
-            font-size: 0.9rem;
-            opacity: 0.7;
-        }
-
-        /* ── Auth screen ───────────────────────────────────── */
-        .lab-auth {
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem;
-        }
-
-        .lab-auth-card {
-            width: 100%;
-            max-width: 400px;
-            padding: 2rem;
-        }
-
-        .lab-auth-title {
-            margin: 0 0 0.5rem;
-        }
-
-        .lab-auth-subtitle {
-            margin: 0 0 1.75rem;
-            opacity: 0.6;
-            font-size: 0.9rem;
-        }
-
-        .lab-auth-actions {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1.5rem;
-        }
-
-        /* ── Sorting task ──────────────────────────────────── */
-        .sort-board {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-            margin-top: 1.5rem;
-        }
-
-        @media (max-width: 600px) {
-            .sort-board {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .sort-pool {
-            border: 2px dashed rgba(0, 0, 0, 0.15);
-            border-radius: 10px;
-            padding: 0.75rem;
-            min-height: 120px;
-        }
-
-        .sort-pool.drag-over {
-            border-color: #4a90e2;
-            background: #f0f7ff;
-        }
-
-        .sort-pool-title {
-            font-size: 0.7rem;
-            font-weight: 700;
-            letter-spacing: 0.07em;
-            text-transform: uppercase;
-            opacity: 0.45;
-            margin-bottom: 0.5rem;
-        }
-
-        .situation-card {
-            background: #fff;
-            border: 1px solid rgba(0, 0, 0, 0.12);
-            border-radius: 8px;
-            padding: 0.65rem 0.75rem;
-            font-size: 0.85rem;
-            line-height: 1.45;
-            margin-bottom: 0.5rem;
-            cursor: grab;
-            user-select: none;
-            transition: box-shadow 0.15s, opacity 0.15s;
-        }
-
-        .situation-card:active {
-            cursor: grabbing;
-        }
-
-        .situation-card.dragging {
-            opacity: 0.4;
-            box-shadow: none;
-        }
-
-        .situation-card:hover {
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .sort-controls {
-            display: flex;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-        }
-
-        /* ── Cue review ────────────────────────────────────── */
-        .cue-card {
-            border: 1px solid rgba(0, 0, 0, 0.12);
-            border-radius: 10px;
-            padding: 1rem 1.25rem;
-            margin-bottom: 0.75rem;
-            background: #fff;
-        }
-
-        .cue-card.removed {
-            opacity: 0.4;
-            border-style: dashed;
-        }
-
-        .cue-name {
-            font-weight: 700;
-            font-size: 1rem;
-            margin: 0 0 0.3rem;
-        }
-
-        .cue-def {
-            font-size: 0.85rem;
-            opacity: 0.7;
-            margin: 0 0 0.75rem;
-        }
-
-        .cue-meta {
-            font-size: 0.75rem;
-            opacity: 0.5;
-            margin-bottom: 0.75rem;
-        }
-
-        .cue-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .cue-edit-area {
-            margin-top: 0.75rem;
-        }
-
-        .cue-edit-area .form-group {
-            margin-bottom: 0.5rem;
-        }
-
-        /* ── Options review ────────────────────────────────── */
-        .option-card {
-            border: 1px solid rgba(0, 0, 0, 0.12);
-            border-radius: 10px;
-            padding: 1rem 1.25rem;
-            margin-bottom: 0.75rem;
-            background: #fff;
-        }
-
-        .option-label-row {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 0.4rem;
-        }
-
-        .option-label {
-            font-weight: 700;
-            font-size: 1rem;
-        }
-
-        .option-desc {
-            font-size: 0.875rem;
-            opacity: 0.7;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Knowledge Extraction Lab</title>
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="./style.css">
 </head>
-
 <body>
-    <div id="app">
-        <!-- Each div is a full-screen view. Only one is visible at a time. -->
-        <div id="view-auth" class="view"></div>
-        <div id="view-profile" class="view hidden"></div>
-        <div id="view-sorting" class="view hidden"></div>
-        <div id="view-cue-review" class="view hidden"></div>
-        <div id="view-options" class="view hidden"></div>
-        <div id="view-session" class="view hidden"></div>
-        <div id="view-model-view" class="view hidden"></div>
-        <div id="view-elicitation" class="view hidden"></div>
-        <div id="view-recipe" class="view hidden"></div>
-        <div id="view-transfer" class="view hidden"></div>
-        <div id="view-summary" class="view hidden"></div>
-    </div>
-    <script type="module" src="app.js"></script>
-</body>
 
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Navigation bar — hidden until signed in
+     ═══════════════════════════════════════════════════════════════════ -->
+<nav class="lab-nav" id="lab-nav" style="display:none">
+  <span class="lab-nav-title">Knowledge Extraction Lab</span>
+  <div class="lab-nav-meta">
+    <span id="nav-email"></span>
+    <button id="nav-signout" class="btn-ghost btn-sm">Sign out</button>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     Auth screen — uses root .auth-screen / .auth-card classes
+     ═══════════════════════════════════════════════════════════════════ -->
+<div id="view-auth" style="display:none">
+  <div class="auth-screen">
+
+    <p class="auth-wordmark">Lab</p>
+    <p class="auth-tagline">Knowledge Extraction Lab</p>
+
+    <div class="auth-card">
+
+      <!-- Tab row: Sign in / Create account -->
+      <div class="lab-tab-row">
+        <button id="tab-signin" class="lab-tab active">Sign in</button>
+        <button id="tab-signup" class="lab-tab">Create account</button>
+      </div>
+
+      <!-- Error banner — shown via .visible class (matches root CSS pattern) -->
+      <div id="auth-err" class="auth-error"></div>
+
+      <!-- Sign-in form -->
+      <form id="form-signin">
+        <div class="auth-field">
+          <label class="label" for="si-email">Email</label>
+          <input class="input" type="email" id="si-email"
+            placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="auth-field">
+          <label class="label" for="si-password">Password</label>
+          <input class="input" type="password" id="si-password"
+            placeholder="••••••••" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full" id="btn-signin">
+          Sign in
+        </button>
+      </form>
+
+      <!-- Create account form -->
+      <form id="form-signup" style="display:none">
+        <div class="auth-field">
+          <label class="label" for="su-email">Email</label>
+          <input class="input" type="email" id="su-email"
+            placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="auth-field">
+          <label class="label" for="su-password">Password</label>
+          <input class="input" type="password" id="su-password"
+            placeholder="At least 8 characters" autocomplete="new-password"
+            minlength="8" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full" id="btn-signup">
+          Create account
+        </button>
+      </form>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     View containers — each view module renders into its own div.
+     All start hidden; app.js shows the active one via style.display.
+     (The root style.css hides #view-auth and #view-profile via CSS rules;
+     our JS always sets style.display explicitly, which overrides CSS.)
+     ═══════════════════════════════════════════════════════════════════ -->
+<div id="view-profile"     style="display:none"></div>
+<div id="view-sorting"     style="display:none"></div>
+<div id="view-cue-review"  style="display:none"></div>
+<div id="view-options"     style="display:none"></div>
+<div id="view-session"     style="display:none"></div>
+<div id="view-model-view"  style="display:none"></div>
+<div id="view-elicitation" style="display:none"></div>
+<div id="view-recipe"      style="display:none"></div>
+<div id="view-transfer"    style="display:none"></div>
+<div id="view-summary"     style="display:none"></div>
+
+<script type="module" src="./app.js"></script>
+</body>
 </html>
