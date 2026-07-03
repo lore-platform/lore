@@ -109,6 +109,14 @@
     padding: var(--space-8) var(--space-5) var(--space-16);
 }
 
+/* Wide variant — used for two-column views (sorting screen) where the
+   standard reading width of 680px is too narrow for side-by-side panels. */
+.lab-wrap-wide {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--space-8) var(--space-5) var(--space-16);
+}
+
 /* ── Step progress pips ─────────────────────────────────────────────── */
 .lab-steps {
     display: flex;

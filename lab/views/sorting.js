@@ -34,7 +34,7 @@ export async function render(el, session, next) {
     ];
 
     el.innerHTML = `
-<div class="lab-wrap">
+<div class="lab-wrap-wide">
   <div class="lab-steps">${_pips(2)}</div>
   <h1 class="lab-h1">Sort these situations</h1>
   <p class="lab-sub">
