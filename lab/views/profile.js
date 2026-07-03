@@ -2,25 +2,112 @@
 // Lab — views/profile.js
 // Screen 1 — Profile Intake
 //
-// Collects domain context, then runs one classify() call to propose a cue
-// library from the combined profile text. Saves both profile and cueLibrary
-// to Firestore before advancing.
+// On a first visit (session has no profile data), renders an intro guide
+// explaining the 8-step process. The "Start session" button re-renders the
+// same container with the profile form — no separate routing needed.
+//
+// On return visits (session already has profile data), skips the guide and
+// goes straight to the form.
+//
+// After form submission, runs one classify() call to propose a cue library.
+// Saves both profile and cueLibrary to Firestore before advancing.
 // =============================================================================
 
-import { classify }              from '../../engine/ai.js';
-import { extractJSON }           from '../../engine/utils.js';
-import { cleanText }             from '../../engine/ingest.js';
+import { classify }                    from '../../engine/ai.js';
+import { extractJSON }                 from '../../engine/utils.js';
+import { cleanText }                   from '../../engine/ingest.js';
 import { saveProfile, saveCueLibrary } from '../db.js';
 
-// Cap on how much extracted document text we send to the AI call, to keep
-// the prompt within the classify() token budget (max 1024 output tokens —
-// input has more headroom, but very long documents still cost accuracy).
+// Cap on document text sent to the AI — keeps classify() within token budget.
 // [TUNING TARGET] raise if experts regularly upload longer documents.
 const MAX_DOC_CHARS = 6000;
 
+// ---------------------------------------------------------------------------
+// render() — entry point called by app.js.
+// Routes to guide (first visit) or form (returning visit).
+// ---------------------------------------------------------------------------
 export function render(el, session, next) {
     const p = session.profile ?? {};
 
+    if (!p.role) {
+        _renderGuide(el, session, next);
+        return;
+    }
+
+    _renderForm(el, session, next, p);
+}
+
+// ---------------------------------------------------------------------------
+// _renderGuide() — intro screen shown before the profile form on first visit.
+// "Start session" re-renders the same container with the form.
+// ---------------------------------------------------------------------------
+function _renderGuide(el, session, next) {
+    el.innerHTML = `
+<div class="lab-wrap" style="max-width:600px">
+  <div class="lab-steps">${_pips(1)}</div>
+
+  <h1 class="lab-h1">What you're about to do</h1>
+  <p class="lab-sub">
+    This session captures how you make decisions — not by asking you to explain
+    your rules, but by watching how you respond to realistic situations from your
+    field. Most people can't articulate their decision logic directly, but they
+    apply it correctly every time. This process surfaces it.
+  </p>
+
+  <div class="lab-card">
+    <div class="lab-section-head">What you'll produce</div>
+    <p style="font-size:var(--text-sm);line-height:1.7;color:var(--ink);margin:0">
+      A <strong>Recipe</strong> — a structured record of what you pay attention to,
+      how you weigh your options, and what drives your best calls in your field.
+      Precise enough to teach to someone else, verify against your own behaviour,
+      and compare against other experts.
+    </p>
+  </div>
+
+  <div class="lab-card">
+    <div class="lab-section-head">How it works — 8 steps, roughly 45–60 minutes</div>
+    <div class="intro-step-list">
+      ${_step(1, 'Your background',
+        'Tell us about your work, the types of decisions you make, and what makes situations genuinely hard.')}
+      ${_step(2, 'Sort situations',
+        "You'll see 12 situations from your field. Group the ones you'd handle the same way. Your groupings reveal what you actually pay attention to.")}
+      ${_step(3, 'Review your cues',
+        "The system proposes the factors that drive your decisions. You check, edit, and add to the list until it's accurate.")}
+      ${_step(4, 'Confirm your options',
+        "Review the range of actions available to you — these are the choices you'll pick between in the scenario session.")}
+      ${_step(5, 'Scenario session',
+        '30 quick situations, one after another. Pick a response for each. No explanations needed — just your instinct.')}
+      ${_step(6, 'Review your decision pattern',
+        "See how the system understood your decisions. You confirm whether it's right, and correct it if not.")}
+      ${_step(7, 'Deep-dive',
+        'Walk through a few tricky edge cases and explain what you noticed that others might have missed.')}
+      ${_step(8, 'Your Recipe',
+        'Review the extracted knowledge and confirm it accurately represents how you actually make decisions in your field.')}
+    </div>
+  </div>
+
+  <div class="lab-notice lab-info">
+    Your progress is saved automatically after each step. If you need to stop
+    and come back, you'll resume exactly where you left off.
+  </div>
+
+  <button type="button" class="btn btn-primary btn-full" id="guide-start"
+    style="margin-top:var(--space-4);padding:var(--space-4)">
+    Start session →
+  </button>
+</div>`;
+
+    el.querySelector('#guide-start').addEventListener('click', () => {
+        _renderForm(el, session, next, session.profile ?? {});
+    });
+}
+
+// ---------------------------------------------------------------------------
+// _renderForm() — the profile intake form.
+// Called directly on return visits, or after guide on first visit.
+// p = the existing profile data (all empty strings on first visit).
+// ---------------------------------------------------------------------------
+function _renderForm(el, session, next, p) {
     el.innerHTML = `
 <div class="lab-wrap">
   <div class="lab-steps">${_pips(1)}</div>
@@ -36,6 +123,7 @@ export function render(el, session, next) {
 
   <form id="profile-form">
     <div class="lab-card">
+
       <div class="form-group">
         <label class="label" for="f-role">What is your area of expertise?</label>
         <input class="input" id="f-role" type="text"
@@ -92,6 +180,7 @@ export function render(el, session, next) {
         </div>
         <div id="file-list"></div>
       </div>
+
     </div>
 
     <div class="lab-btn-row">
@@ -102,9 +191,9 @@ export function render(el, session, next) {
   </form>
 </div>`;
 
-    // ---- Document upload handling --------------------------------------
+    // ── Document upload ─────────────────────────────────────────────────
     let uploadedText = p.documentsText ?? '';
-    const fileNames   = [];
+    const fileNames  = [];
 
     const dropzone   = el.querySelector('#dropzone');
     const fileInput  = el.querySelector('#file-input');
@@ -127,21 +216,15 @@ export function render(el, session, next) {
     function _handleFiles(fileListObj) {
         const files = Array.from(fileListObj || []);
         if (files.length === 0) return;
-
         let pending = files.length;
         files.forEach((file) => {
             const reader = new FileReader();
             reader.onload = () => {
-                const cleaned = cleanText(String(reader.result));
-                uploadedText += (uploadedText ? '\n\n' : '') + cleaned;
+                uploadedText += (uploadedText ? '\n\n' : '') + cleanText(String(reader.result));
                 fileNames.push(file.name);
-                pending -= 1;
-                if (pending === 0) _renderFileList();
+                if (--pending === 0) _renderFileList();
             };
-            reader.onerror = () => {
-                pending -= 1;
-                if (pending === 0) _renderFileList();
-            };
+            reader.onerror = () => { if (--pending === 0) _renderFileList(); };
             reader.readAsText(file);
         });
     }
@@ -152,7 +235,7 @@ export function render(el, session, next) {
             .join('');
     }
 
-    // ---- Form submit -----------------------------------------------------
+    // ── Form submit ─────────────────────────────────────────────────────
     el.querySelector('#profile-form').addEventListener('submit', async (e) => {
         e.preventDefault();
 
@@ -175,7 +258,7 @@ export function render(el, session, next) {
         }
         session.profile = profile;
 
-        // ---- Classify call: propose a cue library from the profile text ----
+        // ── Classify call: propose a cue library from profile text ──────
         const docExcerpt = profile.documentsText
             ? profile.documentsText.slice(0, MAX_DOC_CHARS)
             : '';
@@ -246,8 +329,19 @@ Return a JSON array of proposed cues.`;
 }
 
 // ---------------------------------------------------------------------------
-// Local helpers
+// Shared helpers
 // ---------------------------------------------------------------------------
+function _step(num, title, desc) {
+    return `
+<div class="intro-step">
+  <div class="intro-step-num">${num}</div>
+  <div>
+    <div class="intro-step-title">${title}</div>
+    <div class="intro-step-desc">${desc}</div>
+  </div>
+</div>`;
+}
+
 function _pips(active) {
     return Array.from({ length: 10 }, (_, i) => {
         const n   = i + 1;
@@ -267,6 +361,7 @@ function _esc(s) {
 
 function _setBusy(el, busy) {
     const btn = el.querySelector('#profile-submit');
+    if (!btn) return;
     btn.disabled    = busy;
     btn.textContent = busy ? 'Analysing your responses…' : 'Continue';
     el.querySelectorAll('input, textarea').forEach(i => { i.disabled = busy; });
@@ -274,9 +369,12 @@ function _setBusy(el, busy) {
 
 function _showErr(el, msg) {
     const e = el.querySelector('#profile-err');
+    if (!e) return;
     e.textContent   = msg;
     e.style.display = '';
 }
+
 function _hideErr(el) {
-    el.querySelector('#profile-err').style.display = 'none';
+    const e = el.querySelector('#profile-err');
+    if (e) e.style.display = 'none';
 }
