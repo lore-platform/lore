@@ -56,8 +56,8 @@ import { cleanText }     from '../engine/ingest.js';
 
 ## How to work with me
 
-- Build one file at a time within a step
-- After each file, tell me exactly what to create or edit, where it lives, and what to do next
+- Build one file at a time within a step, but do complete the whole step before presenting the files
+- For each file, tell me exactly what to create or edit, where it lives, and what to do next
 - Write exact PowerShell commands when terminal work is needed
 - Describe Firebase console actions precisely with exact field names and values
 - Flag any decision that needs my input before proceeding

@@ -32,11 +32,11 @@ import { render as renderSorting   } from './views/sorting.js';
 import { render as renderCueReview } from './views/cue-review.js';
 import { render as renderOptions   } from './views/options.js';
 
-// Step 2 view imports — uncomment as each file is built:
-// import { render as renderSession     } from './views/session.js';
-// import { render as renderModelView   } from './views/model-view.js';
-// import { render as renderElicitation } from './views/elicitation.js';
-// import { render as renderRecipe      } from './views/recipe.js';
+// Step 2 view imports:
+import { render as renderSession     } from './views/session.js';
+import { render as renderModelView   } from './views/model-view.js';
+import { render as renderElicitation } from './views/elicitation.js';
+import { render as renderRecipe      } from './views/recipe.js';
 
 // Step 3 view imports — uncomment as each file is built:
 // import { render as renderTransfer  } from './views/transfer.js';
@@ -121,18 +121,27 @@ export async function showView(name) {
             renderOptions(el, _currentSession, next);
             break;
 
-        // Step 2 — swap placeholder for real render call when built:
         case 'session':
+            renderSession(el, _currentSession, next);
+            break;
         case 'model-view':
+            renderModelView(el, _currentSession, next);
+            break;
         case 'elicitation':
+            renderElicitation(el, _currentSession, next);
+            break;
         case 'recipe':
+            renderRecipe(el, _currentSession, next);
+            break;
+
+        // Step 3 — swap placeholder for real render call when built:
         case 'transfer':
         case 'summary':
             el.innerHTML = `
 <div class="lab-wrap">
   <div class="lab-steps">${_makePips(SCREEN_NUM[name])}</div>
   <p style="color:var(--warm-grey);padding:var(--space-8) 0;font-size:var(--text-base)">
-    Screen ${SCREEN_NUM[name]} — built in Step 2.
+    Screen ${SCREEN_NUM[name]} — built in Step 3.
   </p>
 </div>`;
             break;

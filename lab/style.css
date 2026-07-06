@@ -587,3 +587,127 @@
         position: static;
     }
 }
+
+/* =====================================================================
+   Step 2 additions — session, model-view, elicitation, recipe
+   ===================================================================== */
+
+/* ── Choice buttons — reused for decision options (session), accuracy
+   rating (model-view), and Recipe validation (recipe) ─────────────────── */
+.choice-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+.choice-btn {
+    padding: var(--space-3) var(--space-5);
+    border: 1px solid var(--lab-border);
+    border-radius: 100px;
+    background: var(--surface);
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition), border-color var(--transition), box-shadow var(--transition);
+}
+.choice-btn:hover:not(.selected) {
+    box-shadow: 0 2px 6px rgba(44, 36, 22, 0.1);
+}
+.choice-btn.selected {
+    background: var(--ember);
+    color: #fff;
+    border-color: var(--ember);
+}
+
+/* ── Scenario card — Screen 5 situation text, visually distinct from
+   the interactive chrome around it ─────────────────────────────────────── */
+.lab-scenario-card {
+    background: var(--parchment);
+    border-left: 3px solid var(--ember);
+    border-radius: var(--radius-md);
+    padding: var(--space-6);
+    margin-bottom: var(--space-5);
+    font-size: var(--text-base);
+    line-height: 1.7;
+    color: var(--ink);
+}
+
+/* ── Elicitation chat transcript — Screen 7 ─────────────────────────────── */
+.lab-chat-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+}
+.lab-chat-bubble {
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    max-width: 85%;
+}
+.lab-chat-system {
+    background: var(--parchment);
+    border: 1px solid var(--lab-border);
+    color: var(--ink);
+    align-self: flex-start;
+}
+.lab-chat-expert {
+    background: var(--ember);
+    color: #fff;
+    align-self: flex-end;
+}
+
+/* ── Recipe card — Screen 8 ─────────────────────────────────────────────── */
+.lab-recipe-card {
+    background: var(--surface);
+    border: 1.5px solid var(--ember);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    margin-bottom: var(--space-4);
+}
+.lab-recipe-section {
+    margin-bottom: var(--space-5);
+}
+.lab-recipe-section:last-child {
+    margin-bottom: 0;
+}
+.lab-recipe-label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--warm-grey);
+    margin-bottom: var(--space-2);
+}
+.lab-recipe-value {
+    font-size: var(--text-base);
+    color: var(--ink);
+    line-height: 1.6;
+}
+.lab-recipe-steps {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+.lab-recipe-steps li {
+    font-size: var(--text-base);
+    color: var(--ink);
+    line-height: 1.7;
+    margin-bottom: var(--space-2);
+}
+.lab-recipe-steps li:last-child {
+    margin-bottom: 0;
+}
+
+/* ── Shareable link box — Screen 8 confirmed state ──────────────────────── */
+.lab-share-box {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+}
+.lab-share-box .input {
+    flex: 1;
+    font-size: var(--text-sm);
+}
