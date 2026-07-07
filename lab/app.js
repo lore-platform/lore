@@ -1,23 +1,3 @@
-// =============================================================================
-// Lab — app.js
-// Auth state listener, view router, session manager, and auth form handler.
-//
-// This file coordinates the entire lab:
-//   - onAuthChange() drives everything — all routing starts here.
-//   - showView(name) is the single function that switches the active screen.
-//   - Each view's render(el, session, next) is called when that screen is shown.
-//   - next() reloads the session from Firestore and advances to the next screen.
-//
-// Auth note: The Lab uses open self-registration (email + password, no invite).
-// This is deliberate — the Lab is a standalone MVP with no org-level access
-// control. signIn() and signOut() come from engine/auth.js; createUserWithEmail
-// is called directly from Firebase Auth since auth.js has no sign-up function.
-//
-// Ping note: engine/ai.js does not currently export ping(). The Worker is
-// warmed up here with a direct fire-and-forget fetch. The page renders
-// immediately regardless of whether it succeeds — no blocking.
-// =============================================================================
-
 import { onAuthChange, signIn, signOut } from '../engine/auth.js';
 import { friendlyAuthError }             from '../engine/utils.js';
 import { auth }                          from '../firebase.js';
@@ -32,30 +12,23 @@ import { render as renderSorting   } from './views/sorting.js';
 import { render as renderCueReview } from './views/cue-review.js';
 import { render as renderOptions   } from './views/options.js';
 
-// Step 2 view imports:
 import { render as renderSession     } from './views/session.js';
 import { render as renderModelView   } from './views/model-view.js';
 import { render as renderElicitation } from './views/elicitation.js';
 import { render as renderRecipe      } from './views/recipe.js';
 
-// Step 3 view imports — uncomment as each file is built:
-// import { render as renderTransfer  } from './views/transfer.js';
-// import { render as renderSummary   } from './views/summary.js';
+import { render as renderTransfer } from './views/transfer.js';
+import { render as renderSummary  } from './views/summary.js';
 
-// ---------------------------------------------------------------------------
-// Warm up the Worker on load — fire-and-forget, never blocks rendering.
-// engine/ai.js does not export ping(); this direct call is intentional.
-// The Worker handles mode:'ping' (same as the pattern in engine/auth.js).
-// ---------------------------------------------------------------------------
 fetch('https://lore-worker.slop-runner.workers.dev', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ mode: 'ping' }),
-}).catch(() => {}); // Non-fatal — error is silently swallowed
+}).catch(() => {});
 
-// ---------------------------------------------------------------------------
-// View names — in screen order.
-// ---------------------------------------------------------------------------
+const _urlParams        = new URLSearchParams(window.location.search);
+const _transferSessionId = _urlParams.get('transfer');
+
 const ALL_VIEWS = [
     'auth',
     'profile', 'sorting', 'cue-review', 'options',
@@ -75,15 +48,10 @@ const SCREEN_SEQ = [
     'transfer', 'summary',
 ];
 
-// ---------------------------------------------------------------------------
-// Module-level state
-// ---------------------------------------------------------------------------
 let _currentUser    = null;
 let _currentSession = null;
+let _viewerRole      = 'expert';
 
-// ---------------------------------------------------------------------------
-// showView(name) — hides all views, shows the target, calls its render fn.
-// ---------------------------------------------------------------------------
 export async function showView(name) {
     ALL_VIEWS.forEach(v => {
         const el = document.getElementById(`view-${v}`);
@@ -134,16 +102,11 @@ export async function showView(name) {
             renderRecipe(el, _currentSession, next);
             break;
 
-        // Step 3 — swap placeholder for real render call when built:
         case 'transfer':
+            renderTransfer(el, _currentSession, next, _viewerRole);
+            break;
         case 'summary':
-            el.innerHTML = `
-<div class="lab-wrap">
-  <div class="lab-steps">${_makePips(SCREEN_NUM[name])}</div>
-  <p style="color:var(--warm-grey);padding:var(--space-8) 0;font-size:var(--text-base)">
-    Screen ${SCREEN_NUM[name]} — built in Step 3.
-  </p>
-</div>`;
+            renderSummary(el, _currentSession, next, _viewerRole);
             break;
 
         default:
@@ -151,9 +114,6 @@ export async function showView(name) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// _makeAdvance(currentView) — builds the `next` callback passed to each view.
-// ---------------------------------------------------------------------------
 function _makeAdvance(currentView) {
     const idx      = SCREEN_SEQ.indexOf(currentView);
     const nextView = idx >= 0 && idx < SCREEN_SEQ.length - 1
@@ -169,9 +129,6 @@ function _makeAdvance(currentView) {
     };
 }
 
-// ---------------------------------------------------------------------------
-// _getResumeView(session) — finds the correct screen to resume from.
-// ---------------------------------------------------------------------------
 function _getResumeView(s) {
     if (!s) return 'profile';
     if (s.recipe?.status === 'confirmed')           return 'summary';
@@ -186,7 +143,6 @@ function _getResumeView(s) {
     if (s.cueLibrary?.length)                       return 'cue-review';
     if (s.sortingTask?.situations?.length)          return 'sorting';
     if (s.profile?.role)                            return 'sorting';
-    // No profile data yet — profile.js handles the intro guide internally.
     return 'profile';
 }
 
@@ -198,10 +154,41 @@ function _makePips(active) {
     }).join('');
 }
 
-// ============================================================================
-// Auth state listener
-// ============================================================================
+async function _bootstrapTransferLink(sessionId) {
+    _viewerRole = 'learner';
+    document.getElementById('lab-nav').style.display = 'none';
+
+    const session = await getSession(sessionId);
+
+    if (!session) {
+        _showLinkError("This link doesn't point to a valid session. Double-check the URL with the expert who sent it.");
+        return;
+    }
+
+    if (session.recipe?.status !== 'confirmed') {
+        _showLinkError("This Recipe hasn't been confirmed by the expert yet. Check back once they've finished reviewing it.");
+        return;
+    }
+
+    _currentSession = session;
+
+    const hasCompleted = (session.transfer?.postRecipeScenarios?.length ?? 0) > 0;
+    showView(hasCompleted ? 'summary' : 'transfer');
+}
+
+function _showLinkError(message) {
+    ALL_VIEWS.forEach(v => {
+        const el = document.getElementById(`view-${v}`);
+        if (el) el.style.display = 'none';
+    });
+    const el = document.getElementById('view-transfer');
+    el.style.display = 'block';
+    el.innerHTML = `<div class="lab-wrap"><div class="lab-notice lab-err">${message}</div></div>`;
+}
+
 onAuthChange(async (user) => {
+    if (_transferSessionId) return;
+
     _currentUser = user;
 
     if (!user) {
@@ -228,9 +215,6 @@ onAuthChange(async (user) => {
     showView(_getResumeView(session));
 });
 
-// ============================================================================
-// Auth form — tab switching
-// ============================================================================
 function _switchTab(tab) {
     const isSignin = tab === 'signin';
 
@@ -240,11 +224,9 @@ function _switchTab(tab) {
     document.getElementById('tab-signin').classList.toggle('active', isSignin);
     document.getElementById('tab-signup').classList.toggle('active', !isSignin);
 
-    // Clear any previous error when switching tabs
     document.getElementById('auth-err').classList.remove('visible');
 }
 
-// Auth error uses .auth-error.visible from root style.css
 function _showAuthErr(msg) {
     const el = document.getElementById('auth-err');
     el.textContent = msg;
@@ -263,7 +245,6 @@ function _setFormBusy(formId, btnId, busy, idleLabel) {
 document.getElementById('tab-signin').addEventListener('click', () => _switchTab('signin'));
 document.getElementById('tab-signup').addEventListener('click', () => _switchTab('signup'));
 
-// Sign-in form
 document.getElementById('form-signin').addEventListener('submit', async (e) => {
     e.preventDefault();
     const email    = document.getElementById('si-email').value.trim();
@@ -277,10 +258,8 @@ document.getElementById('form-signin').addEventListener('submit', async (e) => {
 
     _setFormBusy('form-signin', 'btn-signin', false, 'Sign in');
     if (!result.ok) _showAuthErr(result.error);
-    // On success, onAuthChange fires and handles routing
 });
 
-// Create account form
 document.getElementById('form-signup').addEventListener('submit', async (e) => {
     e.preventDefault();
     const email    = document.getElementById('su-email').value.trim();
@@ -292,15 +271,16 @@ document.getElementById('form-signup').addEventListener('submit', async (e) => {
 
     try {
         await createUserWithEmailAndPassword(auth, email, password);
-        // onAuthChange fires on success and handles routing
     } catch (err) {
         _setFormBusy('form-signup', 'btn-signup', false, 'Create account');
         _showAuthErr(friendlyAuthError(err.code));
     }
 });
 
-// Sign-out button
 document.getElementById('nav-signout').addEventListener('click', async () => {
     await signOut();
-    // onAuthChange fires and routes to auth screen
 });
+
+if (_transferSessionId) {
+    _bootstrapTransferLink(_transferSessionId);
+}
