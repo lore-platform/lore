@@ -196,6 +196,7 @@ function _rowHTML(c) {
     return `
 <div class="cue-row ${c._removed ? 'removed' : ''}">
   <div>
+    ${c.source === 'ai-suggested' ? `<span class="cue-suggested-badge">Suggested</span>` : ''}
     <div class="cue-name">${_esc(c.name)}</div>
     <div class="cue-def">${_esc(c.definition)}</div>
     <span class="cue-scale-badge">${c.scale === 'three-point' ? '3-point' : 'binary'} · layer ${c.layer}</span>

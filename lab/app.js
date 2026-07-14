@@ -132,12 +132,13 @@ function _makeAdvance(currentView) {
 function _getResumeView(s) {
     if (!s) return 'profile';
     if (s.recipe?.status === 'confirmed')           return 'summary';
-    if (s.recipe?.trigger)                          return 'recipe';
+    if (s.recipe?.trigger?.appliesWhen)             return 'recipe';
     if (s.elicitation?.triad?.discriminationAnswer) return 'recipe';
     if (s.elicitation?.cases?.length)               return 'elicitation';
     if (s.policyModel?.expertAccuracyRating)        return 'elicitation';
     if (s.policyModel?.summaryText)                 return 'model-view';
     if ((s.scenarios?.length ?? 0) >= 30)           return 'model-view';
+    if ((s.scenarios?.length ?? 0) > 0)             return 'session'; // partial scenario capture — session.js resumes into the next unfinished set using the stored scenarioCombos
     if (s.decisionOptions?.length)                  return 'session';
     if (s.cueLibrary?.length && s.sortingTask?.groups?.length) return 'options';
     if (s.cueLibrary?.length)                       return 'cue-review';

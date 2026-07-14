@@ -49,11 +49,14 @@ export async function createSession(expertUid) {
         decisionOptions: [],
 
         sortingTask: {
-            situations: [],
+            situations: [],   // [{ id, text, source: 'expert' | 'ai-suggested' }]
             groups: [],
         },
 
         scenarios: [],
+        scenarioCombos: [],  // 30 precomputed cue combinations, written once at the
+                              // start of Screen 5 so a session split across sittings
+                              // resumes into the same combinations rather than fresh ones
 
         policyModel: {
             decisionTree: null,
@@ -73,12 +76,20 @@ export async function createSession(expertUid) {
 
         recipe: {
             extractedKnowledge: '',
-            trigger: '',
-            actionSequence: [],
+            trigger: {
+                appliesWhen:          '',   // the condition that calls for this skill
+                notWhen:              '',   // the adjacent condition where it doesn't apply
+                distinguishingSignal: '',   // the specific thing that tells them the difference
+            },
+            actionSequence: [],   // [{ step: string, condition: string | null }]
             expectedOutcome: '',
             expertValidation: '',
             expertValidationNote: '',
             status: 'draft',
+            formattingCheck: {
+                droppedTerms:      [],   // specific terms/conditions from Job 2 not found in Job 3's output
+                expertAcknowledged: false,
+            },
         },
 
         transfer: {
@@ -170,7 +181,8 @@ export async function saveProfile(sessionId, profile) {
 
 // ---------------------------------------------------------------------------
 // saveSortingTask(sessionId, sortingTask)
-// Screen 2. sortingTask: { situations: string[], groups: [{situationIds, commonality, discriminator}] }
+// Screen 2. sortingTask: { situations: [{id, text, source: 'expert'|'ai-suggested'}],
+// groups: [{situationIds, commonality, discriminator}] }
 // ---------------------------------------------------------------------------
 export async function saveSortingTask(sessionId, sortingTask) {
     console.log('Lab db.js: Saving sorting task for session', sessionId);
@@ -180,7 +192,7 @@ export async function saveSortingTask(sessionId, sortingTask) {
 // ---------------------------------------------------------------------------
 // saveCueLibrary(sessionId, cueLibrary)
 // Screens 1 (AI-proposed) and 3 (expert-reviewed, locked). cueLibrary: array
-// of { id, name, definition, scale, layer, options }
+// of { id, name, definition, scale, layer, options, source: 'expert'|'ai-suggested' }
 // ---------------------------------------------------------------------------
 export async function saveCueLibrary(sessionId, cueLibrary) {
     console.log('Lab db.js: Saving cue library for session', sessionId, '— count:', cueLibrary.length);
@@ -198,12 +210,27 @@ export async function saveDecisionOptions(sessionId, decisionOptions) {
 
 // ---------------------------------------------------------------------------
 // saveScenarios(sessionId, scenarios)
-// Screen 5. Full overwrite of the scenarios array — called once the
-// 30-scenario session completes. scenarios: array per the data model.
+// Screen 5. Full overwrite of the scenarios array. Called incrementally —
+// after each completed set of 6 — rather than once at the very end, so an
+// expert who closes the app mid-session doesn't lose confirmed responses.
+// scenarios: array per the data model (may be a partial array, < 30 records).
 // ---------------------------------------------------------------------------
 export async function saveScenarios(sessionId, scenarios) {
     console.log('Lab db.js: Saving scenarios for session', sessionId, '— count:', scenarios.length);
     return _update(sessionId, { scenarios });
+}
+
+// ---------------------------------------------------------------------------
+// saveScenarioCombos(sessionId, combos)
+// Screen 5. Writes the full set of 30 precomputed cue combinations once, at
+// the start of the session, before any scenario text is generated. Read back
+// on a later visit so a session resumed after closing the app uses the exact
+// same combinations (and therefore the same scenarios) rather than a freshly
+// generated set.
+// ---------------------------------------------------------------------------
+export async function saveScenarioCombos(sessionId, combos) {
+    console.log('Lab db.js: Saving scenario combos for session', sessionId, '— count:', combos.length);
+    return _update(sessionId, { scenarioCombos: combos });
 }
 
 // ---------------------------------------------------------------------------
@@ -227,8 +254,10 @@ export async function saveElicitation(sessionId, elicitation) {
 
 // ---------------------------------------------------------------------------
 // saveRecipe(sessionId, recipe)
-// Screen 8. recipe: { extractedKnowledge, trigger, actionSequence,
-// expectedOutcome, expertValidation, expertValidationNote, status }
+// Screen 8. recipe: { extractedKnowledge,
+// trigger: {appliesWhen, notWhen, distinguishingSignal},
+// actionSequence: [{step, condition}], expectedOutcome, expertValidation,
+// expertValidationNote, status, formattingCheck: {droppedTerms, expertAcknowledged} }
 // ---------------------------------------------------------------------------
 export async function saveRecipe(sessionId, recipe) {
     console.log('Lab db.js: Saving recipe for session', sessionId, '— status:', recipe.status);

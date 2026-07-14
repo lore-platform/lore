@@ -70,7 +70,7 @@ function _renderGuide(el, session, next) {
       ${_step(1, 'Your background',
         'Tell us about your work, the types of decisions you make, and what makes situations genuinely hard.')}
       ${_step(2, 'Sort situations',
-        "You'll see 12 situations from your field. Group the ones you'd handle the same way. Your groupings reveal what you actually pay attention to.")}
+        "You'll see 16 situations from your field. Group the ones you'd handle the same way. Your groupings reveal what you actually pay attention to.")}
       ${_step(3, 'Review your cues',
         "The system proposes the factors that drive your decisions. You check, edit, and add to the list until it's accurate.")}
       ${_step(4, 'Confirm your options',
@@ -172,7 +172,13 @@ function _renderForm(el, session, next, p) {
       </div>
 
       <div class="form-group" style="margin-bottom:0">
-        <label class="label">Upload any relevant documents (optional)</label>
+        <label class="label">Have a CV or job description handy? Upload it</label>
+        <p class="form-hint">
+          If you have a CV or a job description already written, upload it — it means fewer
+          things we need to ask you directly. It won't replace the answers above, but it helps
+          the system sketch the overall shape of your role cheaply, from something you don't
+          have to type out again.
+        </p>
         <div class="lab-dropzone" id="dropzone">
           Click to choose files, or drag them here<br>
           <span style="font-size:0.78rem">Plain text, Markdown, or .csv work best — .docx/.pdf text extraction isn't supported yet, paste the text directly if needed</span>
@@ -305,7 +311,7 @@ Return a JSON array of proposed cues.`;
             return;
         }
 
-        const cueLibrary = parsed.map((c, i) => ({
+        const expertCues = parsed.map((c, i) => ({
             id:         `cue-${Date.now()}-${i}`,
             name:       c.name ?? `Cue ${i + 1}`,
             definition: c.definition ?? '',
@@ -314,7 +320,64 @@ Return a JSON array of proposed cues.`;
             options:    Array.isArray(c.options) && c.options.length > 0
                 ? c.options
                 : (c.scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No']),
+            source:     'expert',
         }));
+
+        // ── Second classify call: labelled ai-suggested augmentation ────────
+        // Expert-primary, AI-secondary house rule (system-updates-v2.md): this
+        // never blends into the expert-derived list undistinguished — every
+        // cue it proposes is written with source: 'ai-suggested' and merged
+        // into the same array, kept distinguishable by that field alone.
+        _setStageLabel(el, 'Checking for anything else worth proposing…');
+
+        const augmentSystem = `You are proposing ADDITIONAL cues a practitioner in this field might plausibly rely on, that are not
+already covered by the cues already proposed from the expert's own words below.
+A "cue" is a single piece of information that changes what a skilled person in this field would do.
+Only propose cues you are NOT certain the expert actually holds — this is a suggestion for them to confirm or reject, not a confirmed extraction.
+Do not repeat or rephrase any cue already listed below as already proposed.
+
+Return a JSON array only — no markdown fences, no other text. Each element must have exactly these fields:
+{
+  "name": "Short cue name, 2-5 words",
+  "definition": "One sentence — what this cue means and how to recognise it",
+  "scale": "binary" or "three-point",
+  "layer": 1, 2, or 3 — 1 is a surface/obvious cue, 3 is a subtle expert-level cue,
+  "options": an array of strings the cue can take — exactly 2 strings if scale is "binary", exactly 3 if scale is "three-point"
+}
+Propose between 2 and 4 additional cues. It is fine to return fewer if you can't think of genuinely distinct ones.`;
+
+        const augmentPrompt = `Area of expertise: ${profile.role}
+
+What their work involves day to day:
+${profile.whatYouDo}
+
+The kinds of decisions their work involves:
+${profile.decisionTypes}
+${docExcerpt ? `\nAdditional context from uploaded documents:\n${docExcerpt}` : ''}
+
+Cues already proposed from the expert's own words:
+${expertCues.map(c => `- ${c.name}: ${c.definition}`).join('\n')}
+
+Return a JSON array of additional, clearly distinct ai-suggested cues.`;
+
+        const augmentResult = await classify(augmentPrompt, augmentSystem);
+        const augmentParsed = augmentResult.ok ? extractJSON(augmentResult.text) : null;
+
+        const suggestedCues = (Array.isArray(augmentParsed) ? augmentParsed : []).map((c, i) => ({
+            id:         `cue-${Date.now()}-sug-${i}`,
+            name:       c.name ?? `Suggested cue ${i + 1}`,
+            definition: c.definition ?? '',
+            scale:      c.scale === 'three-point' ? 'three-point' : 'binary',
+            layer:      [1, 2, 3].includes(c.layer) ? c.layer : 2,
+            options:    Array.isArray(c.options) && c.options.length > 0
+                ? c.options
+                : (c.scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No']),
+            source:     'ai-suggested',
+        }));
+        // Non-fatal if this call fails or returns nothing — the expert-derived
+        // cues from the primary call are the ones that matter and are already secured.
+
+        const cueLibrary = [...expertCues, ...suggestedCues];
 
         const cueOk = await saveCueLibrary(session.id, cueLibrary);
         if (!cueOk) {
@@ -365,6 +428,11 @@ function _setBusy(el, busy) {
     btn.disabled    = busy;
     btn.textContent = busy ? 'Analysing your responses…' : 'Continue';
     el.querySelectorAll('input, textarea').forEach(i => { i.disabled = busy; });
+}
+
+function _setStageLabel(el, label) {
+    const btn = el.querySelector('#profile-submit');
+    if (btn) btn.textContent = label;
 }
 
 function _showErr(el, msg) {

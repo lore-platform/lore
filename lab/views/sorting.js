@@ -13,13 +13,21 @@
 //
 // A second classify() call merges any new cue dimensions the sorting revealed
 // into the cue library from Screen 1 before advancing.
+//
+// Situations shown in the pool are 12 profile-derived (source: 'expert') plus
+// 4 ai-suggested (source: 'ai-suggested') — 16 total, mixed together in the
+// UI since the expert sorts all of them the same way, but tagged underneath
+// per the expert-primary/AI-secondary house rule so the merge step and any
+// later review can tell them apart.
 // =============================================================================
 
 import { generate, classify } from '../../engine/ai.js';
 import { extractJSON }        from '../../engine/utils.js';
 import { saveSortingTask, saveCueLibrary } from '../db.js';
 
-const NUM_SITUATIONS = 12;
+const NUM_EXPERT_SITUATIONS    = 12;
+const NUM_SUGGESTED_SITUATIONS = 4;
+const NUM_SITUATIONS = NUM_EXPERT_SITUATIONS + NUM_SUGGESTED_SITUATIONS;
 
 let _situations = [];
 let _groups     = [];
@@ -38,7 +46,7 @@ export async function render(el, session, next) {
   <div class="lab-steps">${_pips(2)}</div>
   <h1 class="lab-h1">Sort these situations</h1>
   <p class="lab-sub">
-    You'll see 12 situations from your field below. Drag each one into a group
+    You'll see ${NUM_SITUATIONS} situations from your field below. Drag each one into a group
     with situations you'd <strong>handle the same way</strong> — not because
     they're the same topic, but because your response would be the same type
     of call. Two completely different situations might belong in the same group
@@ -66,9 +74,10 @@ export async function render(el, session, next) {
     const p        = session.profile ?? {};
     const cueNames = (session.cueLibrary ?? []).map(c => c.name).join(', ');
 
+    // ── Primary call — expert-derived, from the expert's own profile text ──
     const systemPrompt = `You write short, realistic situation descriptions for a professional skill-extraction exercise.
 Each situation should be 1-2 sentences, concrete, and varied — covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
-Return a JSON array of exactly ${NUM_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
+Return a JSON array of exactly ${NUM_EXPERT_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const prompt = `Area of expertise: ${p.role}
 What their work involves: ${p.whatYouDo}
@@ -76,7 +85,7 @@ Decision types: ${p.decisionTypes}
 What makes situations hard: ${p.whatMakesItHard}
 ${cueNames ? `Cues already identified: ${cueNames}` : ''}
 
-Write ${NUM_SITUATIONS} short, varied situation descriptions this person might encounter, as a JSON array of strings.`;
+Write ${NUM_EXPERT_SITUATIONS} short, varied situation descriptions this person might encounter, as a JSON array of strings.`;
 
     const result = await generate(prompt, systemPrompt);
     const texts  = result.ok ? extractJSON(result.text) : null;
@@ -89,7 +98,39 @@ Write ${NUM_SITUATIONS} short, varied situation descriptions this person might e
         return;
     }
 
-    _situations = texts.slice(0, NUM_SITUATIONS).map((text, i) => ({ id: `sit-${i}`, text }));
+    const expertSituations = texts.slice(0, NUM_EXPERT_SITUATIONS)
+        .map((text, i) => ({ id: `sit-${i}`, text, source: 'expert' }));
+
+    // ── Secondary call — labelled ai-suggested, from general role knowledge ──
+    // Expert-primary/AI-secondary house rule: these supplement the primary
+    // set with situation types a practitioner in this field would likely
+    // recognise as distinct, drawn from general knowledge rather than the
+    // expert's own words — kept distinguishable via source, not silently blended.
+    const augmentSystem = `You write short, realistic situation descriptions for a professional skill-extraction exercise, drawing on
+general knowledge of what distinct situation types a practitioner in this field would likely recognise —
+not from anything the expert has written themselves.
+Each situation should be 1-2 sentences, concrete, and should cover a distinct type of situation from the ones already listed below.
+Return a JSON array of exactly ${NUM_SUGGESTED_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
+
+    const augmentPrompt = `Area of expertise: ${p.role}
+What their work involves: ${p.whatYouDo}
+Decision types: ${p.decisionTypes}
+
+Situations already written from the expert's own description:
+${expertSituations.map(s => `- ${s.text}`).join('\n')}
+
+Write ${NUM_SUGGESTED_SITUATIONS} additional, clearly distinct situation descriptions, as a JSON array of strings.`;
+
+    const augmentResult = await generate(augmentPrompt, augmentSystem);
+    const augmentTexts  = augmentResult.ok ? extractJSON(augmentResult.text) : null;
+
+    const suggestedSituations = (Array.isArray(augmentTexts) ? augmentTexts : [])
+        .slice(0, NUM_SUGGESTED_SITUATIONS)
+        .map((text, i) => ({ id: `sit-sug-${i}`, text, source: 'ai-suggested' }));
+    // Non-fatal if this call fails or returns nothing — the 12 expert-derived
+    // situations from the primary call are sufficient to continue on their own.
+
+    _situations = [...expertSituations, ...suggestedSituations];
     _renderBoard(body, el, session, next);
 }
 
@@ -233,7 +274,7 @@ function _renderBoard(body, el, session, next) {
         btn.textContent = 'Saving…';
 
         const sortingTask = {
-            situations: _situations.map(s => s.text),
+            situations: _situations.map(s => ({ id: s.id, text: s.text, source: s.source })),
             groups: nonEmptyGroups.map(g => ({
                 situationIds:  g.situationIds,
                 commonality:   g.commonality.trim(),
@@ -275,16 +316,24 @@ Return the full updated cue list as a JSON array.`;
         const merged      = mergeResult.ok ? extractJSON(mergeResult.text) : null;
 
         if (merged && Array.isArray(merged) && merged.length > 0) {
-            const cueLibrary = merged.map((c, i) => ({
-                id:         existing.find(e => e.name === c.name)?.id ?? `cue-${Date.now()}-${i}`,
-                name:       c.name ?? `Cue ${i + 1}`,
-                definition: c.definition ?? '',
-                scale:      c.scale === 'three-point' ? 'three-point' : 'binary',
-                layer:      [1, 2, 3].includes(c.layer) ? c.layer : 2,
-                options:    Array.isArray(c.options) && c.options.length > 0
-                    ? c.options
-                    : (c.scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No']),
-            }));
+            const cueLibrary = merged.map((c, i) => {
+                const matchedExisting = existing.find(e => e.name === c.name);
+                return {
+                    id:         matchedExisting?.id ?? `cue-${Date.now()}-${i}`,
+                    name:       c.name ?? `Cue ${i + 1}`,
+                    definition: c.definition ?? '',
+                    scale:      c.scale === 'three-point' ? 'three-point' : 'binary',
+                    layer:      [1, 2, 3].includes(c.layer) ? c.layer : 2,
+                    options:    Array.isArray(c.options) && c.options.length > 0
+                        ? c.options
+                        : (c.scale === 'three-point' ? ['Low', 'Medium', 'High'] : ['Yes', 'No']),
+                    // Preserve an existing cue's source (expert or ai-suggested)
+                    // rather than overwriting it. A genuinely new cue created by
+                    // this step is tagged 'expert' — it comes directly from the
+                    // expert's own discriminator answers, not a model suggestion.
+                    source:     matchedExisting?.source ?? 'expert',
+                };
+            });
             await saveCueLibrary(session.id, cueLibrary);
             session.cueLibrary = cueLibrary;
         }
