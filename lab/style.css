@@ -370,6 +370,60 @@
     padding: 2px var(--space-2);
     border-radius: var(--radius-sm);
 }
+
+.lab-example-toggle {
+    display: inline-block;
+    margin-top: var(--space-2);
+    margin-bottom: var(--space-2);
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--ember);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.lab-example-toggle:hover:not(:disabled) { opacity: 0.75; }
+.lab-example-toggle:disabled             { color: var(--warm-grey); cursor: default; text-decoration: none; }
+
+.lab-example-box {
+    margin-bottom: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--parchment);
+    border: 1px dashed rgba(196, 98, 45, 0.35);
+    border-radius: var(--radius-sm);
+}
+.lab-example-label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ember);
+    margin-bottom: var(--space-2);
+}
+.lab-example-text {
+    font-size: var(--text-sm);
+    line-height: 1.6;
+    color: var(--warm-grey);
+    font-style: italic;
+    margin: 0;
+}
+.lab-example-subtoggle {
+    display: block;
+    margin-top: var(--space-2);
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--warm-grey);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.lab-example-subtoggle:hover { color: var(--ember); }
 .cue-actions {
     display: flex;
     gap: var(--space-2);
