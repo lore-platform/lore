@@ -371,7 +371,7 @@ function _renderRoleStep(el, session, next) {
 
   <div class="lab-card">
     <div class="form-group">
-      <label class="label" for="f-role-only">What is your area of expertise?</label>
+      <label class="label lab-question-label" for="f-role-only">What is your area of expertise?</label>
       <input class="input" id="f-role-only" type="text"
         placeholder="e.g. Senior commercial underwriter" required>
     </div>
@@ -654,7 +654,7 @@ function _renderMainForm(el, session, next, p, examples) {
     <div class="lab-card">
 
       <div class="form-group">
-        <label class="label" for="f-role">What is your area of expertise?</label>
+        <label class="label lab-question-label" for="f-role">What is your area of expertise?</label>
         <input class="input" id="f-role" type="text"
           placeholder="e.g. Senior commercial underwriter"
           value="${_esc(p.role)}" required>
@@ -664,7 +664,7 @@ function _renderMainForm(el, session, next, p, examples) {
       </div>
 
       <div class="form-group">
-        <label class="label" for="f-whatyoudo">
+        <label class="label lab-question-label" for="f-whatyoudo">
           In a few sentences, what's the shape of your role?
         </label>
         <p class="form-hint">
@@ -679,7 +679,7 @@ function _renderMainForm(el, session, next, p, examples) {
       </div>
 
       <div class="form-group">
-        <label class="label" for="f-decisiontypes">
+        <label class="label lab-question-label" for="f-decisiontypes">
           Describe one real decision you made recently — then name a couple more like it
         </label>
         <p class="form-hint">
@@ -696,7 +696,7 @@ function _renderMainForm(el, session, next, p, examples) {
       </div>
 
       <div class="form-group">
-        <label class="label" for="f-hard">
+        <label class="label lab-question-label" for="f-hard">
           Think of two situations that look similar on the surface, but where you'd actually respond differently. What's the difference?
         </label>
         <p class="form-hint">
