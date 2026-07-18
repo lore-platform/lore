@@ -5,7 +5,7 @@ import {
     createUserWithEmailAndPassword,
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
-import { createSession, getLatestSession, getSession } from './db.js';
+import { createSession, getLatestSession, getSession, saveCurrentView } from './db.js';
 
 import { render as renderProfile   } from './views/profile.js';
 import { render as renderSorting   } from './views/sorting.js';
@@ -51,6 +51,7 @@ const SCREEN_SEQ = [
 let _currentUser    = null;
 let _currentSession = null;
 let _viewerRole      = 'expert';
+let _activeView      = null;  // the screen actually on-screen right now — drives the Back button
 
 export async function showView(name) {
     ALL_VIEWS.forEach(v => {
@@ -64,6 +65,8 @@ export async function showView(name) {
         return;
     }
     el.style.display = 'block';
+    _activeView = name;
+    _updateBackButton();
 
     if (name === 'auth') return;
 
@@ -122,6 +125,7 @@ function _makeAdvance(currentView) {
 
     return async () => {
         if (_currentSession?.id) {
+            await saveCurrentView(_currentSession.id, nextView);
             const fresh = await getSession(_currentSession.id);
             if (fresh) _currentSession = fresh;
         }
@@ -129,16 +133,46 @@ function _makeAdvance(currentView) {
     };
 }
 
+// ---------------------------------------------------------------------------
+// _getResumeView(s) — where to land a returning expert. Trusts s.currentView
+// directly when present: it's written by saveCurrentView every time next()
+// fires, so it always reflects the actual screen the expert was last on —
+// no guessing from which data fields happen to be populated.
+//
+// Falls back to _legacyResumeView only for sessions created before
+// currentView existed. That inference function is kept, not deleted, purely
+// for those old sessions — it should never run for anything created from
+// here on, since createSession's blank object now sets currentView: 'profile'
+// from the start.
+// ---------------------------------------------------------------------------
 function _getResumeView(s) {
     if (!s) return 'profile';
-    if (s.recipe?.status === 'confirmed')           return 'summary';
+    if (s.recipe?.status === 'confirmed') return 'summary';
+
+    if (s.currentView && ALL_VIEWS.includes(s.currentView)) {
+        return s.currentView;
+    }
+
+    console.warn('Lab app.js: session has no currentView (pre-dates this field) — using legacy inference');
+    return _legacyResumeView(s);
+}
+
+// ---------------------------------------------------------------------------
+// _legacyResumeView(s) — the original data-presence heuristic. Kept as a
+// fallback for sessions that predate currentView tracking, NOT used for
+// anything created after that field was added. Known to be unreliable at the
+// cue-review -> options boundary specifically (cueLibrary and
+// sortingTask.groups are both written by earlier screens, before cue-review
+// is ever confirmed) — this is exactly the bug that motivated currentView.
+// ---------------------------------------------------------------------------
+function _legacyResumeView(s) {
     if (s.recipe?.trigger?.appliesWhen)             return 'recipe';
     if (s.elicitation?.triad?.discriminationAnswer) return 'recipe';
     if (s.elicitation?.cases?.length)               return 'elicitation';
     if (s.policyModel?.expertAccuracyRating)        return 'elicitation';
     if (s.policyModel?.summaryText)                 return 'model-view';
     if ((s.scenarios?.length ?? 0) >= 30)           return 'model-view';
-    if ((s.scenarios?.length ?? 0) > 0)             return 'session'; // partial scenario capture — session.js resumes into the next unfinished set using the stored scenarioCombos
+    if ((s.scenarios?.length ?? 0) > 0)             return 'session';
     if (s.decisionOptions?.length)                  return 'session';
     if (s.cueLibrary?.length && s.sortingTask?.groups?.length) return 'options';
     if (s.cueLibrary?.length)                       return 'cue-review';
@@ -154,6 +188,35 @@ function _makePips(active) {
         return `<div class="lab-pip ${cls}" title="Screen ${n}"></div>`;
     }).join('');
 }
+
+// ---------------------------------------------------------------------------
+// Back button — lets the expert re-look at (and re-edit, if the screen
+// allows it) an earlier step. Deliberately does NOT persist currentView —
+// going back is a "let me check something" action, not a rewind of actual
+// progress, so a reload while looking at an earlier screen still returns to
+// the furthest point actually reached, not the screen being peeked at.
+//
+// If the expert edits and re-confirms an earlier screen (e.g. removes a cue
+// after scenarios already exist), that screen's own next() naturally moves
+// currentView to just past it again — which nudges a re-walk through the
+// screens after it, since their data may no longer match. This doesn't
+// automatically invalidate or regenerate anything downstream — flagging
+// that as a real open question, not something quietly decided here.
+// ---------------------------------------------------------------------------
+function _updateBackButton() {
+    const btn = document.getElementById('nav-back');
+    if (!btn) return;
+
+    const idx = SCREEN_SEQ.indexOf(_activeView);
+    const canGoBack = _viewerRole === 'expert' && idx > 0;
+    btn.style.display = canGoBack ? '' : 'none';
+}
+
+document.getElementById('nav-back')?.addEventListener('click', () => {
+    const idx = SCREEN_SEQ.indexOf(_activeView);
+    if (idx <= 0) return;
+    showView(SCREEN_SEQ[idx - 1]);
+});
 
 async function _bootstrapTransferLink(sessionId) {
     _viewerRole = 'learner';

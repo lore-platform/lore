@@ -37,6 +37,16 @@ export async function createSession(expertUid) {
         expertUid,
         createdAt: serverTimestamp(),
 
+        // Explicitly tracks which screen the expert is actually on, updated by
+        // saveCurrentView() every time next() advances them to a new screen.
+        // Resume-on-reload reads this directly rather than inferring position
+        // from whether various data fields happen to be populated — inference
+        // broke down at the cue-review->options boundary specifically because
+        // cueLibrary and sortingTask.groups both get written by earlier
+        // screens, before cue-review is ever confirmed. See app.js's
+        // _getResumeView / _legacyResumeView.
+        currentView: 'profile',
+
         profile: {
             role: '',
             whatYouDo: '',
@@ -168,6 +178,16 @@ async function _update(sessionId, updates) {
         console.warn('Lab db.js: Update failed for session', sessionId, 'fields:', Object.keys(updates), err);
         return false;
     }
+}
+
+// ---------------------------------------------------------------------------
+// saveCurrentView(sessionId, view)
+// Called by app.js's _makeAdvance every time the expert advances to a new
+// screen. This is the single source of truth resume-on-reload reads from —
+// see the comment on `currentView` in createSession's blank object above.
+// ---------------------------------------------------------------------------
+export async function saveCurrentView(sessionId, view) {
+    return _update(sessionId, { currentView: view });
 }
 
 // ---------------------------------------------------------------------------
