@@ -5,7 +5,7 @@ import {
     createUserWithEmailAndPassword,
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
-import { createSession, getLatestSession, getSession, saveCurrentView } from './db.js';
+import { createSession, getLatestSession, getSession, saveCurrentView, saveFurthestReached, resetSessionFrom } from './db.js';
 
 import { render as renderProfile   } from './views/profile.js';
 import { render as renderSorting   } from './views/sorting.js';
@@ -117,6 +117,24 @@ export async function showView(name) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// _makeAdvance(currentView) — builds the next() callback passed to each
+// screen's render(). On rewind — the expert went back and re-confirmed an
+// earlier screen — invalidates everything downstream before advancing, so
+// later screens show a genuine fresh state rather than data built from
+// what's now a changed earlier answer.
+//
+// Rewind is detected via furthestReached, NOT currentView. currentView
+// mutates as the expert walks forward again after a rewind, which would
+// erase the memory of how much there still is to invalidate partway through
+// a multi-screen rewind (e.g. going back from recipe to sorting: the first
+// re-confirm, of sorting, would update currentView to cue-review — if THAT
+// were what the next screen's check compared against, the memory of having
+// once reached recipe would already be gone by the time cue-review itself
+// gets re-confirmed). furthestReached only moves forward, except when a
+// rewind pulls it back down to just past the screen being re-confirmed —
+// see db.js's resetSessionFrom / saveFurthestReached.
+// ---------------------------------------------------------------------------
 function _makeAdvance(currentView) {
     const idx      = SCREEN_SEQ.indexOf(currentView);
     const nextView = idx >= 0 && idx < SCREEN_SEQ.length - 1
@@ -125,6 +143,20 @@ function _makeAdvance(currentView) {
 
     return async () => {
         if (_currentSession?.id) {
+            const priorFurthestIdx = SCREEN_SEQ.indexOf(_currentSession.furthestReached ?? currentView);
+            const thisIdx          = SCREEN_SEQ.indexOf(currentView);
+            const nextIdx          = SCREEN_SEQ.indexOf(nextView);
+
+            if (priorFurthestIdx > thisIdx) {
+                // Rewind-and-edit: invalidate everything downstream, then pull
+                // furthestReached back down to reflect the fresh restart point.
+                await resetSessionFrom(_currentSession.id, currentView);
+                await saveFurthestReached(_currentSession.id, nextView);
+            } else if (nextIdx > priorFurthestIdx) {
+                // Normal forward progress — extend the high-water mark.
+                await saveFurthestReached(_currentSession.id, nextView);
+            }
+
             await saveCurrentView(_currentSession.id, nextView);
             const fresh = await getSession(_currentSession.id);
             if (fresh) _currentSession = fresh;

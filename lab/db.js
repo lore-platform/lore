@@ -25,6 +25,66 @@ import {
 
 const SESSIONS = 'sessions';
 
+// Plain JSON deep clone — safe here since every blank shape below is pure
+// JSON-serialisable data (no functions, Dates, or undefined values). A
+// shallow `{ ...obj }` spread would still share obj's nested arrays/objects
+// across every session that reuses it — this avoids that.
+function _clone(obj) {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+// ---------------------------------------------------------------------------
+// Blank shapes for each resettable field — the single source of truth for
+// both createSession() (a session's initial state) and resetSessionFrom()
+// (invalidating a field back to that same initial state when an earlier
+// screen is re-confirmed after a rewind). Keeping these in one place means
+// the two can never drift apart from each other. Always read through
+// _clone() — see above for why.
+// ---------------------------------------------------------------------------
+const _BLANK_SORTING_TASK = { situations: [], groups: [] };
+
+const _BLANK_POLICY_MODEL = {
+    decisionTree: null,
+    summaryText: '',
+    expertAccuracyRating: '',
+    expertAccuracyNote: '',
+    policyBreaks: [],
+};
+
+const _BLANK_ELICITATION = {
+    cases: [],
+    triad: {
+        scenarioIds: [],
+        discriminationAnswer: '',
+    },
+};
+
+const _BLANK_RECIPE = {
+    extractedKnowledge: '',
+    trigger: {
+        appliesWhen:          '',
+        notWhen:              '',
+        distinguishingSignal: '',
+    },
+    actionSequence: [],
+    expectedOutcome: '',
+    expertValidation: '',
+    expertValidationNote: '',
+    status: 'draft',
+    formattingCheck: {
+        droppedTerms:       [],
+        expertAcknowledged: false,
+    },
+};
+
+const _BLANK_TRANSFER = {
+    learnerUid: '',
+    preRecipeScenarios: [],
+    postRecipeScenarios: [],
+    comparisonResult: '',
+    shiftMagnitude: 0,
+};
+
 // ---------------------------------------------------------------------------
 // createSession(expertUid)
 // Creates a new session document with the full data model shape, all stage
@@ -37,15 +97,25 @@ export async function createSession(expertUid) {
         expertUid,
         createdAt: serverTimestamp(),
 
-        // Explicitly tracks which screen the expert is actually on, updated by
-        // saveCurrentView() every time next() advances them to a new screen.
-        // Resume-on-reload reads this directly rather than inferring position
-        // from whether various data fields happen to be populated — inference
-        // broke down at the cue-review->options boundary specifically because
-        // cueLibrary and sortingTask.groups both get written by earlier
-        // screens, before cue-review is ever confirmed. See app.js's
-        // _getResumeView / _legacyResumeView.
+        // currentView — tracks which screen the expert is actually on, updated
+        // by saveCurrentView() every time next() advances them to a new
+        // screen. Resume-on-reload reads this directly rather than inferring
+        // position from whether various data fields happen to be populated —
+        // inference broke down at the cue-review->options boundary
+        // specifically because cueLibrary and sortingTask.groups both get
+        // written by earlier screens, before cue-review is ever confirmed.
+        // See app.js's _getResumeView / _legacyResumeView.
         currentView: 'profile',
+
+        // furthestReached — separate from currentView. Only ever moves
+        // forward, EXCEPT when the expert re-confirms an earlier screen after
+        // going back (a "rewind"), at which point it gets pulled back down to
+        // just past that screen. This is the stable reference
+        // resetSessionFrom() needs — currentView alone isn't enough, because
+        // it mutates as the expert walks forward again after a rewind, which
+        // would erase the memory of how much invalidating there is to do
+        // partway through a multi-screen rewind. See app.js's _makeAdvance.
+        furthestReached: 'profile',
 
         profile: {
             role: '',
@@ -58,57 +128,20 @@ export async function createSession(expertUid) {
         cueLibrary: [],
         decisionOptions: [],
 
-        sortingTask: {
-            situations: [],   // [{ id, text, source: 'expert' | 'ai-suggested' }]
-            groups: [],
-        },
+        sortingTask: _clone(_BLANK_SORTING_TASK),
 
         scenarios: [],
         scenarioCombos: [],  // 30 precomputed cue combinations, written once at the
                               // start of Screen 5 so a session split across sittings
                               // resumes into the same combinations rather than fresh ones
 
-        policyModel: {
-            decisionTree: null,
-            summaryText: '',
-            expertAccuracyRating: '',
-            expertAccuracyNote: '',
-            policyBreaks: [],
-        },
+        policyModel: _clone(_BLANK_POLICY_MODEL),
 
-        elicitation: {
-            cases: [],
-            triad: {
-                scenarioIds: [],
-                discriminationAnswer: '',
-            },
-        },
+        elicitation: _clone(_BLANK_ELICITATION),
 
-        recipe: {
-            extractedKnowledge: '',
-            trigger: {
-                appliesWhen:          '',   // the condition that calls for this skill
-                notWhen:              '',   // the adjacent condition where it doesn't apply
-                distinguishingSignal: '',   // the specific thing that tells them the difference
-            },
-            actionSequence: [],   // [{ step: string, condition: string | null }]
-            expectedOutcome: '',
-            expertValidation: '',
-            expertValidationNote: '',
-            status: 'draft',
-            formattingCheck: {
-                droppedTerms:      [],   // specific terms/conditions from Job 2 not found in Job 3's output
-                expertAcknowledged: false,
-            },
-        },
+        recipe: _clone(_BLANK_RECIPE),
 
-        transfer: {
-            learnerUid: '',
-            preRecipeScenarios: [],
-            postRecipeScenarios: [],
-            comparisonResult: '',
-            shiftMagnitude: 0,
-        },
+        transfer: _clone(_BLANK_TRANSFER),
     };
 
     try {
@@ -188,6 +221,75 @@ async function _update(sessionId, updates) {
 // ---------------------------------------------------------------------------
 export async function saveCurrentView(sessionId, view) {
     return _update(sessionId, { currentView: view });
+}
+
+// ---------------------------------------------------------------------------
+// saveFurthestReached(sessionId, view)
+// See the comment on `furthestReached` in createSession's blank object above
+// — the stable high-water-mark app.js's rewind detection compares against.
+// ---------------------------------------------------------------------------
+export async function saveFurthestReached(sessionId, view) {
+    return _update(sessionId, { furthestReached: view });
+}
+
+// ---------------------------------------------------------------------------
+// resetSessionFrom(sessionId, screenName)
+//
+// Called by app.js when it detects the expert has re-confirmed a screen
+// after going back to it — i.e. they'd already reached further than
+// screenName before, and are now re-confirming it with (potentially)
+// different data. Clears every field that would otherwise go stale relative
+// to that change, so screens further along show a genuine blank/fresh state
+// rather than old data that no longer matches what it was built from.
+//
+// Deliberately NOT a generic "every screen after this one in sequence"
+// sweep — cueLibrary is written by profile.js, sorting.js, AND
+// cue-review.js, so whichever of those three is the one actually being
+// re-confirmed has ALREADY rewritten it fresh, moments before this runs.
+// Blanking it here would destroy data that was just correctly saved.
+// cueLibrary is therefore never included in any entry below — it self-heals
+// via the natural profile -> sorting -> cue-review order rewriting it each
+// time. sortingTask is the one exception worth noting the other way:
+// it's only ever written by sorting.js, but IS included under 'profile',
+// because a changed profile genuinely makes the existing situations/groups
+// stale (they were generated from the old profile text).
+// ---------------------------------------------------------------------------
+const _DOWNSTREAM_FIELDS = {
+    'profile':     ['sortingTask', 'decisionOptions', 'scenarios', 'scenarioCombos', 'policyModel', 'elicitation', 'recipe', 'transfer'],
+    'sorting':     ['decisionOptions', 'scenarios', 'scenarioCombos', 'policyModel', 'elicitation', 'recipe', 'transfer'],
+    'cue-review':  ['decisionOptions', 'scenarios', 'scenarioCombos', 'policyModel', 'elicitation', 'recipe', 'transfer'],
+    'options':     ['scenarios', 'scenarioCombos', 'policyModel', 'elicitation', 'recipe', 'transfer'],
+    'session':     ['policyModel', 'elicitation', 'recipe', 'transfer'],
+    'model-view':  ['elicitation', 'recipe', 'transfer'],
+    'elicitation': ['recipe', 'transfer'],
+    'recipe':      ['transfer'],
+    'transfer':    [],
+    'summary':     [],
+};
+
+function _blankValueFor(field) {
+    switch (field) {
+        case 'sortingTask':     return _clone(_BLANK_SORTING_TASK);
+        case 'decisionOptions': return [];
+        case 'scenarios':       return [];
+        case 'scenarioCombos':  return [];
+        case 'policyModel':     return _clone(_BLANK_POLICY_MODEL);
+        case 'elicitation':     return _clone(_BLANK_ELICITATION);
+        case 'recipe':          return _clone(_BLANK_RECIPE);
+        case 'transfer':        return _clone(_BLANK_TRANSFER);
+        default:                return null;
+    }
+}
+
+export async function resetSessionFrom(sessionId, screenName) {
+    const fields = _DOWNSTREAM_FIELDS[screenName];
+    if (!fields || fields.length === 0) return true;
+
+    const updates = {};
+    fields.forEach(field => { updates[field] = _blankValueFor(field); });
+
+    console.log('Lab db.js: Rewind detected — invalidating downstream fields for session', sessionId, '— fields:', fields);
+    return _update(sessionId, updates);
 }
 
 // ---------------------------------------------------------------------------
