@@ -90,20 +90,31 @@ someone would describe their day to a colleague, not the way a case study summar
 "I" or "we". Let each sentence add one new fact, in the order it would actually happen. Do not pack a tension
 into a single sentence with "but", "despite", "even though", or a stacked relative clause ("...which X
 strictly avoids") — if there's a tension, let it emerge from the sequence of events, not from a logical
-connector the reader has to untangle first. A reader should be able to picture the situation on one read,
-without re-reading to work out what's actually going on.
+connector the reader has to untangle first.
 
-Good example of the target style: "A long-time client emailed asking for a feature we don't offer. I checked
-the roadmap — it's not planned for another two quarters. Two other clients have asked for something similar
-this month."
-Bad example, avoid this: "A long-time client wants a feature we don't offer, but two other clients have asked
-for something similar recently, which raises the question of whether our roadmap timeline still holds."`;
+Critically, do not stop at stating facts or data — that reads as a status report, not a situation someone has
+to respond to. Always close with a forward beat: either an explicit decision the reader is now facing, or a
+specific pending action/plan that implicitly needs a judgement call. Keep this closing beat OPEN — do not name
+specific candidate responses or options. The reader supplies their own judgement about how they'd actually
+handle it; the situation's job is only to make clear that a call needs making, not to suggest what the call
+might be. Without this closing beat the situation feels incomplete — data with nothing to actually do about it.
+
+Keep vocabulary and detail specific to the reader's actual stated field — do not default to generic
+product/tech/business language ("roadmap", "feature", "stakeholder") unless that genuinely is their field.
+
+Good example of the target style (note the open, non-prescriptive closing beat): "A colleague flagged that
+something I signed off on last week might not hold up anymore. Two other people have independently said the
+same thing today. I need to decide what to do about it before the day is out."
+Bad example, avoid this — same setup, but stops at the facts with no closing beat: "A colleague flagged that
+something I signed off on last week might not hold up anymore. Two other people have independently said the
+same thing today."`;
 
     const systemPrompt = `You write short, realistic situation descriptions for a professional skill-extraction exercise.
 
 ${STYLE_GUIDANCE}
 
-Each situation should be 2-3 short sentences, concrete (real-sounding numbers, names, or details), and varied —
+Each situation should be 3-4 short sentences — enough room for the closing beat above, not just setup and
+complication — concrete (real-sounding numbers, names, or details), and varied —
 covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
 Return a JSON array of exactly ${NUM_EXPERT_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
@@ -140,7 +151,7 @@ not from anything the expert has written themselves.
 
 ${STYLE_GUIDANCE}
 
-Each situation should be 2-3 short sentences, concrete, and should cover a distinct type of situation from the ones already listed below.
+Each situation should be 3-4 short sentences — enough room for the closing beat above — concrete, and should cover a distinct type of situation from the ones already listed below.
 Return a JSON array of exactly ${NUM_SUGGESTED_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const augmentPrompt = `Area of expertise: ${p.role}
