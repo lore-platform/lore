@@ -94,18 +94,31 @@ connector the reader has to untangle first.
 
 Critically, do not stop at stating facts or data — that reads as a status report, not a situation someone has
 to respond to. Always close with a forward beat: either an explicit decision the reader is now facing, or a
-specific pending action/plan that implicitly needs a judgement call. Keep this closing beat OPEN — do not name
-specific candidate responses or options. The reader supplies their own judgement about how they'd actually
-handle it; the situation's job is only to make clear that a call needs making, not to suggest what the call
-might be. Without this closing beat the situation feels incomplete — data with nothing to actually do about it.
+specific pending action/plan that implicitly needs a judgement call. Keep this closing beat genuinely OPEN.
+This means two separate things, not just one:
+(1) Do not name specific candidate responses or actions ("...decide whether to escalate it or let it ride").
+(2) Do not name the two things being weighed against each other either — "balance X against Y", "weigh X
+against Y", "reconcile X with Y", and "decide if it's X or Y" are all the SAME problem as (1), just one
+grammatical level up: naming the dimensions of the tension does the expert's own analysis for them just as
+much as naming the actions would. Close on the fact that a call needs making, full stop — not on what the call
+is between. "I need to decide what to do about it", "I need to figure out what's actually going on here", "I
+need to work out how to respond" — these stay open. "I need to balance A against B" does not, even though it
+never uses the word "or".
+
+The reader supplies their own judgement about how they'd actually handle it; the situation's job is only to
+make clear that a call needs making, not to suggest what the call is between. Without this closing beat the
+situation feels incomplete — data with nothing to actually do about it.
 
 Keep vocabulary and detail specific to the reader's actual stated field — do not default to generic
 product/tech/business language ("roadmap", "feature", "stakeholder") unless that genuinely is their field.
 
-Good example of the target style (note the open, non-prescriptive closing beat): "A colleague flagged that
-something I signed off on last week might not hold up anymore. Two other people have independently said the
-same thing today. I need to decide what to do about it before the day is out."
-Bad example, avoid this — same setup, but stops at the facts with no closing beat: "A colleague flagged that
+Good example of the target style (note the closing beat names no options AND no dimensions): "A colleague
+flagged that something I signed off on last week might not hold up anymore. Two other people have
+independently said the same thing today. I need to decide what to do about it before the day is out."
+Bad example — names the dimensions being weighed, not just an action; still not open: "A colleague flagged
+that something I signed off on last week might not hold up anymore. Two other people have independently said
+the same thing today. I need to weigh their concerns against how much rework reopening it would mean."
+Bad example — same setup, but stops at the facts with no closing beat at all: "A colleague flagged that
 something I signed off on last week might not hold up anymore. Two other people have independently said the
 same thing today."`;
 
