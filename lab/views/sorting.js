@@ -75,8 +75,36 @@ export async function render(el, session, next) {
     const cueNames = (session.cueLibrary ?? []).map(c => c.name).join(', ');
 
     // ── Primary call — expert-derived, from the expert's own profile text ──
+    //
+    // Style fix: the original prompt only said "1-2 sentences, concrete" —
+    // which produced dense, third-person case-study prose that stacked a
+    // whole tension into one sentence via "but"/"despite"/a relative clause
+    // ("...which your current, slower flow strictly avoids"). That forces the
+    // reader to untangle a logical relationship before they can even picture
+    // what's happening. Fixed to require the same concrete-narrative register
+    // already used successfully in profile.js's own example placeholders —
+    // plain sequential sentences, one fact each, tension emerging from the
+    // sequence rather than a stacked connector.
+    const STYLE_GUIDANCE = `Write each one as something that just happened to the reader, in plain, sequential sentences — the way
+someone would describe their day to a colleague, not the way a case study summarises a business problem. Use
+"I" or "we". Let each sentence add one new fact, in the order it would actually happen. Do not pack a tension
+into a single sentence with "but", "despite", "even though", or a stacked relative clause ("...which X
+strictly avoids") — if there's a tension, let it emerge from the sequence of events, not from a logical
+connector the reader has to untangle first. A reader should be able to picture the situation on one read,
+without re-reading to work out what's actually going on.
+
+Good example of the target style: "A long-time client emailed asking for a feature we don't offer. I checked
+the roadmap — it's not planned for another two quarters. Two other clients have asked for something similar
+this month."
+Bad example, avoid this: "A long-time client wants a feature we don't offer, but two other clients have asked
+for something similar recently, which raises the question of whether our roadmap timeline still holds."`;
+
     const systemPrompt = `You write short, realistic situation descriptions for a professional skill-extraction exercise.
-Each situation should be 1-2 sentences, concrete, and varied — covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
+
+${STYLE_GUIDANCE}
+
+Each situation should be 2-3 short sentences, concrete (real-sounding numbers, names, or details), and varied —
+covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
 Return a JSON array of exactly ${NUM_EXPERT_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const prompt = `Area of expertise: ${p.role}
@@ -109,7 +137,10 @@ Write ${NUM_EXPERT_SITUATIONS} short, varied situation descriptions this person 
     const augmentSystem = `You write short, realistic situation descriptions for a professional skill-extraction exercise, drawing on
 general knowledge of what distinct situation types a practitioner in this field would likely recognise —
 not from anything the expert has written themselves.
-Each situation should be 1-2 sentences, concrete, and should cover a distinct type of situation from the ones already listed below.
+
+${STYLE_GUIDANCE}
+
+Each situation should be 2-3 short sentences, concrete, and should cover a distinct type of situation from the ones already listed below.
 Return a JSON array of exactly ${NUM_SUGGESTED_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const augmentPrompt = `Area of expertise: ${p.role}
