@@ -76,59 +76,14 @@ export async function render(el, session, next) {
 
     // ── Primary call — expert-derived, from the expert's own profile text ──
     //
-    // Style fix: the original prompt only said "1-2 sentences, concrete" —
-    // which produced dense, third-person case-study prose that stacked a
-    // whole tension into one sentence via "but"/"despite"/a relative clause
-    // ("...which your current, slower flow strictly avoids"). That forces the
-    // reader to untangle a logical relationship before they can even picture
-    // what's happening. Fixed to require the same concrete-narrative register
-    // already used successfully in profile.js's own example placeholders —
-    // plain sequential sentences, one fact each, tension emerging from the
-    // sequence rather than a stacked connector.
-    const STYLE_GUIDANCE = `Write each one as something that just happened to the reader, in plain, sequential sentences — the way
-someone would describe their day to a colleague, not the way a case study summarises a business problem. Use
-"I" or "we". Let each sentence add one new fact, in the order it would actually happen. Do not pack a tension
-into a single sentence with "but", "despite", "even though", or a stacked relative clause ("...which X
-strictly avoids") — if there's a tension, let it emerge from the sequence of events, not from a logical
-connector the reader has to untangle first.
-
-Critically, do not stop at stating facts or data — that reads as a status report, not a situation someone has
-to respond to. Always close with a forward beat: either an explicit decision the reader is now facing, or a
-specific pending action/plan that implicitly needs a judgement call. Keep this closing beat genuinely OPEN.
-This means two separate things, not just one:
-(1) Do not name specific candidate responses or actions ("...decide whether to escalate it or let it ride").
-(2) Do not name the two things being weighed against each other either — "balance X against Y", "weigh X
-against Y", "reconcile X with Y", and "decide if it's X or Y" are all the SAME problem as (1), just one
-grammatical level up: naming the dimensions of the tension does the expert's own analysis for them just as
-much as naming the actions would. Close on the fact that a call needs making, full stop — not on what the call
-is between. "I need to decide what to do about it", "I need to figure out what's actually going on here", "I
-need to work out how to respond" — these stay open. "I need to balance A against B" does not, even though it
-never uses the word "or".
-
-The reader supplies their own judgement about how they'd actually handle it; the situation's job is only to
-make clear that a call needs making, not to suggest what the call is between. Without this closing beat the
-situation feels incomplete — data with nothing to actually do about it.
-
-Keep vocabulary and detail specific to the reader's actual stated field — do not default to generic
-product/tech/business language ("roadmap", "feature", "stakeholder") unless that genuinely is their field.
-
-Good example of the target style (note the closing beat names no options AND no dimensions): "A colleague
-flagged that something I signed off on last week might not hold up anymore. Two other people have
-independently said the same thing today. I need to decide what to do about it before the day is out."
-Bad example — names the dimensions being weighed, not just an action; still not open: "A colleague flagged
-that something I signed off on last week might not hold up anymore. Two other people have independently said
-the same thing today. I need to weigh their concerns against how much rework reopening it would mean."
-Bad example — same setup, but stops at the facts with no closing beat at all: "A colleague flagged that
-something I signed off on last week might not hold up anymore. Two other people have independently said the
-same thing today."`;
-
+    // Reverted, per Osioke's direction — the narrative/closing-beat style
+    // guidance (three iterations, each fixing one grammatical disguise of
+    // the model wanting to hand the reader a pre-packaged two-option choice)
+    // was making things worse, not better. Back to the original, simpler
+    // prompt from the Step 1 build. This is a known open problem, not a
+    // solved one — see the handoff notes being taken to a fresh chat.
     const systemPrompt = `You write short, realistic situation descriptions for a professional skill-extraction exercise.
-
-${STYLE_GUIDANCE}
-
-Each situation should be 3-4 short sentences — enough room for the closing beat above, not just setup and
-complication — concrete (real-sounding numbers, names, or details), and varied —
-covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
+Each situation should be 1-2 sentences, concrete, and varied — covering a spread of difficulty and the kind of cues a skilled person in this field would notice.
 Return a JSON array of exactly ${NUM_EXPERT_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const prompt = `Area of expertise: ${p.role}
@@ -161,10 +116,7 @@ Write ${NUM_EXPERT_SITUATIONS} short, varied situation descriptions this person 
     const augmentSystem = `You write short, realistic situation descriptions for a professional skill-extraction exercise, drawing on
 general knowledge of what distinct situation types a practitioner in this field would likely recognise —
 not from anything the expert has written themselves.
-
-${STYLE_GUIDANCE}
-
-Each situation should be 3-4 short sentences — enough room for the closing beat above — concrete, and should cover a distinct type of situation from the ones already listed below.
+Each situation should be 1-2 sentences, concrete, and should cover a distinct type of situation from the ones already listed below.
 Return a JSON array of exactly ${NUM_SUGGESTED_SITUATIONS} strings, nothing else — no markdown fences, no other text.`;
 
     const augmentPrompt = `Area of expertise: ${p.role}
