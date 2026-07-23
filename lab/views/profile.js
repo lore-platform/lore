@@ -51,6 +51,7 @@ import {
     detectDomain,
     pickAdjacentDomain,
     extractEvidenceLines,
+    CUE_STYLE_GUIDANCE,
 } from '../domain-signals.js';
 
 // Cap on document text sent to the AI — keeps classify() within token budget.
@@ -564,6 +565,9 @@ Return a JSON array only — no markdown fences, no other text. Each element mus
   "layer": 1, 2, or 3 — 1 is a surface/obvious cue, 3 is a subtle expert-level cue,
   "options": an array of strings the cue can take — exactly 2 strings if scale is "binary", exactly 3 if scale is "three-point"
 }
+
+${CUE_STYLE_GUIDANCE}
+
 Propose between 5 and 9 cues. Favour cues that are specific to this field over generic ones any layperson would already know.`;
 
         const prompt = `Area of expertise: ${profile.role}
@@ -628,6 +632,9 @@ Return a JSON array only — no markdown fences, no other text. Each element mus
   "layer": 1, 2, or 3 — 1 is a surface/obvious cue, 3 is a subtle expert-level cue,
   "options": an array of strings the cue can take — exactly 2 strings if scale is "binary", exactly 3 if scale is "three-point"
 }
+
+${CUE_STYLE_GUIDANCE}
+
 Propose between 2 and 4 additional cues. It is fine to return fewer if you can't think of genuinely distinct ones.`;
 
         const augmentPrompt = `Area of expertise: ${profile.role}

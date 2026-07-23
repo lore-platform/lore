@@ -31,7 +31,7 @@
 import { saveCueLibrary }      from '../db.js';
 import { classify }            from '../../engine/ai.js';
 import { extractJSON }         from '../../engine/utils.js';
-import { DOMAIN_CONTENT, detectDomain } from '../domain-signals.js';
+import { DOMAIN_CONTENT, detectDomain, CUE_STYLE_GUIDANCE } from '../domain-signals.js';
 
 let _cues       = [];   // working copy: [{ id, name, definition, scale, layer, options, source, _removed, _editing }]
 let _addingCue  = false;
@@ -47,38 +47,48 @@ export function render(el, session, next) {
 function _draw(el, session, next) {
     const role   = session.profile?.role ?? '';
     const domain = detectDomain(role);
-    const example = (DOMAIN_CONTENT[domain] ?? DOMAIN_CONTENT.general).cueExampleLine;
+    // Strip a leading "e.g." — the domain example string was written for the
+    // old standalone-italic-line display; here it's wrapped in "For example:
+    // It depends on ___" instead, so a leading "e.g." would double up.
+    const example = (DOMAIN_CONTENT[domain] ?? DOMAIN_CONTENT.general).cueExampleLine
+        .replace(/^e\.g\.\s*/i, '');
 
     el.innerHTML = `
 <div class="lab-wrap">
   <div class="lab-steps">${_pips(3)}</div>
-  <h1 class="lab-h1">Review your cue library</h1>
+  <h1 class="lab-h1">What does it depend on?</h1>
   <p class="lab-sub">
-    These are the cues the system thinks drive your decisions. Correct anything
-    that's off before they're used to build scenarios — this is the foundation
-    everything else is built on.
+    Every one below came from something you might say when explaining how you handle your work — the
+    "it depends on..." part. Confirm the ones that are genuinely true for you; this becomes the foundation
+    everything else here is built on.
   </p>
 
   <div id="cue-err" class="lab-notice lab-err" style="display:none"></div>
 
   <div class="lab-explain-card">
     <p>
-      Simplest way to check if something's a real <strong>cue</strong>: <strong>if this one detail were
-      different, would you actually do something different?</strong> If yes, it's a cue. If you'd do the
-      same thing either way, it isn't — even if it sounds important.
-    </p>
-    <p style="color:var(--warm-grey);font-style:italic">
-      ${_esc(example)}
+      When someone asks how you'd handle something at work, you've probably said <strong>"it depends"</strong>
+      more times than you can count. That's exactly what we're trying to capture below — the specific things
+      you'd say your answer depends on.
     </p>
     <p>
-      Not all cues are obvious — many are things experts notice instinctively without being aware
-      they're doing it. The system has proposed these based on your profile and your sorting groups.
+      Try it: pick any one below and finish this sentence out loud — <strong>"It depends on ___."</strong> If it
+      fits naturally, it's a real one. If you're having to think hard just to justify why it's here, it
+      probably isn't — even if it sounds like it should matter.
+    </p>
+    <p style="color:var(--warm-grey);font-style:italic">
+      For example: "It depends on ${_esc(example)}"
+    </p>
+    <p>
+      Not all of these are things you'd say without thinking first — some are things you do automatically,
+      without ever putting them into words. That's normal. The system proposed these from your profile and your
+      sorting groups; you're just confirming which ones are actually true.
     </p>
     <div class="lab-explain-actions">
-      <div class="lab-explain-action"><strong>Keep</strong><span>Yes — if this changed, I'd genuinely respond differently</span></div>
-      <div class="lab-explain-action"><strong>Edit</strong><span>This is real, but the wording isn't how I'd actually think about it</span></div>
-      <div class="lab-explain-action"><strong>Remove</strong><span>No — I'd do the same thing either way, this doesn't change my response</span></div>
-      <div class="lab-explain-action"><strong>Add</strong><span>Something you know changes your response, that isn't listed</span></div>
+      <div class="lab-explain-action"><strong>Keep</strong><span>Yes — I really would say my answer depends on this</span></div>
+      <div class="lab-explain-action"><strong>Edit</strong><span>This is real, but I wouldn't say it quite like this</span></div>
+      <div class="lab-explain-action"><strong>Remove</strong><span>No — my answer wouldn't actually depend on this</span></div>
+      <div class="lab-explain-action"><strong>Add</strong><span>Something you'd say your answer depends on, that's missing here</span></div>
     </div>
   </div>
 
@@ -87,26 +97,26 @@ function _draw(el, session, next) {
       ${_cues.map(c => _rowHTML(c)).join('')}
     </div>
 
-    ${_addingCue ? _addFormHTML() : `<button type="button" class="lab-add-btn" id="show-add">+ Add a cue I noticed is missing</button>`}
+    ${_addingCue ? _addFormHTML() : `<button type="button" class="lab-add-btn" id="show-add">+ Add something I noticed is missing</button>`}
 
     <button type="button" class="lab-example-toggle" id="suggest-more" style="margin-top:var(--space-3)" ${_suggesting ? 'disabled' : ''}>
-      ${_suggesting ? 'Asking AI for more…' : 'Suggest more cues'}
+      ${_suggesting ? 'Asking AI for more…' : 'Suggest a few more'}
     </button>
   </div>
 
   <div class="lab-card">
     <div class="lab-section-head">Before you confirm</div>
     <p style="font-size:var(--text-sm);color:var(--warm-grey);line-height:1.6;margin-bottom:var(--space-2)">
-      Are there situations in your work that would need a different response but would
-      look identical using only these cues? If so, add the missing cue above.
+      Is there anything in your work where you'd handle it differently, but nothing here explains why? If so,
+      add it above.
     </p>
     <p style="font-size:var(--text-sm);color:var(--warm-grey);line-height:1.6;margin:0">
-      Are there any cues below that wouldn't actually change what you'd do? Remove them.
+      Is there anything below you wouldn't actually say your answer depends on? Remove it.
     </p>
   </div>
 
   <div class="lab-btn-row">
-    <button type="button" class="btn btn-primary" id="cue-confirm">Confirm cue library</button>
+    <button type="button" class="btn btn-primary" id="cue-confirm">Confirm and continue</button>
   </div>
 </div>`;
 
@@ -204,7 +214,7 @@ function _draw(el, session, next) {
 
         const errEl = el.querySelector('#cue-err');
         if (final.length === 0) {
-            errEl.textContent   = 'You need at least one cue to continue.';
+            errEl.textContent   = 'You need at least one to continue.';
             errEl.style.display = '';
             return;
         }
@@ -216,10 +226,10 @@ function _draw(el, session, next) {
 
         const ok = await saveCueLibrary(session.id, final);
         if (!ok) {
-            errEl.textContent   = "Couldn't save the cue library. Try again.";
+            errEl.textContent   = "Couldn't save. Try again.";
             errEl.style.display = '';
             btn.disabled    = false;
-            btn.textContent = 'Confirm cue library';
+            btn.textContent = 'Confirm and continue';
             return;
         }
 
@@ -255,6 +265,9 @@ Return a JSON array only — no markdown fences, no other text. Each element mus
   "layer": 1, 2, or 3 — 1 is a surface/obvious cue, 3 is a subtle expert-level cue,
   "options": an array of strings the cue can take — exactly 2 if scale is "binary", exactly 3 if "three-point"
 }
+
+${CUE_STYLE_GUIDANCE}
+
 Propose between 2 and 4 additional cues. It is fine to return fewer if you can't think of genuinely distinct ones.`;
 
     const prompt = `Area of expertise: ${p.role ?? ''}
@@ -295,8 +308,8 @@ function _rowHTML(c) {
         return `
 <div class="cue-row" data-row-id="${c.id}">
   <div class="cue-edit-area">
-    <input class="lab-edit-input edit-name" value="${_esc(c.name)}" placeholder="Cue name">
-    <textarea class="lab-edit-ta edit-def" placeholder="Definition">${_esc(c.definition)}</textarea>
+    <input class="lab-edit-input edit-name" value="${_esc(c.name)}" placeholder="Name">
+    <textarea class="lab-edit-ta edit-def" placeholder="It depends on...">${_esc(c.definition)}</textarea>
     <button type="button" class="btn btn-primary btn-sm cue-save-edit" data-id="${c.id}">Save</button>
   </div>
 </div>`;
@@ -307,7 +320,7 @@ function _rowHTML(c) {
   <div>
     ${c.source === 'ai-suggested' ? `<span class="cue-suggested-badge">Suggested</span>` : ''}
     <div class="cue-name">${_esc(c.name)}</div>
-    <div class="cue-def">${_esc(c.definition)}</div>
+    <div class="cue-def">It depends on ${_esc(_lowerFirst(c.definition))}</div>
     <span class="cue-scale-badge">${c.scale === 'three-point' ? '3-point' : 'binary'} · layer ${c.layer}</span>
   </div>
   <div class="cue-actions">
@@ -322,20 +335,28 @@ function _rowHTML(c) {
 function _addFormHTML() {
     return `
 <div class="group-prompt" style="margin-top:1rem">
-  <label>Cue name</label>
+  <label>What's a short name for it?</label>
   <input class="lab-edit-input" id="new-cue-name" placeholder="e.g. Time pressure on the decision">
-  <label style="margin-top:0.5rem">Definition</label>
-  <textarea class="lab-edit-ta" id="new-cue-def" placeholder="What this cue means and how you'd recognise it"></textarea>
+  <label style="margin-top:0.5rem">Finish the sentence: "It depends on..."</label>
+  <textarea class="lab-edit-ta" id="new-cue-def" placeholder="whether this has happened before, or it's the first time"></textarea>
   <label style="margin-top:0.5rem">Scale</label>
   <select class="input" id="new-cue-scale" style="margin-bottom:0.6rem">
     <option value="binary">Binary (yes/no)</option>
     <option value="three-point">Three-point (low/medium/high)</option>
   </select>
   <div style="display:flex;gap:0.5rem">
-    <button type="button" class="btn btn-primary btn-sm" id="save-add">Add cue</button>
+    <button type="button" class="btn btn-primary btn-sm" id="save-add">Add it</button>
     <button type="button" class="btn btn-ghost btn-sm" id="cancel-add">Cancel</button>
   </div>
 </div>`;
+}
+
+// Decapitalises the first letter of a string — used so a definition like
+// "Whether requests come from..." reads naturally when concatenated after
+// "It depends on " in the row display, regardless of how the AI capitalised it.
+function _lowerFirst(s) {
+    if (!s) return '';
+    return s.charAt(0).toLowerCase() + s.slice(1);
 }
 
 function _pips(active) {

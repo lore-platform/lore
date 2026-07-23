@@ -243,3 +243,35 @@ export function extractEvidenceLines(documentsText) {
 }
 
 // ---------------------------------------------------------------------------
+// CUE_STYLE_GUIDANCE — shared across all three places a cue's name/definition
+// gets generated (profile.js's primary extraction, profile.js's ai-suggested
+// augmentation, cue-review.js's "Suggest more cues"). Kept in one place so a
+// fix here can't drift out of sync the way it would if each call site had
+// its own copy — exactly the problem that let this go unfixed in three
+// places despite being the same root cause.
+//
+// The gap this closes: the field instructions alone ("Short cue name, 2-5
+// words" / "One sentence") say nothing about register, so the model defaults
+// to analytical/consultant-style category labels ("Problem-solution fit
+// validation") instead of language the expert would actually recognise as
+// their own thinking. Note this is a different fix from the situation-
+// generation one — a cue's whole job IS to name a concrete two/three-sided
+// contrast, so there's no "don't name the options" risk here the way there
+// was for situations; the fix is purely about register, not about leading
+// the expert toward an answer.
+// ---------------------------------------------------------------------------
+export const CUE_STYLE_GUIDANCE = `Write the name and definition the way the expert would actually describe the distinction to a colleague —
+plain, concrete, and specific to a real difference they'd recognise, not an abstract analytical category label.
+
+The definition must state the actual contrast in plain language — what's genuinely different between the two
+(or three) real versions of this cue — the way you'd explain it out loud, not the way a business consultant
+would describe a KPI or framework dimension.
+
+Good example: { "name": "Pattern vs one-off", "definition": "Whether something's been raised by just one person,
+or by several people independently." }
+Bad example, avoid this register — real content, but written like a consultant's framework label instead of
+something the expert would recognise as their own thinking: { "name": "Problem-solution fit validation",
+"definition": "Indicates whether the core product idea aligns with actual user workflows, or if the workflow
+itself is the issue." }`;
+
+// ---------------------------------------------------------------------------
